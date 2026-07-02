@@ -1,0 +1,402 @@
+package main
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+)
+
+var (
+	colAccent  = lipgloss.Color("205")
+	colRunning = lipgloss.Color("42")
+	colBlocked = lipgloss.Color("214")
+	colIdle    = lipgloss.Color("245")
+	colDead    = lipgloss.Color("196")
+	colDim     = lipgloss.Color("240")
+	colText    = lipgloss.Color("252")
+
+	styleTitle   = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
+	styleDim     = lipgloss.NewStyle().Foreground(colDim)
+	styleText    = lipgloss.NewStyle().Foreground(colText)
+	styleProj    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("111"))
+	styleSel     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("231")).Background(lipgloss.Color("54"))
+	styleErr     = lipgloss.NewStyle().Bold(true).Foreground(colDead)
+	styleOK      = lipgloss.NewStyle().Foreground(colRunning)
+	styleWarn    = lipgloss.NewStyle().Foreground(colBlocked)
+	styleSection = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("111"))
+)
+
+func statusStyle(s AgentStatus) lipgloss.Style {
+	switch s {
+	case StatusRunning:
+		return lipgloss.NewStyle().Foreground(colRunning)
+	case StatusBlocked:
+		return lipgloss.NewStyle().Foreground(colBlocked).Bold(true)
+	case StatusDead:
+		return lipgloss.NewStyle().Foreground(colDead)
+	default:
+		return lipgloss.NewStyle().Foreground(colIdle)
+	}
+}
+
+func trunc(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	return ansi.Truncate(s, w, "…")
+}
+
+func pad(s string, w int) string {
+	gap := w - lipgloss.Width(s)
+	if gap <= 0 {
+		return trunc(s, w)
+	}
+	return s + strings.Repeat(" ", gap)
+}
+
+func (m model) layout() (treeW, detailW, innerH int) {
+	innerH = m.height - 4
+	if innerH < 3 {
+		innerH = 3
+	}
+	treeW = m.treeWidth()
+	detailW = m.width - treeW
+	if detailW < 20 {
+		detailW = 20
+	}
+	return
+}
+
+func (m model) View() string {
+	if m.width == 0 {
+		return "starte…"
+	}
+	treeW, detailW, innerH := m.layout()
+
+	header := m.renderHeader()
+	focused := m.focusAgent != ""
+	var detailContent string
+	if focused {
+		detailContent = m.renderFocus(detailW-4, innerH)
+	} else {
+		detailContent = m.renderDetails(detailW-4, innerH)
+	}
+	tree := m.renderPanel(m.renderTree(treeW-4), treeW-2, innerH, !focused)
+	details := m.renderPanel(detailContent, detailW-2, innerH, focused)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, tree, details)
+	footer := m.renderFooter()
+	return header + "\n" + body + "\n" + footer
+}
+
+func (m model) renderFocus(w, h int) string {
+	st := m.poll.statuses[m.focusAgent]
+	head := styleTitle.Render(m.focusAgent) + " " + statusStyle(st).Render(st.Icon()+" "+st.Label()) +
+		styleDim.Render("  ·  ctrl+q zurück zur Übersicht")
+	lines := []string{trunc(head, w), ""}
+	pv := strings.Split(strings.TrimRight(m.focusPreview, "\n"), "\n")
+	if len(pv) > h-2 {
+		pv = pv[len(pv)-(h-2):]
+	}
+	for _, l := range pv {
+		lines = append(lines, trunc(strings.ReplaceAll(l, "\t", "  "), w)+"\x1b[0m")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m model) renderPanel(content string, w, h int, focused bool) string {
+	borderCol := colDim
+	if focused {
+		borderCol = colAccent
+	}
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderCol).
+		Padding(0, 1).
+		Width(w).
+		Height(h).
+		MaxHeight(h + 2).
+		Render(content)
+}
+
+func (m model) renderHeader() string {
+	counts := map[AgentStatus]int{}
+	for _, st := range m.poll.statuses {
+		counts[st]++
+	}
+	title := styleTitle.Render(" ⚡ magentic ")
+	stats := fmt.Sprintf("%s %d läuft   %s %d wartet   %s %d idle   %s %d aus",
+		styleOK.Render("●"), counts[StatusRunning],
+		styleWarn.Render("◆"), counts[StatusBlocked],
+		styleDim.Render("○"), counts[StatusIdle],
+		styleErr.Render("✗"), counts[StatusExited]+counts[StatusDead])
+	gap := m.width - lipgloss.Width(title) - lipgloss.Width(stats) - 1
+	if gap < 1 {
+		gap = 1
+	}
+	return title + strings.Repeat(" ", gap) + stats
+}
+
+func (m model) projectLine(r treeRow, w int) string {
+	name := "(ohne projekt)"
+	count := len(m.orphanAgents())
+	key := orphanKey
+	dirty := ""
+	if r.project != nil {
+		name = r.project.Name
+		count = len(m.state.AgentsFor(r.project.Name))
+		key = r.project.Name
+		if git, ok := m.poll.git[r.project.Path]; ok && git.IsRepo {
+			if git.Clean() {
+				dirty = styleDim.Render(" ✓")
+			} else {
+				dirty = styleWarn.Render(" ±")
+			}
+		}
+	}
+	arrow := "▾"
+	if m.collapsed[key] {
+		arrow = "▸"
+	}
+	label := fmt.Sprintf("%s %s", arrow, name)
+	counts := fmt.Sprintf("%d", count)
+	return pad(styleProj.Render(trunc(label, w-8)), w-4) + dirty + " " + styleDim.Render(counts)
+}
+
+func (m model) agentLine(a Agent, w int) string {
+	st := m.poll.statuses[a.Name]
+	icon := statusStyle(st).Render(st.Icon())
+	nameW := m.maxAgentNameLen()
+	name := pad(trunc(a.Name, nameW), nameW+1)
+	status := statusStyle(st).Render(pad(st.Label(), 8))
+	age := pad(formatAge(a.CreatedAt), 7)
+	marks := "  "
+	if sc, ok := m.poll.session[a.Name]; ok {
+		if len(sc.Files) == 0 && sc.Commits == 0 {
+			marks = styleDim.Render("✓ ")
+		} else {
+			marks = styleWarn.Render("± ")
+		}
+	}
+	wt := " "
+	if a.Worktree {
+		wt = styleDim.Render("⑂")
+	}
+	return fmt.Sprintf("  %s %s%s%s%s%s", icon, name, status, age, marks, wt)
+}
+
+func (m model) renderTree(w int) string {
+	var b strings.Builder
+	rows := m.rows()
+	if len(rows) == 0 {
+		return styleDim.Render("Keine Projekte.\n\np = Projekt hinzufügen")
+	}
+	for i, r := range rows {
+		var line string
+		if r.kind == rowProject {
+			line = m.projectLine(r, w)
+		} else {
+			line = m.agentLine(r.agent, w)
+		}
+		if i == m.cursor {
+			plain := ansi.Strip(line)
+			line = styleSel.Render(pad(plain, w))
+		}
+		b.WriteString(trunc(line, w) + "\n")
+	}
+	return b.String()
+}
+
+func (m model) renderDetails(w, h int) string {
+	lines, _ := m.detailContent(w, h)
+	return strings.Join(lines, "\n")
+}
+
+func (m model) detailContent(w, h int) ([]string, int) {
+	a := m.selectedAgent()
+	proj := m.contextProject()
+	var lines []string
+	previewStart := -1
+	add := func(s string) { lines = append(lines, trunc(s, w)) }
+
+	if a == nil && proj == nil {
+		return []string{
+			styleDim.Render("Nichts ausgewählt."),
+			"",
+			styleDim.Render("p  Projekt hinzufügen"),
+			styleDim.Render("n  neue Claude-Session"),
+			styleDim.Render("o  Übersicht im Browser"),
+		}, -1
+	}
+
+	if a != nil {
+		projName := a.Project
+		if projName == "" {
+			projName = "—"
+		}
+		add(styleTitle.Render(a.Name) + styleDim.Render(" · "+projName))
+		st := m.poll.statuses[a.Name]
+		wtNote := ""
+		if a.Worktree {
+			wtNote = styleDim.Render(" · ⑂ worktree")
+		}
+		add(statusStyle(st).Render(st.Icon()+" "+st.Label()) + styleDim.Render(" · seit "+formatAge(a.CreatedAt)) + wtNote)
+		add(styleDim.Render(shortPath(a.Dir)))
+		add("")
+		m.addAgentGit(a, w, add)
+	} else {
+		add(styleTitle.Render(proj.Name))
+		add(styleDim.Render(shortPath(proj.Path)))
+		add("")
+		m.addRepoGit(proj.Path, add)
+	}
+	add("")
+
+	if a != nil && m.poll.preview != "" {
+		remaining := h - len(lines) - 1
+		if remaining > 3 {
+			previewStart = len(lines)
+			label := "Terminal · klick zum Öffnen "
+			add(styleSection.Render("Terminal") + styleDim.Render(" · klick zum Öffnen "+strings.Repeat("─", max(0, w-len([]rune(label))-9))))
+			pv := strings.Split(strings.TrimRight(m.poll.preview, "\n"), "\n")
+			if len(pv) > remaining {
+				pv = pv[len(pv)-remaining:]
+			}
+			for _, l := range pv {
+				add(styleDim.Render(strings.ReplaceAll(l, "\t", "  ")))
+			}
+		}
+	}
+	if len(lines) > h {
+		lines = lines[:h]
+	}
+	return lines, previewStart
+}
+
+func (m model) addAgentGit(a *Agent, w int, add func(string)) {
+	git, ok := m.poll.git[a.Dir]
+	if !ok || !git.IsRepo {
+		add(styleSection.Render("Git"))
+		add(" " + styleDim.Render("kein Git-Repo"))
+		return
+	}
+	sc := m.poll.session[a.Name]
+	label := "Git · diese Session"
+	if !sc.Known {
+		label = "Git · gesamt (Session-Start unbekannt)"
+	}
+	add(styleSection.Render(label))
+	ab := ""
+	if git.Ahead > 0 {
+		ab += fmt.Sprintf(" ↑%d", git.Ahead)
+	}
+	if git.Behind > 0 {
+		ab += fmt.Sprintf(" ↓%d", git.Behind)
+	}
+	add(" " + styleText.Render(git.Branch) + styleWarn.Render(ab))
+	if len(sc.Files) == 0 && sc.Commits == 0 {
+		add(" " + styleOK.Render("✓ nichts geändert"))
+		return
+	}
+	summary := []string{}
+	if sc.Commits > 0 {
+		word := "Commits"
+		if sc.Commits == 1 {
+			word = "Commit"
+		}
+		summary = append(summary, fmt.Sprintf("%d %s", sc.Commits, word))
+	}
+	if len(sc.Files) > 0 {
+		word := "Dateien"
+		if len(sc.Files) == 1 {
+			word = "Datei"
+		}
+		summary = append(summary, fmt.Sprintf("%d %s geändert", len(sc.Files), word))
+	}
+	add(" " + styleWarn.Render("± "+strings.Join(summary, " · ")))
+	maxFiles := 6
+	for i, f := range sc.Files {
+		if i == maxFiles {
+			add("   " + styleDim.Render(fmt.Sprintf("… +%d weitere", len(sc.Files)-maxFiles)))
+			break
+		}
+		add("   " + styleDim.Render(trunc(f, w-4)))
+	}
+}
+
+func (m model) addRepoGit(dir string, add func(string)) {
+	add(styleSection.Render("Git"))
+	git, ok := m.poll.git[dir]
+	if !ok || !git.IsRepo {
+		add(" " + styleDim.Render("kein Git-Repo"))
+		return
+	}
+	ab := ""
+	if git.Ahead > 0 {
+		ab += fmt.Sprintf(" ↑%d", git.Ahead)
+	}
+	if git.Behind > 0 {
+		ab += fmt.Sprintf(" ↓%d", git.Behind)
+	}
+	add(" " + styleText.Render(git.Branch) + styleWarn.Render(ab))
+	if git.Clean() {
+		add(" " + styleOK.Render("✓ sauber"))
+	} else {
+		parts := []string{}
+		if git.Staged > 0 {
+			parts = append(parts, fmt.Sprintf("%d staged", git.Staged))
+		}
+		if git.Modified > 0 {
+			parts = append(parts, fmt.Sprintf("%d geändert", git.Modified))
+		}
+		if git.Untracked > 0 {
+			parts = append(parts, fmt.Sprintf("%d neu", git.Untracked))
+		}
+		add(" " + styleWarn.Render("± "+strings.Join(parts, " · ")))
+	}
+	if git.LastMsg != "" {
+		add(" " + styleDim.Render("⌥ "+git.LastMsg))
+	}
+}
+
+func (m model) renderFooter() string {
+	if m.focusAgent != "" {
+		return " " + styleTitle.Render("⌨ "+m.focusAgent) +
+			styleDim.Render("  — Eingaben gehen an Claude · ctrl+q zurück · klick links wechselt Agent")
+	}
+	if m.inputKind != inputNone {
+		return " " + m.input.View()
+	}
+	if m.confirmKill {
+		a := m.selectedAgent()
+		name := ""
+		if a != nil {
+			name = a.Name
+		}
+		return " " + styleWarn.Render(fmt.Sprintf("Agent %q beenden (tmux-Session wird gekillt)? y/n", name))
+	}
+	if m.confirmRmProj {
+		name := ""
+		if r := m.selectedRow(); r != nil && r.project != nil {
+			name = r.project.Name
+		}
+		return " " + styleWarn.Render(fmt.Sprintf("Projekt %q aus der Liste entfernen (Dateien bleiben)? y/n", name))
+	}
+	if m.flash != "" && time.Since(m.flashTime) < 5*time.Second {
+		if m.flashIsErr {
+			return " " + styleErr.Render(m.flash)
+		}
+		return " " + styleOK.Render(m.flash)
+	}
+	keys := []string{"n neu", "w worktree", "⏎ fokus", "d done", "D deploy", "o browser", "r name", "x kill", "p projekt", "q ende"}
+	return " " + styleDim.Render(strings.Join(keys, " · "))
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}

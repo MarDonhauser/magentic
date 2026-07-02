@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>magentic — Übersicht</title>
+<style>
+:root {
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --border: rgba(11,11,11,0.10);
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --accent: #2a78d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --grid: #2c2c2a;
+    --border: rgba(255,255,255,0.10);
+    --accent: #3987e5;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.wrap { max-width: 1060px; margin: 0 auto; padding: 28px 24px 64px; }
+header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 20px; }
+header h1 { font-size: 19px; margin: 0; font-weight: 650; }
+header h1 .zap { color: var(--accent); }
+#stamp { color: var(--muted); font-size: 12.5px; }
+#offline {
+  display: none;
+  background: color-mix(in srgb, var(--critical) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--critical) 40%, transparent);
+  border-radius: 8px; padding: 8px 14px; margin-bottom: 16px; font-size: 13px;
+}
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 26px; }
+.tile {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 16px 10px;
+}
+.tile .val { font-size: 27px; font-weight: 600; }
+.tile .lbl { font-size: 12.5px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.dot.hollow { background: transparent !important; border: 2px solid var(--muted); width: 6px; height: 6px; }
+.card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 16px 20px 10px; margin-bottom: 18px;
+}
+.card-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+.card-head h2 { font-size: 15.5px; margin: 0; font-weight: 650; }
+.card-head .path { color: var(--muted); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.card-head .maincfg { color: var(--ink-2); font-size: 12.5px; }
+.card-head .maincfg b { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.card-head .actions { margin-left: auto; }
+.btn.tiny { padding: 1px 8px; font-size: 11px; }
+.rows { margin-left: 4px; }
+.row {
+  position: relative; padding: 8px 8px 8px 66px; min-height: 44px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px;
+  border-radius: 8px;
+}
+.row:hover { background: color-mix(in srgb, var(--grid) 45%, transparent); }
+.row::before {
+  content: ''; position: absolute; left: 21px; top: 0; bottom: 0; width: 2px;
+  background: var(--grid);
+}
+.row.first::before { top: 21px; }
+.row.only::before { display: none; }
+.row .curve {
+  position: absolute; left: 21px; top: 0; width: 22px; height: 21px;
+  border-left: 2px solid var(--grid); border-bottom: 2px solid var(--grid);
+  border-bottom-left-radius: 12px;
+}
+.row .node {
+  position: absolute; width: 13px; height: 13px; border-radius: 50%;
+  background: var(--surface); border: 2.5px solid var(--muted); top: 14px;
+}
+.row.main-row .node { left: 15.5px; }
+.row.wt-row .node { left: 38px; }
+.branch { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; font-size: 13px; }
+.main-row .branch { color: var(--ink); }
+.ab { color: var(--ink-2); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.git-state { font-size: 12.5px; color: var(--ink-2); display: inline-flex; align-items: center; gap: 5px; }
+.git-state.clean { color: var(--muted); }
+.pill {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: 2.5px 11px; font-size: 12.5px; background: var(--surface);
+}
+.pill .name { font-weight: 600; }
+.pill .st { color: var(--ink-2); }
+.pill .age { color: var(--muted); font-variant-numeric: tabular-nums; }
+.warn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: color-mix(in srgb, var(--serious) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--serious) 45%, transparent);
+  border-radius: 999px; padding: 2.5px 11px; font-size: 12.5px; color: var(--ink-2);
+}
+.warn .ic { color: var(--serious); font-weight: 700; }
+.wt-path { color: var(--muted); font-size: 11.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.lastmsg { color: var(--muted); font-size: 12px; font-style: italic; }
+.empty { color: var(--ink-2); padding: 40px 0; text-align: center; }
+.empty code { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; }
+.actions { margin-left: auto; display: inline-flex; gap: 6px; }
+.btn {
+  font: inherit; font-size: 12px; color: var(--ink-2);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 999px;
+  padding: 3px 12px; cursor: pointer;
+}
+.btn:hover:not(:disabled) { border-color: var(--ink-2); color: var(--ink); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn.danger:hover:not(:disabled) { border-color: var(--critical); color: var(--critical); }
+#toast {
+  position: fixed; right: 20px; bottom: 20px; display: none;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px 16px; font-size: 13px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.18); max-width: 420px;
+}
+#toast.err { border-color: color-mix(in srgb, var(--critical) 50%, transparent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><span class="zap">⚡</span> magentic — Sessions &amp; Worktrees</h1>
+    <span id="stamp"></span>
+  </header>
+  <div id="offline">Server nicht erreichbar — läuft <code>magentic web</code> bzw. die TUI noch?</div>
+  <div class="tiles" id="tiles"></div>
+  <div id="projects"></div>
+</div>
+<div id="toast"></div>
+<script>
+const STATUS = {
+  running: { color: 'var(--good)',     icon: '●', label: 'läuft' },
+  blocked: { color: 'var(--warning)',  icon: '◆', label: 'wartet' },
+  idle:    { color: 'var(--muted)',    icon: '○', label: 'idle' },
+  exited:  { color: 'var(--ink-2)',    icon: '▪', label: 'beendet' },
+  dead:    { color: 'var(--critical)', icon: '✗', label: 'tot' },
+  unknown: { color: 'var(--muted)',    icon: '?', label: '?' },
+};
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function tile(value, label, dotColor, hollow) {
+  const dot = dotColor ? `<span class="dot${hollow ? ' hollow' : ''}" style="background:${dotColor}"></span>` : '';
+  return `<div class="tile"><div class="val">${value}</div><div class="lbl">${dot}${esc(label)}</div></div>`;
+}
+
+function agentPill(p, a) {
+  const st = STATUS[a.status] || STATUS.unknown;
+  const done = (a.status === 'idle' || a.status === 'running') && p.path
+    ? `<button class="btn tiny" data-action="done" data-agent="${esc(a.name)}" title="/done — Arbeit dieser Session committen und auf dev bringen">✓ done</button>`
+    : '';
+  return `<span class="pill" title="Agent ${esc(a.name)} — ${esc(st.label)}">` +
+    `<span class="dot" style="background:${st.color}"></span>` +
+    `<span class="name">${esc(a.name)}</span>` +
+    `<span class="st">${st.icon} ${esc(st.label)}</span>` +
+    `<span class="age">${esc(a.age)}</span>${done}</span>`;
+}
+
+function gitState(wt) {
+  if (wt.branch === '(kein git)') return '';
+  if (wt.clean) return `<span class="git-state clean">✓ sauber</span>`;
+  const parts = [];
+  if (wt.staged) parts.push(`${wt.staged} staged`);
+  if (wt.modified) parts.push(`${wt.modified} geändert`);
+  if (wt.untracked) parts.push(`${wt.untracked} neu`);
+  return `<span class="git-state"><span style="color:var(--warning);font-weight:700">±</span> ${parts.join(' · ')}</span>`;
+}
+
+function nodeColor(wt) {
+  const active = (wt.agents || []).find(a => a.status === 'running' || a.status === 'blocked')
+    || (wt.agents || [])[0];
+  if (!active) return null;
+  return (STATUS[active.status] || STATUS.unknown).color;
+}
+
+function actionsHtml(p, wt) {
+  if (!p.path) return '';
+  const busy = (wt.agents || []).some(a => ['running', 'blocked'].includes(a.status));
+  const anySession = (wt.agents || []).some(a => ['running', 'blocked', 'idle'].includes(a.status));
+  const attrs = `data-project="${esc(p.name)}" data-path="${esc(wt.path)}" data-main="${esc(p.mainBranch || '')}"`;
+  let btns = '';
+  if (!busy && wt.ahead > 0 && wt.branch !== p.mainBranch) {
+    btns += `<button class="btn" data-action="merge" ${attrs} data-source="${esc(wt.branch)}" data-target="${esc(p.mainBranch)}" ` +
+      `title="Claude-Session, die diesen Branch merged (löst auch Konflikte)">🔀 ${esc(wt.branch)} → ${esc(p.mainBranch)}</button>`;
+  }
+  if (!wt.isMain && !anySession) {
+    if (!wt.clean || wt.ahead > 0) {
+      btns += `<button class="btn" data-action="cleanup" ${attrs} title="Neue Claude-Session, die diesen Worktree committet und merged">✨ Cleanup-Agent</button>`;
+    }
+    btns += wt.clean
+      ? `<button class="btn danger" data-action="remove" ${attrs}>⌫ entfernen</button>`
+      : `<button class="btn danger" disabled title="uncommittete Änderungen — erst aufräumen">⌫ entfernen</button>`;
+  }
+  return btns ? `<span class="actions">${btns}</span>` : '';
+}
+
+function rowHtml(p, wt, idx, total, mainBranch) {
+  const isMain = wt.isMain;
+  const cls = ['row', isMain ? 'main-row' : 'wt-row'];
+  if (idx === 0) cls.push('first');
+  if (total === 1) cls.push('only');
+  const curve = isMain ? '' : '<span class="curve"></span>';
+  const nc = nodeColor(wt);
+  const node = `<span class="node" style="${nc ? `border-color:${nc}` : ''}"></span>`;
+  const ab = [];
+  if (wt.ahead) ab.push(`↑${wt.ahead}`);
+  if (wt.behind) ab.push(`↓${wt.behind}`);
+  const abHtml = ab.length ? `<span class="ab" title="gegenüber ${esc(mainBranch)}">${ab.join(' ')}</span>` : '';
+  const agents = (wt.agents || []).map(a => agentPill(p, a)).join('');
+  const warns = (wt.warnings || []).map(w =>
+    `<span class="warn"><span class="ic">⚠</span>${esc(w)}</span>`).join('');
+  const pathHtml = isMain ? '' : `<span class="wt-path" title="${esc(wt.path)}">${esc(wt.shortPath)}</span>`;
+  const last = wt.lastMsg ? `<span class="lastmsg" title="letzter Commit">„${esc(wt.lastMsg)}“</span>` : '';
+  return `<div class="${cls.join(' ')}">${curve}${node}` +
+    `<span class="branch">${esc(wt.branch)}</span>${abHtml}${gitState(wt)}${agents}${warns}${pathHtml}${last}${actionsHtml(p, wt)}</div>`;
+}
+
+function render(ov) {
+  const c = ov.counts || {};
+  document.getElementById('tiles').innerHTML =
+    tile(c.running || 0, 'läuft', 'var(--good)') +
+    tile(c.blocked || 0, 'wartet auf Input', 'var(--warning)') +
+    tile(c.idle || 0, 'idle', 'var(--muted)', true) +
+    tile((c.exited || 0) + (c.dead || 0), 'beendet / tot', 'var(--critical)') +
+    tile(c.dirty || 0, 'Worktrees mit Änderungen', 'var(--warning)') +
+    tile(c.warnings || 0, 'Warnungen', 'var(--serious)');
+
+  const projects = ov.projects || [];
+  if (!projects.length) {
+    document.getElementById('projects').innerHTML =
+      `<div class="empty">Keine Projekte registriert — <code>magentic add &lt;pfad&gt;</code> oder Taste <code>p</code> in der TUI.</div>`;
+    return;
+  }
+  document.getElementById('projects').innerHTML = projects.map(p => {
+    const rows = (p.worktrees || []).map((wt, i) =>
+      rowHtml(p, wt, i, p.worktrees.length, p.mainBranch)).join('');
+    const mainCfg = p.path
+      ? `<span class="maincfg" title="Vergleichsbranch für ↑↓, Warnungen und Merges${p.mainConfigured ? '' : ' (automatisch erkannt)'}">` +
+        `Hauptbranch <b>${esc(p.mainBranch)}</b></span>` +
+        `<button class="btn tiny" data-action="editmain" data-project="${esc(p.name)}" data-main="${esc(p.mainBranch)}" title="Hauptbranch ändern">✎</button>` +
+        `<span class="actions"><button class="btn" data-action="deploy" data-project="${esc(p.name)}" ` +
+        `title="Neue Claude-Session, die /deploy ausführt">🚀 deploy</button></span>`
+      : '';
+    return `<div class="card"><div class="card-head"><h2>${esc(p.name)}</h2>` +
+      `<span class="path">${esc(p.path || '')}</span>${mainCfg}</div><div class="rows">${rows}</div></div>`;
+  }).join('');
+}
+
+let lastPayload = '';
+async function refresh(force) {
+  try {
+    const res = await fetch('/api/overview');
+    if (!res.ok) throw new Error(res.status);
+    const txt = await res.text();
+    if (force || txt !== lastPayload) {
+      lastPayload = txt;
+      render(JSON.parse(txt));
+    }
+    document.getElementById('offline').style.display = 'none';
+    document.getElementById('stamp').textContent = 'Stand ' + new Date().toLocaleTimeString('de-DE');
+  } catch {
+    document.getElementById('offline').style.display = 'block';
+  }
+}
+
+let toastTimer;
+function toast(msg, isErr) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = isErr ? 'err' : '';
+  t.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.style.display = 'none'; }, 5000);
+}
+
+async function callApi(url, body) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const txt = await res.text();
+  let data = {};
+  try { data = JSON.parse(txt); } catch {}
+  if (!res.ok) throw new Error(data.error || txt.trim() || res.status);
+  return data;
+}
+
+document.addEventListener('click', async e => {
+  const b = e.target.closest('button[data-action]');
+  if (!b || b.disabled) return;
+  const { action, project, path, main, source, target, agent } = b.dataset;
+  b.disabled = true;
+  try {
+    switch (action) {
+      case 'remove': {
+        if (!confirm(`Worktree wirklich entfernen?\n\n${path}`)) break;
+        await callApi('/api/worktree/remove', { project, path });
+        toast('Worktree entfernt');
+        break;
+      }
+      case 'cleanup': {
+        const d = await callApi('/api/cleanup', { project, path, main });
+        toast(`Cleanup-Agent „${d.agent}“ gestartet — attachen und Plan bestätigen`);
+        break;
+      }
+      case 'merge': {
+        const t = prompt(`Ziel-Branch für Merge von „${source}“:`, target);
+        if (t === null || !t.trim()) break;
+        const d = await callApi('/api/merge', { project, source, target: t.trim() });
+        toast(`Merge-Agent „${d.agent}“ gestartet (${source} → ${t.trim()}) — Plan in der Session bestätigen`);
+        break;
+      }
+      case 'done': {
+        const d = await callApi('/api/done', { agent });
+        toast(`/done an „${d.agent}“ gesendet — Plan in der Session bestätigen`);
+        break;
+      }
+      case 'deploy': {
+        const d = await callApi('/api/deploy', { project });
+        toast(`Deploy-Agent „${d.agent}“ gestartet (/deploy) — Plan in der Session bestätigen`);
+        break;
+      }
+      case 'editmain': {
+        const nm = prompt(`Hauptbranch für ${project} (Vergleich für ↑↓ und Merges, leer = automatisch):`, main);
+        if (nm === null) break;
+        await callApi('/api/project/main', { project, main: nm.trim() });
+        toast(nm.trim() ? `Hauptbranch für ${project}: ${nm.trim()}` : `Hauptbranch für ${project}: automatisch`);
+        break;
+      }
+    }
+  } catch (err) {
+    toast('Fehler: ' + err.message, true);
+  }
+  refresh(true);
+});
+
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>
