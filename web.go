@@ -81,7 +81,7 @@ func startSkillAgent(st *State, dir, prompt string) (string, error) {
 	if err := TmuxNewClaudeSession(session, dir, ""); err != nil {
 		return "", err
 	}
-	go sendPromptWhenReady(session, prompt)
+	go sendPromptWhenReady(session, prompt, true)
 	return name, nil
 }
 
@@ -245,7 +245,7 @@ func handleCleanup(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	go sendPromptWhenReady(session, prompt)
+	go sendPromptWhenReady(session, prompt, true)
 	jsonOK(w, map[string]any{"agent": name})
 }
 
@@ -256,10 +256,10 @@ func sendSlashCommand(session, cmd string) {
 		tmux("send-keys", "-t", targetPane(session), "Enter")
 		return
 	}
-	go sendPromptWhenReady(session, cmd)
+	go sendPromptWhenReady(session, cmd, true)
 }
 
-func sendPromptWhenReady(session, prompt string) {
+func sendPromptWhenReady(session, prompt string, submit bool) {
 	for i := 0; i < 180; i++ {
 		time.Sleep(1 * time.Second)
 		content := strings.ToLower(TmuxCapturePane(session, 0))
@@ -272,8 +272,10 @@ func sendPromptWhenReady(session, prompt string) {
 		if strings.Contains(content, "shift+tab to cycle") {
 			time.Sleep(500 * time.Millisecond)
 			tmux("send-keys", "-t", targetPane(session), "-l", prompt)
-			time.Sleep(300 * time.Millisecond)
-			tmux("send-keys", "-t", targetPane(session), "Enter")
+			if submit {
+				time.Sleep(300 * time.Millisecond)
+				tmux("send-keys", "-t", targetPane(session), "Enter")
+			}
 			return
 		}
 	}

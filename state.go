@@ -23,9 +23,16 @@ type Agent struct {
 	BaseDirty  []string  `json:"base_dirty,omitempty"`
 }
 
+type Todo struct {
+	Text      string    `json:"text"`
+	Project   string    `json:"project,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type State struct {
 	Projects []Project `json:"projects"`
 	Agents   []Agent   `json:"agents"`
+	Todos    []Todo    `json:"todos,omitempty"`
 }
 
 func statePath() string {

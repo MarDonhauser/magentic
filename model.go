@@ -18,6 +18,8 @@ type rowKind int
 const (
 	rowProject rowKind = iota
 	rowAgent
+	rowSep
+	rowTodo
 )
 
 const orphanKey = "\x00orphans"
@@ -26,6 +28,8 @@ type treeRow struct {
 	kind    rowKind
 	project *Project
 	agent   Agent
+	todoIdx int
+	label   string
 }
 
 type inputKind int
@@ -36,6 +40,9 @@ const (
 	inputNewWorktree
 	inputAddProject
 	inputRename
+	inputNewTodo
+	inputEditTodo
+	inputTodoProject
 )
 
 type pollResult struct {
@@ -72,6 +79,7 @@ type model struct {
 	renameFrom     string
 	confirmKill    bool
 	confirmRmProj  bool
+	pendingTodoIdx int
 	poll           pollResult
 	flash          string
 	flashIsErr     bool
@@ -165,7 +173,48 @@ func (m model) rows() []treeRow {
 			}
 		}
 	}
+	if len(m.state.Todos) > 0 {
+		rows = append(rows, treeRow{kind: rowSep, label: "Todos"})
+		for i := range m.state.Todos {
+			rows = append(rows, treeRow{kind: rowTodo, todoIdx: i})
+		}
+	}
 	return rows
+}
+
+func (m *model) moveCursor(delta int) {
+	rows := m.rows()
+	i := m.cursor
+	for {
+		i += delta
+		if i < 0 || i >= len(rows) {
+			return
+		}
+		if rows[i].kind != rowSep {
+			m.cursor = i
+			return
+		}
+	}
+}
+
+func (m *model) ensureSelectable() {
+	rows := m.rows()
+	if len(rows) == 0 {
+		m.cursor = 0
+		return
+	}
+	if m.cursor >= len(rows) {
+		m.cursor = len(rows) - 1
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+	if rows[m.cursor].kind == rowSep {
+		m.moveCursor(-1)
+		if rows[m.cursor].kind == rowSep {
+			m.moveCursor(1)
+		}
+	}
 }
 
 func (m model) selectedRow() *treeRow {
@@ -195,17 +244,10 @@ func (m model) contextProject() *Project {
 	if r.kind == rowAgent && r.agent.Project != "" {
 		return m.state.ProjectByName(r.agent.Project)
 	}
+	if r.kind == rowTodo && r.todoIdx < len(m.state.Todos) {
+		return m.state.ProjectByName(m.state.Todos[r.todoIdx].Project)
+	}
 	return nil
-}
-
-func (m *model) clampCursor() {
-	n := len(m.rows())
-	if m.cursor >= n {
-		m.cursor = n - 1
-	}
-	if m.cursor < 0 {
-		m.cursor = 0
-	}
 }
 
 func (m *model) selectAgent(name string) {
@@ -348,17 +390,13 @@ func (m model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if m.focusAgent != "" {
 			return m, nil
 		}
-		if m.cursor > 0 {
-			m.cursor--
-		}
+		m.moveCursor(-1)
 		return m, m.pollNow()
 	case tea.MouseButtonWheelDown:
 		if m.focusAgent != "" {
 			return m, nil
 		}
-		if m.cursor < len(m.rows())-1 {
-			m.cursor++
-		}
+		m.moveCursor(1)
 		return m, m.pollNow()
 	case tea.MouseButtonLeft:
 		if msg.Action != tea.MouseActionPress {
@@ -382,6 +420,9 @@ func (m model) handleClick(x, y int) (tea.Model, tea.Cmd) {
 			return m, m.pollNow()
 		}
 		r := rows[idx]
+		if r.kind == rowSep {
+			return m, nil
+		}
 		if r.kind == rowProject {
 			m.cursor = idx
 			key := orphanKey
@@ -389,8 +430,15 @@ func (m model) handleClick(x, y int) (tea.Model, tea.Cmd) {
 				key = r.project.Name
 			}
 			m.collapsed[key] = !m.collapsed[key]
-			m.clampCursor()
+			m.ensureSelectable()
 			return m, m.pollNow()
+		}
+		if r.kind == rowTodo {
+			if m.cursor == idx {
+				return m.todoToSession(r.todoIdx)
+			}
+			m.cursor = idx
+			return m, nil
 		}
 		if m.cursor == idx {
 			return m.enterFocus()
@@ -445,14 +493,10 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	case "up", "k":
-		if m.cursor > 0 {
-			m.cursor--
-		}
+		m.moveCursor(-1)
 		return m, m.pollNow()
 	case "down", "j":
-		if m.cursor < len(m.rows())-1 {
-			m.cursor++
-		}
+		m.moveCursor(1)
 		return m, m.pollNow()
 	case "enter", " ", "a":
 		r := m.selectedRow()
@@ -465,8 +509,11 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				key = r.project.Name
 			}
 			m.collapsed[key] = !m.collapsed[key]
-			m.clampCursor()
+			m.ensureSelectable()
 			return m, nil
+		}
+		if r.kind == rowTodo {
+			return m.todoToSession(r.todoIdx)
 		}
 		if msg.String() == "a" {
 			return m.attach()
@@ -476,8 +523,14 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startInput(inputNewSession)
 	case "w":
 		return m.startInput(inputNewWorktree)
-	case "r":
-		if a := m.selectedAgent(); a != nil {
+	case "t":
+		return m.startInput(inputNewTodo)
+	case "e", "r":
+		if r := m.selectedRow(); r != nil && r.kind == rowTodo {
+			m.pendingTodoIdx = r.todoIdx
+			return m.startInput(inputEditTodo)
+		}
+		if a := m.selectedAgent(); a != nil && msg.String() == "r" {
 			m.renameFrom = a.Name
 			return m.startInput(inputRename)
 		}
@@ -487,9 +540,12 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if r == nil {
 			return m, nil
 		}
+		if r.kind == rowTodo {
+			return m.deleteTodo(r.todoIdx)
+		}
 		if r.kind == rowAgent {
 			m.confirmKill = true
-		} else if r.project != nil {
+		} else if r.kind == rowProject && r.project != nil {
 			m.confirmRmProj = true
 		}
 		return m, nil
@@ -544,7 +600,7 @@ func (m model) startSkillSession(p *Project, cmd string) (tea.Model, tea.Cmd) {
 	baseCommit, baseDirty := CaptureBaseline(p.Path)
 	m.state.AddAgent(Agent{Name: name, Project: p.Name, Dir: p.Path, CreatedAt: time.Now(), BaseCommit: baseCommit, BaseDirty: baseDirty})
 	m.state.Save()
-	go sendPromptWhenReady(session, cmd)
+	go sendPromptWhenReady(session, cmd, true)
 	m.collapsed[p.Name] = false
 	m.selectAgent(name)
 	m.setFlash(fmt.Sprintf("Session %q gestartet — %s wird getippt", name, strings.TrimSpace(cmd)), false)
@@ -577,7 +633,7 @@ func (m model) startInput(kind inputKind) (tea.Model, tea.Cmd) {
 		m.pendingProject = p.Name
 	}
 	ti := textinput.New()
-	ti.CharLimit = 200
+	ti.CharLimit = 500
 	switch kind {
 	case inputNewSession:
 		ti.Prompt = fmt.Sprintf("Neuer Agent in %s (leer = auto): ", m.pendingProject)
@@ -589,6 +645,22 @@ func (m model) startInput(kind inputKind) (tea.Model, tea.Cmd) {
 	case inputRename:
 		ti.Prompt = "Neuer Name: "
 		ti.SetValue(m.renameFrom)
+	case inputNewTodo:
+		proj := ""
+		if p := m.contextProject(); p != nil {
+			proj = " [" + p.Name + "]"
+		}
+		ti.Prompt = "Neues Todo" + proj + ": "
+	case inputEditTodo:
+		ti.Prompt = "Todo bearbeiten (leer = löschen): "
+		if m.pendingTodoIdx < len(m.state.Todos) {
+			ti.SetValue(m.state.Todos[m.pendingTodoIdx].Text)
+		}
+	case inputTodoProject:
+		ti.Prompt = "Projekt für die Session: "
+		if len(m.state.Projects) > 0 {
+			ti.SetValue(m.state.Projects[0].Name)
+		}
 	}
 	ti.Focus()
 	m.input = ti
@@ -629,8 +701,95 @@ func (m model) commitInput(kind inputKind, value string) (tea.Model, tea.Cmd) {
 		return m.addProject(value)
 	case inputRename:
 		return m.renameAgent(value)
+	case inputNewTodo:
+		return m.addTodo(value)
+	case inputEditTodo:
+		return m.editTodo(value)
+	case inputTodoProject:
+		if p := m.state.ProjectByName(strings.TrimSpace(value)); p != nil {
+			if m.pendingTodoIdx < len(m.state.Todos) {
+				m.state.Todos[m.pendingTodoIdx].Project = p.Name
+				m.state.Save()
+				return m.todoToSession(m.pendingTodoIdx)
+			}
+			return m, nil
+		}
+		m.setFlash("Projekt nicht gefunden: "+value, true)
+		return m, nil
 	}
 	return m, nil
+}
+
+func (m model) addTodo(text string) (tea.Model, tea.Cmd) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return m, nil
+	}
+	proj := ""
+	if p := m.contextProject(); p != nil {
+		proj = p.Name
+	}
+	m.state.Todos = append(m.state.Todos, Todo{Text: text, Project: proj, CreatedAt: time.Now()})
+	m.state.Save()
+	note := ""
+	if proj != "" {
+		note = " [" + proj + "]"
+	}
+	m.setFlash("Todo gespeichert"+note, false)
+	return m, nil
+}
+
+func (m model) editTodo(text string) (tea.Model, tea.Cmd) {
+	if m.pendingTodoIdx >= len(m.state.Todos) {
+		return m, nil
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return m.deleteTodo(m.pendingTodoIdx)
+	}
+	m.state.Todos[m.pendingTodoIdx].Text = text
+	m.state.Save()
+	m.setFlash("Todo aktualisiert", false)
+	return m, nil
+}
+
+func (m model) deleteTodo(idx int) (tea.Model, tea.Cmd) {
+	if idx >= len(m.state.Todos) {
+		return m, nil
+	}
+	text := m.state.Todos[idx].Text
+	m.state.Todos = append(m.state.Todos[:idx], m.state.Todos[idx+1:]...)
+	m.state.Save()
+	m.ensureSelectable()
+	m.setFlash("Todo gelöscht: "+text, false)
+	return m, nil
+}
+
+func (m model) todoToSession(idx int) (tea.Model, tea.Cmd) {
+	if idx >= len(m.state.Todos) {
+		return m, nil
+	}
+	todo := m.state.Todos[idx]
+	proj := m.state.ProjectByName(todo.Project)
+	if proj == nil {
+		m.pendingTodoIdx = idx
+		return m.startInput(inputTodoProject)
+	}
+	name := PickAgentName(m.state)
+	session := tmuxSessionName(name)
+	if err := TmuxNewClaudeSession(session, proj.Path, ""); err != nil {
+		m.setFlash("tmux: "+err.Error(), true)
+		return m, nil
+	}
+	baseCommit, baseDirty := CaptureBaseline(proj.Path)
+	m.state.AddAgent(Agent{Name: name, Project: proj.Name, Dir: proj.Path, CreatedAt: time.Now(), BaseCommit: baseCommit, BaseDirty: baseDirty})
+	m.state.Todos = append(m.state.Todos[:idx], m.state.Todos[idx+1:]...)
+	m.state.Save()
+	go sendPromptWhenReady(session, todo.Text, false)
+	m.collapsed[proj.Name] = false
+	m.selectAgent(name)
+	m.setFlash(fmt.Sprintf("Todo → Session %q — Text steht im Eingabefeld, Enter schickt ihn ab", name), false)
+	return m.enterFocus()
 }
 
 func (m model) createAgent(worktree bool, name string) (tea.Model, tea.Cmd) {
@@ -752,7 +911,7 @@ func (m model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.state.RemoveAgent(a.Name)
 		m.state.Save()
 		delete(m.poll.statuses, a.Name)
-		m.clampCursor()
+		m.ensureSelectable()
 		m.setFlash(fmt.Sprintf("Agent %q beendet%s", a.Name, note), false)
 		return m, m.pollNow()
 	}
@@ -778,7 +937,7 @@ func (m model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.state.Projects = out
 		m.state.Save()
-		m.clampCursor()
+		m.ensureSelectable()
 		m.setFlash(fmt.Sprintf("Projekt %q entfernt (Dateien bleiben unberührt)", p.Name), false)
 		return m, m.pollNow()
 	}

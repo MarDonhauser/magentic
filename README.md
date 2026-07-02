@@ -39,6 +39,8 @@ magentic web [port]   # Session-/Worktree-Übersicht im Browser (Default 4321)
 | `o` | Session-/Worktree-Übersicht im Browser öffnen |
 | `d` | `/done` an die Session des gewählten Agents senden |
 | `D` | `/deploy` senden (ohne Agent: neue Session im Projekt-Root) |
+| `t` | Neues Todo (merkt sich das aktuelle Projekt) |
+| `e` | Todo bearbeiten (leer = löschen) |
 | `r` | Agent umbenennen |
 | `x` | Agent beenden (Worktree bleibt bestehen) / Projekt entfernen |
 | `p` | Projekt hinzufügen |
@@ -49,6 +51,15 @@ magentic web [port]   # Session-/Worktree-Übersicht im Browser (Default 4321)
 Maus: Klick links wählt aus (Projekt-Klick klappt auf/zu), zweiter Klick auf
 einen Agent oder Klick in die Terminal-Vorschau öffnet den Fokus-Modus,
 Scrollrad navigiert.
+
+## Todos
+
+`t` legt ein Todo an (links unten über der Usage-Anzeige, mit Projekt-Tag aus
+dem aktuellen Kontext). `e` bearbeitet, `x` löscht. `⏎` auf einem Todo startet
+eine neue Claude-Session im zugehörigen Projekt und tippt den Todo-Text ins
+Eingabefeld — **ohne ihn abzuschicken**: Du landest direkt im Fokus-Modus,
+kannst den Text noch anpassen und schickst ihn selbst mit Enter ab. Das Todo
+wird dabei aus der Liste entfernt.
 
 ## Fokus-Modus
 

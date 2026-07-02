@@ -195,10 +195,17 @@ func (m model) renderTree(w, h int) string {
 	}
 	for i, r := range rows {
 		var line string
-		if r.kind == rowProject {
+		switch r.kind {
+		case rowProject:
 			line = m.projectLine(r, w)
-		} else {
+		case rowAgent:
 			line = m.agentLine(r.agent, w)
+		case rowSep:
+			line = styleSection.Render(r.label) + " " + styleDim.Render(strings.Repeat("─", max(0, w-len([]rune(r.label))-1)))
+			lines = append(lines, trunc(line, w))
+			continue
+		case rowTodo:
+			line = m.todoLine(r.todoIdx, w)
 		}
 		if i == m.cursor {
 			plain := ansi.Strip(line)
@@ -214,6 +221,19 @@ func (m model) renderTree(w, h int) string {
 		lines = append(lines, usage...)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m model) todoLine(idx, w int) string {
+	if idx >= len(m.state.Todos) {
+		return ""
+	}
+	t := m.state.Todos[idx]
+	tag := ""
+	if t.Project != "" {
+		tag = styleDim.Render(" [" + t.Project + "]")
+	}
+	tagW := lipgloss.Width(tag)
+	return " • " + styleText.Render(trunc(t.Text, w-4-tagW)) + tag
 }
 
 func usageBar(pct float64, width int) string {
@@ -440,7 +460,11 @@ func (m model) renderFooter() string {
 		}
 		return " " + styleOK.Render(m.flash)
 	}
-	keys := []string{"n neu", "w worktree", "⏎ fokus", "d done", "D deploy", "o browser", "r name", "x kill", "p projekt", "q ende"}
+	if r := m.selectedRow(); r != nil && r.kind == rowTodo {
+		keys := []string{"⏎/klick session daraus starten", "e bearbeiten", "x löschen", "t neues todo", "q ende"}
+		return " " + styleDim.Render(strings.Join(keys, " · "))
+	}
+	keys := []string{"n neu", "w worktree", "⏎ fokus", "t todo", "d done", "D deploy", "o browser", "r name", "x kill", "p projekt", "q ende"}
 	return " " + styleDim.Render(strings.Join(keys, " · "))
 }
 
