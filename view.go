@@ -208,6 +208,9 @@ func (m model) renderTree(w, h int) string {
 			line = styleSection.Render(r.label) + " " + styleDim.Render(strings.Repeat("─", max(0, w-len([]rune(r.label))-1)))
 			lines = append(lines, trunc(line, w))
 			continue
+		case rowHint:
+			lines = append(lines, trunc(styleDim.Render(" "+r.label), w))
+			continue
 		case rowTodo:
 			line = m.todoLine(r.todoIdx, w)
 		}

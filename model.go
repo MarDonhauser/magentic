@@ -21,7 +21,12 @@ const (
 	rowAgent
 	rowSep
 	rowTodo
+	rowHint
 )
+
+func selectableRow(k rowKind) bool {
+	return k != rowSep && k != rowHint
+}
 
 const orphanKey = "\x00orphans"
 
@@ -206,11 +211,12 @@ func (m model) rows() []treeRow {
 			}
 		}
 	}
-	if len(m.state.Todos) > 0 {
-		rows = append(rows, treeRow{kind: rowSep, label: "Todos"})
-		for i := range m.state.Todos {
-			rows = append(rows, treeRow{kind: rowTodo, todoIdx: i})
-		}
+	rows = append(rows, treeRow{kind: rowSep, label: "Todos"})
+	if len(m.state.Todos) == 0 {
+		rows = append(rows, treeRow{kind: rowHint, label: "t = neues Todo"})
+	}
+	for i := range m.state.Todos {
+		rows = append(rows, treeRow{kind: rowTodo, todoIdx: i})
 	}
 	return rows
 }
@@ -223,7 +229,7 @@ func (m *model) moveCursor(delta int) {
 		if i < 0 || i >= len(rows) {
 			return
 		}
-		if rows[i].kind != rowSep {
+		if selectableRow(rows[i].kind) {
 			m.cursor = i
 			return
 		}
@@ -242,9 +248,9 @@ func (m *model) ensureSelectable() {
 	if m.cursor < 0 {
 		m.cursor = 0
 	}
-	if rows[m.cursor].kind == rowSep {
+	if !selectableRow(rows[m.cursor].kind) {
 		m.moveCursor(-1)
-		if rows[m.cursor].kind == rowSep {
+		if !selectableRow(rows[m.cursor].kind) {
 			m.moveCursor(1)
 		}
 	}
@@ -463,7 +469,7 @@ func (m model) handleClick(x, y int) (tea.Model, tea.Cmd) {
 			return m, m.pollNow()
 		}
 		r := rows[idx]
-		if r.kind == rowSep {
+		if !selectableRow(r.kind) {
 			return m, nil
 		}
 		if r.kind == rowProject {
