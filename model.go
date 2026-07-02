@@ -51,6 +51,16 @@ type tickMsg time.Time
 type pollMsg pollResult
 type attachDoneMsg struct{ err error }
 type webStartedMsg struct{ url string }
+type usageTickMsg time.Time
+type usageMsg UsageInfo
+
+func usageTick() tea.Cmd {
+	return tea.Tick(5*time.Minute, func(t time.Time) tea.Msg { return usageTickMsg(t) })
+}
+
+func fetchUsageCmd() tea.Cmd {
+	return func() tea.Msg { return usageMsg(CachedUsage()) }
+}
 
 type model struct {
 	state          *State
@@ -71,6 +81,7 @@ type model struct {
 	webRunning     bool
 	focusAgent     string
 	focusPreview   string
+	usage          UsageInfo
 }
 
 func newModel(s *State) model {
@@ -249,7 +260,7 @@ func pollCmd(state State, selected *Agent) tea.Cmd {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(m.pollNow(), tick())
+	return tea.Batch(m.pollNow(), tick(), fetchUsageCmd(), usageTick())
 }
 
 func (m model) pollNow() tea.Cmd {
@@ -273,6 +284,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tickMsg:
 		return m, tea.Batch(m.pollNow(), tick())
+	case usageTickMsg:
+		return m, tea.Batch(fetchUsageCmd(), usageTick())
+	case usageMsg:
+		m.usage = UsageInfo(msg)
+		return m, nil
 	case pollMsg:
 		m.poll = pollResult(msg)
 		if m.poll.diskMain != nil {

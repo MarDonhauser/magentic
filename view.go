@@ -84,7 +84,7 @@ func (m model) View() string {
 	} else {
 		detailContent = m.renderDetails(detailW-4, innerH)
 	}
-	tree := m.renderPanel(m.renderTree(treeW-4), treeW-2, innerH, !focused)
+	tree := m.renderPanel(m.renderTree(treeW-4, innerH), treeW-2, innerH, !focused)
 	details := m.renderPanel(detailContent, detailW-2, innerH, focused)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, tree, details)
 	footer := m.renderFooter()
@@ -187,11 +187,11 @@ func (m model) agentLine(a Agent, w int) string {
 	return fmt.Sprintf("  %s %s%s%s%s%s", icon, name, status, age, marks, wt)
 }
 
-func (m model) renderTree(w int) string {
-	var b strings.Builder
+func (m model) renderTree(w, h int) string {
 	rows := m.rows()
+	var lines []string
 	if len(rows) == 0 {
-		return styleDim.Render("Keine Projekte.\n\np = Projekt hinzufügen")
+		lines = []string{styleDim.Render("Keine Projekte."), "", styleDim.Render("p = Projekt hinzufügen")}
 	}
 	for i, r := range rows {
 		var line string
@@ -204,9 +204,59 @@ func (m model) renderTree(w int) string {
 			plain := ansi.Strip(line)
 			line = styleSel.Render(pad(plain, w))
 		}
-		b.WriteString(trunc(line, w) + "\n")
+		lines = append(lines, trunc(line, w))
 	}
-	return b.String()
+	usage := m.usageLines(w)
+	if len(usage) > 0 && len(lines)+len(usage) < h {
+		for len(lines) < h-len(usage) {
+			lines = append(lines, "")
+		}
+		lines = append(lines, usage...)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func usageBar(pct float64, width int) string {
+	filled := int(pct/100*float64(width) + 0.5)
+	if filled > width {
+		filled = width
+	}
+	col := styleOK
+	if pct >= 90 {
+		col = styleErr
+	} else if pct >= 70 {
+		col = styleWarn
+	}
+	return col.Render(strings.Repeat("▓", filled)) + styleDim.Render(strings.Repeat("░", width-filled))
+}
+
+func (m model) usageLines(w int) []string {
+	u := m.usage
+	if u.FetchedAt.IsZero() {
+		return nil
+	}
+	if u.Err != "" {
+		return []string{styleDim.Render(trunc("Usage: "+u.Err, w))}
+	}
+	barW := 10
+	l1 := fmt.Sprintf("5h %s %3.0f%% %s", usageBar(u.FiveHour, barW), u.FiveHour,
+		styleDim.Render("↻"+u.FiveHourReset.Format("15:04")))
+	l2 := fmt.Sprintf("7d %s %3.0f%% %s", usageBar(u.SevenDay, barW), u.SevenDay,
+		styleDim.Render("↻"+shortWeekday(u.SevenDayReset)))
+	return []string{
+		styleDim.Render(strings.Repeat("─", max(0, w))),
+		styleSection.Render("Claude-Usage"),
+		trunc(l1, w),
+		trunc(l2, w),
+	}
+}
+
+func shortWeekday(t time.Time) string {
+	days := map[time.Weekday]string{
+		time.Monday: "Mo", time.Tuesday: "Di", time.Wednesday: "Mi",
+		time.Thursday: "Do", time.Friday: "Fr", time.Saturday: "Sa", time.Sunday: "So",
+	}
+	return days[t.Weekday()] + " " + t.Format("15:04")
 }
 
 func (m model) renderDetails(w, h int) string {

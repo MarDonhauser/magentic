@@ -227,7 +227,10 @@ function rowHtml(p, wt, idx, total, mainBranch) {
   const ab = [];
   if (wt.ahead) ab.push(`↑${wt.ahead}`);
   if (wt.behind) ab.push(`↓${wt.behind}`);
-  const abHtml = ab.length ? `<span class="ab" title="gegenüber ${esc(mainBranch)}">${ab.join(' ')}</span>` : '';
+  let abHtml = ab.length ? `<span class="ab" title="gegenüber ${esc(mainBranch)}">${ab.join(' ')}</span>` : '';
+  if (!wt.ahead && wt.branch !== mainBranch && wt.branch !== '(kein git)' && wt.branch !== '—' && p.path) {
+    abHtml += `<span class="git-state" style="color:var(--good)" title="alle Commits dieses Branches sind in ${esc(mainBranch)} enthalten">✓ in ${esc(mainBranch)}</span>`;
+  }
   const agents = (wt.agents || []).map(a => agentPill(p, a)).join('');
   const warns = (wt.warnings || []).map(w =>
     `<span class="warn"><span class="ic">⚠</span>${esc(w)}</span>`).join('');
@@ -237,15 +240,22 @@ function rowHtml(p, wt, idx, total, mainBranch) {
     `<span class="branch">${esc(wt.branch)}</span>${abHtml}${gitState(wt)}${agents}${warns}${pathHtml}${last}${actionsHtml(p, wt)}</div>`;
 }
 
+function usageColor(pct) {
+  return pct >= 90 ? 'var(--critical)' : pct >= 70 ? 'var(--warning)' : 'var(--good)';
+}
+
 function render(ov) {
   const c = ov.counts || {};
+  const u = ov.usage;
   document.getElementById('tiles').innerHTML =
     tile(c.running || 0, 'läuft', 'var(--good)') +
     tile(c.blocked || 0, 'wartet auf Input', 'var(--warning)') +
     tile(c.idle || 0, 'idle', 'var(--muted)', true) +
     tile((c.exited || 0) + (c.dead || 0), 'beendet / tot', 'var(--critical)') +
     tile(c.dirty || 0, 'Worktrees mit Änderungen', 'var(--warning)') +
-    tile(c.warnings || 0, 'Warnungen', 'var(--serious)');
+    tile(c.warnings || 0, 'Warnungen', 'var(--serious)') +
+    (u ? tile(`${Math.round(u.fiveHour)}%`, `5h-Limit · ↻ ${esc(u.fiveHourReset)}`, usageColor(u.fiveHour)) +
+         tile(`${Math.round(u.sevenDay)}%`, `Wochenlimit · ↻ ${esc(u.sevenDayReset)}`, usageColor(u.sevenDay)) : '');
 
   const projects = ov.projects || [];
   if (!projects.length) {

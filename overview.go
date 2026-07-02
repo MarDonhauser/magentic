@@ -39,9 +39,17 @@ type OvProject struct {
 	Worktrees      []OvWorktree `json:"worktrees"`
 }
 
+type OvUsage struct {
+	FiveHour      float64 `json:"fiveHour"`
+	FiveHourReset string  `json:"fiveHourReset"`
+	SevenDay      float64 `json:"sevenDay"`
+	SevenDayReset string  `json:"sevenDayReset"`
+}
+
 type Overview struct {
 	GeneratedAt string         `json:"generatedAt"`
 	Counts      map[string]int `json:"counts"`
+	Usage       *OvUsage       `json:"usage"`
 	Projects    []OvProject    `json:"projects"`
 }
 
@@ -83,6 +91,14 @@ func BuildOverview(s *State) Overview {
 	ov := Overview{
 		GeneratedAt: time.Now().Format("15:04:05"),
 		Counts:      map[string]int{},
+	}
+	if u := CachedUsage(); u.Err == "" && !u.FetchedAt.IsZero() {
+		ov.Usage = &OvUsage{
+			FiveHour:      u.FiveHour,
+			FiveHourReset: u.FiveHourReset.Format("15:04"),
+			SevenDay:      u.SevenDay,
+			SevenDayReset: shortWeekday(u.SevenDayReset),
+		}
 	}
 	for _, st := range statuses {
 		ov.Counts[statusKey(st)]++
