@@ -3,6 +3,7 @@ package main
 import (
 	"regexp"
 	"strings"
+	"time"
 )
 
 type AgentStatus int
@@ -81,21 +82,25 @@ func lastLines(s string, n int) string {
 	return strings.Join(lines, "\n")
 }
 
-func CollectStatuses(agents []Agent) (map[string]AgentStatus, map[string]string) {
-	cmds := TmuxPaneCommands()
+func CollectStatuses(agents []Agent) (map[string]AgentStatus, map[string]string, map[string]time.Time) {
+	infos := TmuxPaneInfos()
 	statuses := map[string]AgentStatus{}
 	contents := map[string]string{}
+	activity := map[string]time.Time{}
 	for _, a := range agents {
 		sn := tmuxSessionName(a.Name)
-		cmd, exists := cmds[sn]
+		info, exists := infos[sn]
 		var content string
 		if exists {
 			content = TmuxCapturePane(sn, 0)
+			if !info.Activity.IsZero() {
+				activity[a.Name] = info.Activity
+			}
 		}
 		contents[a.Name] = content
-		statuses[a.Name] = DetectClaudeStatus(exists, cmd, lastLines(content, 25))
+		statuses[a.Name] = DetectClaudeStatus(exists, info.Command, lastLines(content, 25))
 	}
-	return statuses, contents
+	return statuses, contents, activity
 }
 
 func DetectClaudeStatus(sessionExists bool, paneCommand, paneContent string) AgentStatus {

@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const sessionPrefix = "mgt-"
@@ -62,17 +64,29 @@ func TmuxCapturePane(session string, scrollback int) string {
 	return out
 }
 
-func TmuxPaneCommands() map[string]string {
-	out, err := tmux("list-panes", "-a", "-F", "#{session_name}\t#{pane_current_command}")
+type PaneInfo struct {
+	Command  string
+	Activity time.Time
+}
+
+func TmuxPaneInfos() map[string]PaneInfo {
+	out, err := tmux("list-panes", "-a", "-F", "#{session_name}\t#{pane_current_command}\t#{window_activity}")
 	if err != nil {
 		return nil
 	}
-	m := map[string]string{}
+	m := map[string]PaneInfo{}
 	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
-		parts := strings.SplitN(line, "\t", 2)
-		if len(parts) == 2 {
-			m[parts[0]] = parts[1]
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) < 2 {
+			continue
 		}
+		info := PaneInfo{Command: parts[1]}
+		if len(parts) == 3 {
+			if ts, err := strconv.ParseInt(strings.TrimSpace(parts[2]), 10, 64); err == nil && ts > 0 {
+				info.Activity = time.Unix(ts, 0)
+			}
+		}
+		m[parts[0]] = info
 	}
 	return m
 }

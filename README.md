@@ -87,6 +87,19 @@ Gesamtstatus. Die Projektzeile zeigt weiterhin den Repo-Gesamtzustand.
 
 Rechts daneben: `✓` Arbeitsverzeichnis sauber, `±` uncommitted Änderungen, `⑂` läuft im Worktree.
 
+Agents sind pro Projekt nach Dringlichkeit sortiert: Wer auf Input wartet,
+steht immer oben (dann laufend, idle, beendet, tot). Die Zeitspalte zeigt die
+**letzte Aktivität** der Session (tmux `window_activity`), nicht ihr Alter —
+vergessene Agents fallen so sofort auf.
+
+## Benachrichtigungen
+
+magentic schickt Desktop-Benachrichtigungen mit Ton (macOS `osascript`, Linux
+`notify-send`), solange die TUI läuft: wenn ein Agent auf Eingabe wartet
+(Permission-Dialog, Rückfrage — Sound „Glass") und wenn ein laufender Agent
+fertig ist (Sound „Ping", mit einem Poll Verzögerung bestätigt, um Fehlalarme
+zu vermeiden). Für den gerade fokussierten Agent wird nicht benachrichtigt.
+
 ## Browser-Übersicht (`magentic web` oder Taste `o`)
 
 Zeigt alle Projekte als Git-Strang-Graph: der Hauptbranch als Stamm, jeder

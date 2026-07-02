@@ -148,8 +148,8 @@ func handleDone(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "Session läuft nicht mehr", 404)
 		return
 	}
-	cmds := TmuxPaneCommands()
-	status := DetectClaudeStatus(true, cmds[sn], lastLines(TmuxCapturePane(sn, 0), 25))
+	infos := TmuxPaneInfos()
+	status := DetectClaudeStatus(true, infos[sn].Command, lastLines(TmuxCapturePane(sn, 0), 25))
 	switch status {
 	case StatusBlocked:
 		jsonError(w, req.Agent+" wartet auf eine Antwort — erst den offenen Dialog beantworten", 409)
@@ -304,7 +304,7 @@ func handleWorktreeRemove(w http.ResponseWriter, r *http.Request) {
 			onPath = append(onPath, a)
 		}
 	}
-	statuses, _ := CollectStatuses(onPath)
+	statuses, _, _ := CollectStatuses(onPath)
 	for _, a := range onPath {
 		if statuses[a.Name] == StatusRunning || statuses[a.Name] == StatusBlocked {
 			jsonError(w, fmt.Sprintf("Agent %q arbeitet gerade in diesem Worktree", a.Name), 409)

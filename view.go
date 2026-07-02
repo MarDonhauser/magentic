@@ -171,7 +171,11 @@ func (m model) agentLine(a Agent, w int) string {
 	nameW := m.maxAgentNameLen()
 	name := pad(trunc(a.Name, nameW), nameW+1)
 	status := statusStyle(st).Render(pad(st.Label(), 8))
-	age := pad(formatAge(a.CreatedAt), 7)
+	lastActive := a.CreatedAt
+	if act, ok := m.poll.activity[a.Name]; ok {
+		lastActive = act
+	}
+	age := pad(formatAge(lastActive), 7)
 	marks := "  "
 	if sc, ok := m.poll.session[a.Name]; ok {
 		if len(sc.Files) == 0 && sc.Commits == 0 {
@@ -312,7 +316,11 @@ func (m model) detailContent(w, h int) ([]string, int) {
 		if a.Worktree {
 			wtNote = styleDim.Render(" · ⑂ worktree")
 		}
-		add(statusStyle(st).Render(st.Icon()+" "+st.Label()) + styleDim.Render(" · seit "+formatAge(a.CreatedAt)) + wtNote)
+		active := ""
+		if act, ok := m.poll.activity[a.Name]; ok {
+			active = " · aktiv " + formatAgeWord(act)
+		}
+		add(statusStyle(st).Render(st.Icon()+" "+st.Label()) + styleDim.Render(" · seit "+formatAge(a.CreatedAt)+active) + wtNote)
 		add(styleDim.Render(shortPath(a.Dir)))
 		add("")
 		m.addAgentGit(a, w, add)

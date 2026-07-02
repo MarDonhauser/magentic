@@ -77,7 +77,7 @@ func BuildOverview(s *State) Overview {
 	for _, a := range discoverNew(s) {
 		s.AddAgent(a)
 	}
-	statuses, _ := CollectStatuses(s.Agents)
+	statuses, _, activity := CollectStatuses(s.Agents)
 	kept := s.Agents[:0]
 	for _, a := range s.Agents {
 		if statuses[a.Name] == StatusDead {
@@ -118,7 +118,7 @@ func BuildOverview(s *State) Overview {
 			proj.MainConfigured = true
 		}
 		for i, wt := range wts {
-			owt := buildWorktree(s, statuses, assigned, wt, i == 0, proj.MainBranch)
+			owt := buildWorktree(s, statuses, activity, assigned, wt, i == 0, proj.MainBranch)
 			proj.Worktrees = append(proj.Worktrees, owt)
 		}
 		for _, a := range s.AgentsFor(p.Name) {
@@ -126,7 +126,7 @@ func BuildOverview(s *State) Overview {
 				continue
 			}
 			assigned[a.Name] = true
-			proj.Worktrees[0].Agents = append(proj.Worktrees[0].Agents, toOvAgent(a, statuses))
+			proj.Worktrees[0].Agents = append(proj.Worktrees[0].Agents, toOvAgent(a, statuses, activity))
 		}
 		finishWarnings(&proj, statuses, s)
 		ov.Projects = append(ov.Projects, proj)
@@ -142,7 +142,7 @@ func BuildOverview(s *State) Overview {
 			continue
 		}
 		hasOrphans = true
-		orphanWt.Agents = append(orphanWt.Agents, toOvAgent(a, statuses))
+		orphanWt.Agents = append(orphanWt.Agents, toOvAgent(a, statuses, activity))
 	}
 	if hasOrphans {
 		orphanWt.Branch = "—"
@@ -164,7 +164,7 @@ func BuildOverview(s *State) Overview {
 	return ov
 }
 
-func buildWorktree(s *State, statuses map[string]AgentStatus, assigned map[string]bool, wt WorktreeInfo, isMain bool, mainBranch string) OvWorktree {
+func buildWorktree(s *State, statuses map[string]AgentStatus, activity map[string]time.Time, assigned map[string]bool, wt WorktreeInfo, isMain bool, mainBranch string) OvWorktree {
 	git := CollectGitInfo(wt.Path)
 	owt := OvWorktree{
 		Path:      wt.Path,
@@ -191,19 +191,23 @@ func buildWorktree(s *State, statuses map[string]AgentStatus, assigned map[strin
 	for _, a := range s.Agents {
 		if a.Dir == wt.Path && !assigned[a.Name] {
 			assigned[a.Name] = true
-			owt.Agents = append(owt.Agents, toOvAgent(a, statuses))
+			owt.Agents = append(owt.Agents, toOvAgent(a, statuses, activity))
 		}
 	}
 	return owt
 }
 
-func toOvAgent(a Agent, statuses map[string]AgentStatus) OvAgent {
+func toOvAgent(a Agent, statuses map[string]AgentStatus, activity map[string]time.Time) OvAgent {
 	st := statuses[a.Name]
+	lastActive := a.CreatedAt
+	if act, ok := activity[a.Name]; ok {
+		lastActive = act
+	}
 	return OvAgent{
 		Name:     a.Name,
 		Status:   statusKey(st),
 		Label:    st.Label(),
-		Age:      formatAge(a.CreatedAt),
+		Age:      formatAge(lastActive),
 		Worktree: a.Worktree,
 	}
 }

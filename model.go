@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -49,6 +50,7 @@ type pollResult struct {
 	statuses   map[string]AgentStatus
 	git        map[string]GitInfo
 	session    map[string]SessionChanges
+	activity   map[string]time.Time
 	preview    string
 	discovered []Agent
 	diskMain   map[string]string
@@ -80,6 +82,7 @@ type model struct {
 	confirmKill    bool
 	confirmRmProj  bool
 	pendingTodoIdx int
+	notifyPending  map[string]AgentStatus
 	poll           pollResult
 	flash          string
 	flashIsErr     bool
@@ -94,7 +97,7 @@ type model struct {
 
 func newModel(s *State) model {
 	reconcile(s)
-	return model{state: s, collapsed: map[string]bool{}}
+	return model{state: s, collapsed: map[string]bool{}, notifyPending: map[string]AgentStatus{}}
 }
 
 func discoverNew(s *State) []Agent {
@@ -143,6 +146,29 @@ func reconcile(s *State) {
 	}
 }
 
+func (m *model) handleStatusChanges(old map[string]AgentStatus) {
+	if old == nil {
+		return
+	}
+	for name, st := range m.poll.statuses {
+		if pending, ok := m.notifyPending[name]; ok {
+			delete(m.notifyPending, name)
+			if st == pending && name != m.focusAgent {
+				notifyDesktop("magentic · "+name, "Agent ist fertig — bereit für den nächsten Prompt", "Ping")
+			}
+		}
+		prev, seen := old[name]
+		if !seen || prev == st || name == m.focusAgent {
+			continue
+		}
+		if st == StatusBlocked && (prev == StatusRunning || prev == StatusIdle) {
+			notifyDesktop("magentic · "+name, "Agent wartet auf deine Eingabe", "Glass")
+		} else if prev == StatusRunning && st == StatusIdle {
+			m.notifyPending[name] = StatusIdle
+		}
+	}
+}
+
 func (m model) orphanAgents() []Agent {
 	var out []Agent
 	for _, a := range m.state.Agents {
@@ -153,6 +179,13 @@ func (m model) orphanAgents() []Agent {
 	return out
 }
 
+func (m model) sortAgents(agents []Agent) []Agent {
+	sort.SliceStable(agents, func(i, j int) bool {
+		return statusRank(m.poll.statuses[agents[i].Name]) < statusRank(m.poll.statuses[agents[j].Name])
+	})
+	return agents
+}
+
 func (m model) rows() []treeRow {
 	var rows []treeRow
 	for i := range m.state.Projects {
@@ -161,14 +194,14 @@ func (m model) rows() []treeRow {
 		if m.collapsed[p.Name] {
 			continue
 		}
-		for _, a := range m.state.AgentsFor(p.Name) {
+		for _, a := range m.sortAgents(m.state.AgentsFor(p.Name)) {
 			rows = append(rows, treeRow{kind: rowAgent, agent: a, project: p})
 		}
 	}
 	if orphans := m.orphanAgents(); len(orphans) > 0 {
 		rows = append(rows, treeRow{kind: rowProject, project: nil})
 		if !m.collapsed[orphanKey] {
-			for _, a := range orphans {
+			for _, a := range m.sortAgents(orphans) {
 				rows = append(rows, treeRow{kind: rowAgent, agent: a})
 			}
 		}
@@ -272,8 +305,9 @@ func tick() tea.Cmd {
 func pollCmd(state State, selected *Agent) tea.Cmd {
 	return func() tea.Msg {
 		res := pollResult{git: map[string]GitInfo{}, session: map[string]SessionChanges{}}
-		statuses, contents := CollectStatuses(state.Agents)
+		statuses, contents, activity := CollectStatuses(state.Agents)
 		res.statuses = statuses
+		res.activity = activity
 		for _, a := range state.Agents {
 			if selected != nil && a.Name == selected.Name {
 				res.preview = contents[a.Name]
@@ -332,7 +366,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.usage = UsageInfo(msg)
 		return m, nil
 	case pollMsg:
+		oldStatuses := m.poll.statuses
+		var selName string
+		if a := m.selectedAgent(); a != nil {
+			selName = a.Name
+		}
 		m.poll = pollResult(msg)
+		m.handleStatusChanges(oldStatuses)
+		if selName != "" {
+			m.selectAgent(selName)
+		}
 		if m.poll.diskMain != nil {
 			for i := range m.state.Projects {
 				if mb, ok := m.poll.diskMain[m.state.Projects[i].Name]; ok {
@@ -971,6 +1014,14 @@ func shortPath(p string) string {
 		return "~" + strings.TrimPrefix(p, home)
 	}
 	return p
+}
+
+func formatAgeWord(t time.Time) string {
+	s := formatAge(t)
+	if s == "jetzt" {
+		return s
+	}
+	return "vor " + s
 }
 
 func formatAge(t time.Time) string {
