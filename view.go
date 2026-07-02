@@ -230,6 +230,29 @@ func (m model) renderTree(w, h int) string {
 	return strings.Join(lines, "\n")
 }
 
+func (m model) todoDetail(idx, w int) []string {
+	t := m.state.Todos[idx]
+	lines := []string{styleSection.Render("Todo"), ""}
+	wrapped := lipgloss.NewStyle().Width(w).Render(t.Text)
+	for _, l := range strings.Split(wrapped, "\n") {
+		lines = append(lines, styleText.Render(l))
+	}
+	lines = append(lines, "")
+	proj := t.Project
+	if proj == "" {
+		proj = "— (wird beim Starten abgefragt)"
+	}
+	lines = append(lines,
+		styleDim.Render("Projekt: ")+styleText.Render(proj),
+		styleDim.Render("Notiert: "+formatAgeWord(t.CreatedAt)),
+		"",
+		styleDim.Render("⏎  Session daraus starten (Text landet im Eingabefeld)"),
+		styleDim.Render("e  bearbeiten"),
+		styleDim.Render("x  löschen"),
+	)
+	return lines
+}
+
 func (m model) todoLine(idx, w int) string {
 	if idx >= len(m.state.Todos) {
 		return ""
@@ -292,6 +315,12 @@ func (m model) renderDetails(w, h int) string {
 }
 
 func (m model) detailContent(w, h int) ([]string, int) {
+	if m.hoverTodo >= 0 && m.hoverTodo < len(m.state.Todos) {
+		return m.todoDetail(m.hoverTodo, w), -1
+	}
+	if r := m.selectedRow(); r != nil && r.kind == rowTodo && r.todoIdx < len(m.state.Todos) {
+		return m.todoDetail(r.todoIdx, w), -1
+	}
 	a := m.selectedAgent()
 	proj := m.contextProject()
 	var lines []string
@@ -304,6 +333,7 @@ func (m model) detailContent(w, h int) ([]string, int) {
 			"",
 			styleDim.Render("p  Projekt hinzufügen"),
 			styleDim.Render("n  neue Claude-Session"),
+			styleDim.Render("t  Todo notieren"),
 			styleDim.Render("o  Übersicht im Browser"),
 		}, -1
 	}

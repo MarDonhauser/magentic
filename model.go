@@ -87,6 +87,7 @@ type model struct {
 	confirmKill    bool
 	confirmRmProj  bool
 	pendingTodoIdx int
+	hoverTodo      int
 	notifyPending  map[string]AgentStatus
 	poll           pollResult
 	flash          string
@@ -102,7 +103,7 @@ type model struct {
 
 func newModel(s *State) model {
 	reconcile(s)
-	return model{state: s, collapsed: map[string]bool{}, notifyPending: map[string]AgentStatus{}}
+	return model{state: s, collapsed: map[string]bool{}, notifyPending: map[string]AgentStatus{}, hoverTodo: -1}
 }
 
 func discoverNew(s *State) []Agent {
@@ -452,8 +453,25 @@ func (m model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.handleClick(msg.X, msg.Y)
+	case tea.MouseButtonNone:
+		if msg.Action == tea.MouseActionMotion && m.focusAgent == "" {
+			m.hoverTodo = m.todoAt(msg.X, msg.Y)
+		}
+		return m, nil
 	}
 	return m, nil
+}
+
+func (m model) todoAt(x, y int) int {
+	if x >= m.treeWidth() {
+		return -1
+	}
+	rows := m.rows()
+	idx := y - 2
+	if idx < 0 || idx >= len(rows) || rows[idx].kind != rowTodo {
+		return -1
+	}
+	return rows[idx].todoIdx
 }
 
 func (m model) handleClick(x, y int) (tea.Model, tea.Cmd) {

@@ -50,7 +50,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "State konnte nicht geladen werden:", err)
 		os.Exit(1)
 	}
-	p := tea.NewProgram(newModel(s), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(newModel(s), tea.WithAltScreen(), tea.WithMouseAllMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
