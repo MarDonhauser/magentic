@@ -1,8 +1,7 @@
-package main
+package core
 
 import (
 	"fmt"
-	"os"
 	"time"
 )
 
@@ -16,7 +15,7 @@ type OvAgent struct {
 
 type OvWorktree struct {
 	Path      string    `json:"path"`
-	ShortPath string    `json:"shortPath"`
+	ShortPath string    `json:"ShortPath"`
 	Branch    string    `json:"branch"`
 	IsMain    bool      `json:"isMain"`
 	Ahead     int       `json:"ahead"`
@@ -74,20 +73,23 @@ func agentAlive(s AgentStatus) bool {
 }
 
 func BuildOverview(s *State) Overview {
-	for _, a := range discoverNew(s) {
+	for _, a := range DiscoverNew(s) {
 		s.AddAgent(a)
 	}
 	statuses, _, activity := CollectStatuses(s.Agents)
 	kept := s.Agents[:0]
+	removed := false
 	for _, a := range s.Agents {
 		if statuses[a.Name] == StatusDead {
-			if _, err := os.Stat(a.Dir); err != nil {
-				continue
-			}
+			removed = true
+			continue
 		}
 		kept = append(kept, a)
 	}
 	s.Agents = kept
+	if removed {
+		s.Save()
+	}
 	ov := Overview{
 		GeneratedAt: time.Now().Format("15:04:05"),
 		Counts:      map[string]int{},
@@ -97,7 +99,7 @@ func BuildOverview(s *State) Overview {
 			FiveHour:      u.FiveHour,
 			FiveHourReset: u.FiveHourReset.Format("15:04"),
 			SevenDay:      u.SevenDay,
-			SevenDayReset: shortWeekday(u.SevenDayReset),
+			SevenDayReset: ShortWeekday(u.SevenDayReset),
 		}
 	}
 	for _, st := range statuses {
@@ -168,7 +170,7 @@ func buildWorktree(s *State, statuses map[string]AgentStatus, activity map[strin
 	git := CollectGitInfo(wt.Path)
 	owt := OvWorktree{
 		Path:      wt.Path,
-		ShortPath: shortPath(wt.Path),
+		ShortPath: ShortPath(wt.Path),
 		Branch:    wt.Branch,
 		IsMain:    isMain,
 		Staged:    git.Staged,
@@ -207,7 +209,7 @@ func toOvAgent(a Agent, statuses map[string]AgentStatus, activity map[string]tim
 		Name:     a.Name,
 		Status:   statusKey(st),
 		Label:    st.Label(),
-		Age:      formatAge(lastActive),
+		Age:      FormatAge(lastActive),
 		Worktree: a.Worktree,
 	}
 }

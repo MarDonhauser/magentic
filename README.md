@@ -1,6 +1,13 @@
 # magentic
 
-Terminal-UI zum Verwalten von Claude-Code-Sessions über mehrere Projekte hinweg. Jeder Agent läuft in einer eigenen tmux-Session und überlebt damit das Schließen der UI.
+Verwaltung von Claude-Code-Sessions über mehrere Projekte hinweg. Jeder Agent läuft in einer eigenen tmux-Session und überlebt damit das Schließen der UI.
+
+Zwei Oberflächen, eine gemeinsame Logik (`core/`):
+
+- **TUI** (`magentic`) — schnelle Übersicht und Verwaltung im Terminal.
+- **Desktop-App** (`app/`, Wails) — Übersicht mit Token-Limits, Todos, Aktionen
+  und **echtem eingebetteten Terminal** (xterm.js): natives Markieren, klickbare
+  Links, natives Scrollen.
 
 ```
  ⚡ magentic                                  ● 1 läuft   ◆ 1 wartet   ○ 2 idle
@@ -11,7 +18,7 @@ Terminal-UI zum Verwalten von Claude-Code-Sessions über mehrere Projekte hinweg
 │   ○ nyx     idle    45m  ✓       ││ Worktrees · Terminal-Preview …        │
 │ ▸ reqpilot                   ✓ 1 ││                                       │
 ╰──────────────────────────────────╯╰───────────────────────────────────────╯
- n neu · w neu+worktree · ⏎ attach/auf-zu · o browser · x kill · q ende
+ n neu · w neu+worktree · ⏎ attach · x kill · q ende
 ```
 
 ## Voraussetzungen
@@ -24,19 +31,16 @@ Terminal-UI zum Verwalten von Claude-Code-Sessions über mehrere Projekte hinweg
 ```sh
 magentic              # TUI starten
 magentic add [pfad]   # Projekt registrieren (Default: aktuelles Verzeichnis)
-magentic web [port]   # Session-/Worktree-Übersicht im Browser (Default 4321)
+open app/build/bin/magentic.app   # Desktop-App
 ```
 
-## Tasten
+## Tasten (TUI)
 
 | Taste | Aktion |
 |---|---|
 | `n` | Neue Claude-Session im Projektverzeichnis (Name leer = auto) |
 | `w` | Neue Claude-Session in frischem Git-Worktree (Branch `agent/<name>`) |
-| `⏎` | Agent: im rechten Panel bedienen (Fokus-Modus) · Projekt: auf-/zuklappen |
-| `ctrl+q` | Fokus-Modus verlassen, zurück zur Übersicht |
-| `a` | Klassisch als Vollbild attachen (zurück mit `ctrl-b d`) |
-| `o` | Session-/Worktree-Übersicht im Browser öffnen |
+| `⏎` / `a` | Agent: an die tmux-Session attachen (zurück mit `ctrl-b d`) · Projekt: auf-/zuklappen |
 | `d` | `/done` an die Session des gewählten Agents senden |
 | `D` | `/deploy` senden (ohne Agent: neue Session im Projekt-Root) |
 | `t` | Neues Todo (merkt sich das aktuelle Projekt) |
@@ -49,25 +53,43 @@ magentic web [port]   # Session-/Worktree-Übersicht im Browser (Default 4321)
 | `q` | Beenden (Agents laufen weiter) |
 
 Maus: Klick links wählt aus (Projekt-Klick klappt auf/zu), zweiter Klick auf
-einen Agent oder Klick in die Terminal-Vorschau öffnet den Fokus-Modus,
-Scrollrad navigiert.
+einen Agent attacht, Scrollrad navigiert.
 
-## Todos
+## Desktop-App
+
+Die App (Wails, Go + xterm.js) zeigt links Sessions **nach Projekt gruppiert**
+und Todos, unten die Claude-Limits (5h/7d). Die Übersicht enthält Tiles,
+Projekt-Karten mit Worktree-Zeilen (ahead/behind, Git-Status, Warnungen),
+Agent-Pills und alle Aktionen:
+
+- **⌨** — Terminal zur Session öffnen (echtes PTY-Attach, natives
+  Markieren/Kopieren, klickbare Links, Scrollback)
+- **✓ done** — schickt `/done` an die laufende Session
+- **🔀 branch → main** — Claude-Session, die den Branch merged
+- **✨ Cleanup** — Claude-Session im verwaisten Worktree: sichten, committen, mergen
+- **⌫ entfernen** — `git worktree remove` (nur sauber + ohne aktive Session)
+- **🚀 deploy** — Claude-Session mit `/deploy`
+- **+ Session / ⑂ Worktree** — neue Claude-Session im Projekt
+- **Todos** — anlegen, bearbeiten, löschen, **▶ Session**: startet eine Session,
+  der Todo-Text landet im Eingabefeld (ohne Abschicken)
+
+**Hauptbranch pro Projekt:** ahead/behind, Warnungen und Merge-Ziele beziehen
+sich auf den konfigurierbaren Hauptbranch (✎ neben dem Projektnamen; leer =
+automatisch der Branch des Haupt-Worktrees).
+
+App bauen:
+
+```sh
+cd app && wails build          # → app/build/bin/magentic.app
+```
+
+## Todos (TUI)
 
 `t` legt ein Todo an (links unten über der Usage-Anzeige, mit Projekt-Tag aus
 dem aktuellen Kontext). `e` bearbeitet, `x` löscht. `⏎` auf einem Todo startet
 eine neue Claude-Session im zugehörigen Projekt und tippt den Todo-Text ins
-Eingabefeld — **ohne ihn abzuschicken**: Du landest direkt im Fokus-Modus,
-kannst den Text noch anpassen und schickst ihn selbst mit Enter ab. Das Todo
-wird dabei aus der Liste entfernt.
-
-## Fokus-Modus
-
-`⏎` oder Klick auf einen Agent bedient dessen Claude-Session direkt im rechten
-Panel: Alle Tasten (Text, Enter, Esc, Pfeile, `shift+tab`, `ctrl+…`) gehen an
-Claude, die Anzeige aktualisiert sich live in Farbe, und die tmux-Fenstergröße
-folgt automatisch dem Panel. `ctrl+q` kehrt zur Übersicht zurück, ein Klick
-links wechselt direkt zu einem anderen Agent/Projekt.
+Eingabefeld — **ohne ihn abzuschicken**. Das Todo wird dabei aus der Liste
+entfernt.
 
 ## Git pro Session
 
@@ -98,35 +120,7 @@ magentic schickt Desktop-Benachrichtigungen mit Ton (macOS `osascript`, Linux
 `notify-send`), solange die TUI läuft: wenn ein Agent auf Eingabe wartet
 (Permission-Dialog, Rückfrage — Sound „Glass") und wenn ein laufender Agent
 fertig ist (Sound „Ping", mit einem Poll Verzögerung bestätigt, um Fehlalarme
-zu vermeiden). Für den gerade fokussierten Agent wird nicht benachrichtigt.
-
-## Browser-Übersicht (`magentic web` oder Taste `o`)
-
-Zeigt alle Projekte als Git-Strang-Graph: der Hauptbranch als Stamm, jeder
-Worktree als Abzweig — mit ahead/behind gegenüber dem Hauptbranch, uncommitteten
-Änderungen, zugeordneten Agents samt Live-Status und Warnungen wie
-„uncommitted Änderungen, keine aktive Session" oder „N Commits nicht in main".
-Aktualisiert sich alle 3 Sekunden selbst; hell/dunkel folgt dem System.
-
-**Hauptbranch pro Projekt:** ahead/behind, Warnungen und Merge-Ziele beziehen
-sich auf den konfigurierbaren Hauptbranch (✎ neben dem Projektnamen; leer =
-automatisch der Branch des Haupt-Worktrees). So sieht z. B. dev.pilot, welche
-Commits von `dev` noch nicht auf `main` sind.
-
-Aktionen — alle über echte Claude-Sessions (lösen auch Konflikte), nie über
-fest verdrahtete git-Kommandos; jede Session zeigt erst einen Plan:
-
-- **🔀 branch → main** — startet eine Claude-Session, die den Branch in den
-  Hauptbranch merged (Ziel-Branch beim Klick änderbar, z. B. dev statt main).
-- **✓ done** (in der Agent-Pill) — schickt `/done` an die laufende Session:
-  committen und auf dev bringen.
-- **🚀 deploy** (im Projektkopf) — startet eine Claude-Session, die `/deploy`
-  ausführt.
-- **✨ Cleanup-Agent** — Claude-Session im verwaisten Worktree: sichten,
-  committen, mergen.
-- **⌫ entfernen** — entfernt den Worktree direkt (`git worktree remove`), aber
-  nur wenn er sauber ist und kein Agent darin arbeitet; der Haupt-Worktree ist
-  geschützt. Idle-Sessions im Worktree werden mitbeendet.
+zu vermeiden).
 
 ## Wie es funktioniert
 
@@ -134,6 +128,8 @@ fest verdrahtete git-Kommandos; jede Session zeigt erst einen Plan:
 - Der Status wird alle 2 Sekunden per `tmux capture-pane` erkannt.
 - Worktrees landen unter `<projekt>-agents/<agentname>` neben dem Projektordner.
 - Konfiguration und Agent-Registry: `~/.config/magentic/state.json`
+- Gemeinsame Logik von TUI und App liegt in `core/` (State, tmux, Status,
+  Git, Overview, Usage, Aktionen).
 
 ## Build
 

@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 	"runtime"
 )
 
-func notifyDesktop(title, message, sound string) {
+func NotifyDesktop(title, message, sound string) {
 	switch runtime.GOOS {
 	case "darwin":
 		script := fmt.Sprintf("display notification %q with title %q sound name %q", message, title, sound)
@@ -16,7 +16,7 @@ func notifyDesktop(title, message, sound string) {
 	}
 }
 
-func statusRank(s AgentStatus) int {
+func StatusRank(s AgentStatus) int {
 	switch s {
 	case StatusBlocked:
 		return 0

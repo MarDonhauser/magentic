@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"fmt"
@@ -28,7 +28,7 @@ type WorktreeInfo struct {
 	Branch string
 }
 
-func gitCmd(dir string, args ...string) (string, error) {
+func GitCmd(dir string, args ...string) (string, error) {
 	full := append([]string{"-C", dir}, args...)
 	out, err := exec.Command("git", full...).Output()
 	return string(out), err
@@ -36,7 +36,7 @@ func gitCmd(dir string, args ...string) (string, error) {
 
 func CollectGitInfo(dir string) GitInfo {
 	info := GitInfo{}
-	out, err := gitCmd(dir, "status", "--porcelain=v2", "--branch")
+	out, err := GitCmd(dir, "status", "--porcelain=v2", "--branch")
 	if err != nil {
 		return info
 	}
@@ -74,7 +74,7 @@ func CollectGitInfo(dir string) GitInfo {
 			info.Files = append(info.Files, line[2:])
 		}
 	}
-	if msg, err := gitCmd(dir, "log", "-1", "--format=%s"); err == nil {
+	if msg, err := GitCmd(dir, "log", "-1", "--format=%s"); err == nil {
 		info.LastMsg = strings.TrimSpace(msg)
 	}
 	return info
@@ -87,7 +87,7 @@ type SessionChanges struct {
 }
 
 func CaptureBaseline(dir string) (string, []string) {
-	head, err := gitCmd(dir, "rev-parse", "HEAD")
+	head, err := GitCmd(dir, "rev-parse", "HEAD")
 	if err != nil {
 		return "", nil
 	}
@@ -110,14 +110,14 @@ func CollectSessionChanges(a Agent, gi GitInfo) SessionChanges {
 			sc.Files = append(sc.Files, f)
 		}
 	}
-	if out, err := gitCmd(a.Dir, "rev-list", "--count", a.BaseCommit+"..HEAD"); err == nil {
+	if out, err := GitCmd(a.Dir, "rev-list", "--count", a.BaseCommit+"..HEAD"); err == nil {
 		fmt.Sscanf(strings.TrimSpace(out), "%d", &sc.Commits)
 	}
 	return sc
 }
 
 func AheadBehind(dir, baseBranch string) (ahead, behind int) {
-	out, err := gitCmd(dir, "rev-list", "--left-right", "--count", baseBranch+"...HEAD")
+	out, err := GitCmd(dir, "rev-list", "--left-right", "--count", baseBranch+"...HEAD")
 	if err != nil {
 		return 0, 0
 	}
@@ -126,7 +126,7 @@ func AheadBehind(dir, baseBranch string) (ahead, behind int) {
 }
 
 func CollectWorktrees(projectPath string) []WorktreeInfo {
-	out, err := gitCmd(projectPath, "worktree", "list", "--porcelain")
+	out, err := GitCmd(projectPath, "worktree", "list", "--porcelain")
 	if err != nil {
 		return nil
 	}
@@ -154,8 +154,8 @@ func CreateWorktree(projectPath, agentName string) (string, error) {
 	projName := filepath.Base(projectPath)
 	wtPath := filepath.Join(base, projName+"-agents", agentName)
 	branch := "agent/" + agentName
-	if _, err := gitCmd(projectPath, "worktree", "add", "-b", branch, wtPath); err != nil {
-		if _, err2 := gitCmd(projectPath, "worktree", "add", wtPath, branch); err2 != nil {
+	if _, err := GitCmd(projectPath, "worktree", "add", "-b", branch, wtPath); err != nil {
+		if _, err2 := GitCmd(projectPath, "worktree", "add", wtPath, branch); err2 != nil {
 			return "", fmt.Errorf("worktree add fehlgeschlagen: %w", err)
 		}
 	}

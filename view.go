@@ -77,33 +77,12 @@ func (m model) View() string {
 	treeW, detailW, innerH := m.layout()
 
 	header := m.renderHeader()
-	focused := m.focusAgent != ""
-	var detailContent string
-	if focused {
-		detailContent = m.renderFocus(detailW-4, innerH)
-	} else {
-		detailContent = m.renderDetails(detailW-4, innerH)
-	}
-	tree := m.renderPanel(m.renderTree(treeW-4, innerH), treeW-2, innerH, !focused)
-	details := m.renderPanel(detailContent, detailW-2, innerH, focused)
+	detailContent := m.renderDetails(detailW-4, innerH)
+	tree := m.renderPanel(m.renderTree(treeW-4, innerH), treeW-2, innerH, true)
+	details := m.renderPanel(detailContent, detailW-2, innerH, false)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, tree, details)
 	footer := m.renderFooter()
 	return header + "\n" + body + "\n" + footer
-}
-
-func (m model) renderFocus(w, h int) string {
-	st := m.poll.statuses[m.focusAgent]
-	head := styleTitle.Render(m.focusAgent) + " " + statusStyle(st).Render(st.Icon()+" "+st.Label()) +
-		styleDim.Render("  ·  ctrl+q zurück zur Übersicht")
-	lines := []string{trunc(head, w), ""}
-	pv := strings.Split(strings.TrimRight(m.focusPreview, "\n"), "\n")
-	if len(pv) > h-2 {
-		pv = pv[len(pv)-(h-2):]
-	}
-	for _, l := range pv {
-		lines = append(lines, trunc(strings.ReplaceAll(l, "\t", "  "), w)+"\x1b[0m")
-	}
-	return strings.Join(lines, "\n")
 }
 
 func (m model) renderPanel(content string, w, h int, focused bool) string {
@@ -301,14 +280,6 @@ func (m model) usageLines(w int) []string {
 	}
 }
 
-func shortWeekday(t time.Time) string {
-	days := map[time.Weekday]string{
-		time.Monday: "Mo", time.Tuesday: "Di", time.Wednesday: "Mi",
-		time.Thursday: "Do", time.Friday: "Fr", time.Saturday: "Sa", time.Sunday: "So",
-	}
-	return days[t.Weekday()] + " " + t.Format("15:04")
-}
-
 func (m model) renderDetails(w, h int) string {
 	lines, _ := m.detailContent(w, h)
 	return strings.Join(lines, "\n")
@@ -334,7 +305,6 @@ func (m model) detailContent(w, h int) ([]string, int) {
 			styleDim.Render("p  Projekt hinzufügen"),
 			styleDim.Render("n  neue Claude-Session"),
 			styleDim.Render("t  Todo notieren"),
-			styleDim.Render("o  Übersicht im Browser"),
 		}, -1
 	}
 
@@ -473,10 +443,6 @@ func (m model) addRepoGit(dir string, add func(string)) {
 }
 
 func (m model) renderFooter() string {
-	if m.focusAgent != "" {
-		return " " + styleTitle.Render("⌨ "+m.focusAgent) +
-			styleDim.Render("  — Eingaben gehen an Claude · ctrl+q zurück · klick links wechselt Agent")
-	}
 	if m.inputKind != inputNone {
 		return " " + m.input.View()
 	}
@@ -505,7 +471,7 @@ func (m model) renderFooter() string {
 		keys := []string{"⏎/klick session daraus starten", "e bearbeiten", "x löschen", "t neues todo", "q ende"}
 		return " " + styleDim.Render(strings.Join(keys, " · "))
 	}
-	keys := []string{"n neu", "w worktree", "⏎ fokus", "t todo", "d done", "D deploy", "o browser", "r name", "x kill", "p projekt", "q ende"}
+	keys := []string{"n neu", "w worktree", "⏎ attach", "t todo", "d done", "D deploy", "r name", "x kill", "p projekt", "q ende"}
 	return " " + styleDim.Render(strings.Join(keys, " · "))
 }
 

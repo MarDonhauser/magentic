@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"regexp"
@@ -74,7 +74,7 @@ var shellCommands = map[string]bool{
 	"-zsh": true, "-bash": true, "login": true,
 }
 
-func lastLines(s string, n int) string {
+func LastLines(s string, n int) string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
 	if len(lines) > n {
 		lines = lines[len(lines)-n:]
@@ -88,7 +88,7 @@ func CollectStatuses(agents []Agent) (map[string]AgentStatus, map[string]string,
 	contents := map[string]string{}
 	activity := map[string]time.Time{}
 	for _, a := range agents {
-		sn := tmuxSessionName(a.Name)
+		sn := SessionName(a.Name)
 		info, exists := infos[sn]
 		var content string
 		if exists {
@@ -98,7 +98,7 @@ func CollectStatuses(agents []Agent) (map[string]AgentStatus, map[string]string,
 			}
 		}
 		contents[a.Name] = content
-		statuses[a.Name] = DetectClaudeStatus(exists, info.Command, lastLines(content, 25))
+		statuses[a.Name] = DetectClaudeStatus(exists, info.Command, LastLines(content, 25))
 	}
 	return statuses, contents, activity
 }

@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -63,8 +62,8 @@ type pollResult struct {
 
 type tickMsg time.Time
 type pollMsg pollResult
+type previewMsg struct{ name, content string }
 type attachDoneMsg struct{ err error }
-type webStartedMsg struct{ url string }
 type usageTickMsg time.Time
 type usageMsg UsageInfo
 
@@ -95,52 +94,14 @@ type model struct {
 	flashTime      time.Time
 	width          int
 	height         int
-	webRunning     bool
-	focusAgent     string
-	focusPreview   string
+	pollBusy       bool
+	previewPending bool
 	usage          UsageInfo
 }
 
 func newModel(s *State) model {
 	reconcile(s)
 	return model{state: s, collapsed: map[string]bool{}, notifyPending: map[string]AgentStatus{}, hoverTodo: -1}
-}
-
-func discoverNew(s *State) []Agent {
-	known := map[string]bool{}
-	for _, a := range s.Agents {
-		known[tmuxSessionName(a.Name)] = true
-	}
-	var out []Agent
-	for _, sess := range TmuxListSessions() {
-		if known[sess] {
-			continue
-		}
-		name := strings.TrimPrefix(sess, sessionPrefix)
-		dir, _ := tmux("display-message", "-p", "-t", targetPane(sess), "#{pane_current_path}")
-		dir = strings.TrimSpace(dir)
-		createdRaw, _ := tmux("display-message", "-p", "-t", targetPane(sess), "#{session_created}")
-		ts, _ := strconv.ParseInt(strings.TrimSpace(createdRaw), 10, 64)
-		if ts == 0 {
-			ts = time.Now().Unix()
-		}
-		proj := ""
-		worktree := false
-		for _, p := range s.Projects {
-			if dir == p.Path || strings.HasPrefix(dir, p.Path+string(os.PathSeparator)) {
-				proj = p.Name
-				worktree = dir != p.Path
-				break
-			}
-			if wtBase := filepath.Dir(p.Path) + string(os.PathSeparator) + filepath.Base(p.Path) + "-agents"; strings.HasPrefix(dir, wtBase+string(os.PathSeparator)) {
-				proj = p.Name
-				worktree = true
-				break
-			}
-		}
-		out = append(out, Agent{Name: name, Project: proj, Dir: dir, Worktree: worktree, CreatedAt: time.Unix(ts, 0)})
-	}
-	return out
 }
 
 func reconcile(s *State) {
@@ -159,12 +120,12 @@ func (m *model) handleStatusChanges(old map[string]AgentStatus) {
 	for name, st := range m.poll.statuses {
 		if pending, ok := m.notifyPending[name]; ok {
 			delete(m.notifyPending, name)
-			if st == pending && name != m.focusAgent {
+			if st == pending {
 				notifyDesktop("magentic · "+name, "Agent ist fertig — bereit für den nächsten Prompt", "Ping")
 			}
 		}
 		prev, seen := old[name]
-		if !seen || prev == st || name == m.focusAgent {
+		if !seen || prev == st {
 			continue
 		}
 		if st == StatusBlocked && (prev == StatusRunning || prev == StatusIdle) {
@@ -350,29 +311,44 @@ func (m model) pollNow() tea.Cmd {
 	return pollCmd(*m.state, m.selectedAgent())
 }
 
+func (m *model) previewNow() tea.Cmd {
+	a := m.selectedAgent()
+	if a == nil || m.previewPending {
+		return nil
+	}
+	m.previewPending = true
+	name := a.Name
+	return func() tea.Msg {
+		return previewMsg{name, TmuxCapturePane(tmuxSessionName(name), 0)}
+	}
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.resizeFocusedWindow()
-		return m, nil
-	case focusTickMsg:
-		if m.focusAgent == "" {
-			return m, nil
-		}
-		return m, tea.Batch(focusPollCmd(m.focusAgent), focusTick())
-	case focusPreviewMsg:
-		m.focusPreview = string(msg)
 		return m, nil
 	case tickMsg:
+		if m.pollBusy {
+			return m, tick()
+		}
+		m.pollBusy = true
 		return m, tea.Batch(m.pollNow(), tick())
+	case previewMsg:
+		m.previewPending = false
+		if a := m.selectedAgent(); a != nil && a.Name == msg.name {
+			m.poll.preview = msg.content
+			return m, nil
+		}
+		return m, m.previewNow()
 	case usageTickMsg:
 		return m, tea.Batch(fetchUsageCmd(), usageTick())
 	case usageMsg:
 		m.usage = UsageInfo(msg)
 		return m, nil
 	case pollMsg:
+		m.pollBusy = false
 		oldStatuses := m.poll.statuses
 		var selName string
 		if a := m.selectedAgent(); a != nil {
@@ -390,11 +366,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		if m.focusAgent != "" {
-			if st := m.poll.statuses[m.focusAgent]; st == StatusDead {
-				return m.exitFocus()
-			}
-		}
 		if len(m.poll.discovered) > 0 {
 			changed := false
 			for _, a := range m.poll.discovered {
@@ -407,22 +378,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state.Save()
 			}
 		}
+		kept := m.state.Agents[:0]
+		pruned := false
+		for _, a := range m.state.Agents {
+			if m.poll.statuses[a.Name] == StatusDead {
+				pruned = true
+				continue
+			}
+			kept = append(kept, a)
+		}
+		if pruned {
+			m.state.Agents = kept
+			m.state.Save()
+			m.ensureSelectable()
+		}
 		return m, nil
 	case attachDoneMsg:
 		return m, m.pollNow()
-	case webStartedMsg:
-		m.webRunning = true
-		m.setFlash("Übersicht: "+msg.url, false)
-		return m, nil
 	case tea.MouseMsg:
 		if m.inputKind != inputNone || m.confirmKill || m.confirmRmProj {
 			return m, nil
 		}
 		return m.updateMouse(msg)
 	case tea.KeyMsg:
-		if m.focusAgent != "" {
-			return m.updateFocusKey(msg)
-		}
 		if m.inputKind != inputNone {
 			return m.updateInput(msg)
 		}
@@ -437,24 +415,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	switch msg.Button {
 	case tea.MouseButtonWheelUp:
-		if m.focusAgent != "" {
-			return m, nil
-		}
 		m.moveCursor(-1)
-		return m, m.pollNow()
+		return m, m.previewNow()
 	case tea.MouseButtonWheelDown:
-		if m.focusAgent != "" {
-			return m, nil
-		}
 		m.moveCursor(1)
-		return m, m.pollNow()
+		return m, m.previewNow()
 	case tea.MouseButtonLeft:
 		if msg.Action != tea.MouseActionPress {
 			return m, nil
 		}
 		return m.handleClick(msg.X, msg.Y)
 	case tea.MouseButtonNone:
-		if msg.Action == tea.MouseActionMotion && m.focusAgent == "" {
+		if msg.Action == tea.MouseActionMotion {
 			m.hoverTodo = m.todoAt(msg.X, msg.Y)
 		}
 		return m, nil
@@ -479,12 +451,8 @@ func (m model) handleClick(x, y int) (tea.Model, tea.Cmd) {
 	rows := m.rows()
 	idx := y - 2
 	if x < treeW {
-		if m.focusAgent != "" {
-			next, _ := m.exitFocus()
-			m = next.(model)
-		}
 		if idx < 0 || idx >= len(rows) {
-			return m, m.pollNow()
+			return m, nil
 		}
 		r := rows[idx]
 		if !selectableRow(r.kind) {
@@ -498,7 +466,7 @@ func (m model) handleClick(x, y int) (tea.Model, tea.Cmd) {
 			}
 			m.collapsed[key] = !m.collapsed[key]
 			m.ensureSelectable()
-			return m, m.pollNow()
+			return m, m.previewNow()
 		}
 		if r.kind == rowTodo {
 			if m.cursor == idx {
@@ -508,19 +476,16 @@ func (m model) handleClick(x, y int) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.cursor == idx {
-			return m.enterFocus()
+			return m.attach()
 		}
 		m.cursor = idx
-		return m, m.pollNow()
-	}
-	if m.focusAgent != "" {
-		return m, nil
+		return m, m.previewNow()
 	}
 	if m.selectedAgent() != nil {
 		_, detailW, innerH := m.layout()
 		_, previewStart := m.detailContent(detailW-4, innerH)
 		if previewStart >= 0 && idx >= previewStart && idx < innerH {
-			return m.enterFocus()
+			return m.attach()
 		}
 	}
 	return m, nil
@@ -561,10 +526,10 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "up", "k":
 		m.moveCursor(-1)
-		return m, m.pollNow()
+		return m, m.previewNow()
 	case "down", "j":
 		m.moveCursor(1)
-		return m, m.pollNow()
+		return m, m.previewNow()
 	case "enter", " ", "a":
 		r := m.selectedRow()
 		if r == nil {
@@ -582,10 +547,7 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if r.kind == rowTodo {
 			return m.todoToSession(r.todoIdx)
 		}
-		if msg.String() == "a" {
-			return m.attach()
-		}
-		return m.enterFocus()
+		return m.attach()
 	case "n":
 		return m.startInput(inputNewSession)
 	case "w":
@@ -618,8 +580,6 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "p":
 		return m.startInput(inputAddProject)
-	case "o":
-		return m.openWeb()
 	case "d":
 		return m.sendSkillToSelected("/done ")
 	case "D":
@@ -672,22 +632,6 @@ func (m model) startSkillSession(p *Project, cmd string) (tea.Model, tea.Cmd) {
 	m.selectAgent(name)
 	m.setFlash(fmt.Sprintf("Session %q gestartet — %s wird getippt", name, strings.TrimSpace(cmd)), false)
 	return m, m.pollNow()
-}
-
-func (m model) openWeb() (tea.Model, tea.Cmd) {
-	url := fmt.Sprintf("http://localhost:%d", webPort)
-	if m.webRunning || portInUse(webPort) {
-		openBrowser(url)
-		m.setFlash("Übersicht: "+url, false)
-		return m, nil
-	}
-	state := m.state
-	return m, func() tea.Msg {
-		go ServeWeb(state, webPort)
-		time.Sleep(300 * time.Millisecond)
-		openBrowser(url)
-		return webStartedMsg{url: url}
-	}
 }
 
 func (m model) startInput(kind inputKind) (tea.Model, tea.Cmd) {
@@ -749,15 +693,6 @@ func (m model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
-}
-
-func sanitizeName(name string) string {
-	name = strings.ToLower(strings.TrimSpace(name))
-	name = strings.ReplaceAll(name, " ", "-")
-	name = strings.ReplaceAll(name, "/", "-")
-	name = strings.ReplaceAll(name, ".", "-")
-	name = strings.ReplaceAll(name, ":", "-")
-	return name
 }
 
 func (m model) commitInput(kind inputKind, value string) (tea.Model, tea.Cmd) {
@@ -856,7 +791,7 @@ func (m model) todoToSession(idx int) (tea.Model, tea.Cmd) {
 	m.collapsed[proj.Name] = false
 	m.selectAgent(name)
 	m.setFlash(fmt.Sprintf("Todo → Session %q — Text steht im Eingabefeld, Enter schickt ihn ab", name), false)
-	return m.enterFocus()
+	return m, m.pollNow()
 }
 
 func (m model) createAgent(worktree bool, name string) (tea.Model, tea.Cmd) {
@@ -1021,7 +956,7 @@ func (m model) attach() (tea.Model, tea.Cmd) {
 		m.setFlash("Session existiert nicht mehr — mit x entfernen oder n neu starten", true)
 		return m, nil
 	}
-	tmux("set-option", "-w", "-t", targetPane(sn), "window-size", "latest")
+	tmux("set-option", "-w", "-t", sn+":", "window-size", "latest")
 	if os.Getenv("TMUX") != "" {
 		if err := exec.Command("tmux", "switch-client", "-t", targetSession(sn)).Run(); err != nil {
 			m.setFlash("tmux switch-client: "+err.Error(), true)
@@ -1030,34 +965,4 @@ func (m model) attach() (tea.Model, tea.Cmd) {
 	}
 	cmd := exec.Command("tmux", "attach-session", "-t", targetSession(sn))
 	return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return attachDoneMsg{err} })
-}
-
-func shortPath(p string) string {
-	home, _ := os.UserHomeDir()
-	if home != "" && strings.HasPrefix(p, home) {
-		return "~" + strings.TrimPrefix(p, home)
-	}
-	return p
-}
-
-func formatAgeWord(t time.Time) string {
-	s := formatAge(t)
-	if s == "jetzt" {
-		return s
-	}
-	return "vor " + s
-}
-
-func formatAge(t time.Time) string {
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return "jetzt"
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
-	default:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	}
 }

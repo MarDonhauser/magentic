@@ -1,63 +1,69 @@
-package main
+package core
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 )
 
-const sessionPrefix = "mgt-"
+var SessionPrefix = func() string {
+	if p := os.Getenv("MAGENTIC_PREFIX"); p != "" {
+		return p
+	}
+	return "mgt-"
+}()
 
-func tmuxSessionName(agentName string) string {
-	return sessionPrefix + agentName
+func SessionName(agentName string) string {
+	return SessionPrefix + agentName
 }
 
-func targetSession(session string) string {
+func TargetSession(session string) string {
 	return "=" + session
 }
 
-func targetPane(session string) string {
+func TargetPane(session string) string {
 	return "=" + session + ":"
 }
 
-func tmux(args ...string) (string, error) {
+func Tmux(args ...string) (string, error) {
 	out, err := exec.Command("tmux", args...).Output()
 	return string(out), err
 }
 
 func TmuxHasSession(session string) bool {
-	err := exec.Command("tmux", "has-session", "-t", targetSession(session)).Run()
+	err := exec.Command("tmux", "has-session", "-t", TargetSession(session)).Run()
 	return err == nil
 }
 
 func TmuxNewClaudeSession(session, dir string, extraArgs string) error {
-	if _, err := tmux("new-session", "-d", "-s", session, "-c", dir, "-x", "220", "-y", "50"); err != nil {
+	if _, err := Tmux("new-session", "-d", "-s", session, "-c", dir, "-x", "220", "-y", "50"); err != nil {
 		return fmt.Errorf("tmux new-session: %w", err)
 	}
 	cmd := "claude"
 	if extraArgs != "" {
 		cmd += " " + extraArgs
 	}
-	if _, err := tmux("send-keys", "-t", targetPane(session), "-l", cmd); err != nil {
+	if _, err := Tmux("send-keys", "-t", TargetPane(session), "-l", cmd); err != nil {
 		return err
 	}
-	_, err := tmux("send-keys", "-t", targetPane(session), "Enter")
+	_, err := Tmux("send-keys", "-t", TargetPane(session), "Enter")
 	return err
 }
 
 func TmuxKillSession(session string) error {
-	_, err := tmux("kill-session", "-t", targetSession(session))
+	_, err := Tmux("kill-session", "-t", TargetSession(session))
 	return err
 }
 
 func TmuxCapturePane(session string, scrollback int) string {
-	args := []string{"capture-pane", "-p", "-t", targetPane(session)}
+	args := []string{"capture-pane", "-p", "-t", TargetPane(session)}
 	if scrollback > 0 {
 		args = append(args, "-S", fmt.Sprintf("-%d", scrollback))
 	}
-	out, err := tmux(args...)
+	out, err := Tmux(args...)
 	if err != nil {
 		return ""
 	}
@@ -70,7 +76,7 @@ type PaneInfo struct {
 }
 
 func TmuxPaneInfos() map[string]PaneInfo {
-	out, err := tmux("list-panes", "-a", "-F", "#{session_name}\t#{pane_current_command}\t#{window_activity}")
+	out, err := Tmux("list-panes", "-a", "-F", "#{session_name}\t#{pane_current_command}\t#{window_activity}")
 	if err != nil {
 		return nil
 	}
@@ -92,13 +98,13 @@ func TmuxPaneInfos() map[string]PaneInfo {
 }
 
 func TmuxListSessions() []string {
-	out, err := tmux("list-sessions", "-F", "#{session_name}")
+	out, err := Tmux("list-sessions", "-F", "#{session_name}")
 	if err != nil {
 		return nil
 	}
 	var sessions []string
 	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
-		if strings.HasPrefix(line, sessionPrefix) {
+		if strings.HasPrefix(line, SessionPrefix) {
 			sessions = append(sessions, line)
 		}
 	}

@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"encoding/json"
@@ -35,14 +35,17 @@ type State struct {
 	Todos    []Todo    `json:"todos,omitempty"`
 }
 
-func statePath() string {
+func StatePath() string {
+	if p := os.Getenv("MAGENTIC_STATE"); p != "" {
+		return p
+	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".config", "magentic", "state.json")
 }
 
 func LoadState() (*State, error) {
 	s := &State{}
-	data, err := os.ReadFile(statePath())
+	data, err := os.ReadFile(StatePath())
 	if os.IsNotExist(err) {
 		return s, nil
 	}
@@ -56,7 +59,7 @@ func LoadState() (*State, error) {
 }
 
 func (s *State) Save() error {
-	p := statePath()
+	p := StatePath()
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
