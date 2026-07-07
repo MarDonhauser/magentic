@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -17,9 +18,12 @@ import (
 )
 
 type App struct {
-	ctx   context.Context
-	mu    sync.Mutex
-	terms map[string]*ptyTerm
+	ctx        context.Context
+	mu         sync.Mutex
+	terms      map[string]*ptyTerm
+	activeTerm string
+	dsMu       sync.Mutex
+	dsPrev     *DeployStatus
 }
 
 type ptyTerm struct {
@@ -33,6 +37,40 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	installNativeNotifier()
+	runtime.OnFileDrop(ctx, a.onFileDrop)
+	go a.watchLoop()
+}
+
+func (a *App) onFileDrop(x, y int, paths []string) {
+	name := a.getActiveTerm()
+	if name == "" || len(paths) == 0 {
+		return
+	}
+	a.mu.Lock()
+	t := a.terms[name]
+	a.mu.Unlock()
+	if t == nil {
+		return
+	}
+	var b strings.Builder
+	for _, p := range paths {
+		b.WriteString(escapeTermPath(p))
+		b.WriteByte(' ')
+	}
+	t.ptmx.Write([]byte(b.String()))
+}
+
+func escapeTermPath(p string) string {
+	var b strings.Builder
+	for _, r := range p {
+		switch r {
+		case ' ', '\t', '\\', '\'', '"', '`', '$', '(', ')', '&', ';', '|', '<', '>', '*', '?', '[', ']':
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -81,6 +119,93 @@ func (a *App) Projects() ([]string, error) {
 		names = append(names, p.Name)
 	}
 	return names, nil
+}
+
+func (a *App) PickFolder() (string, error) {
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Repository-Ordner wählen",
+	})
+}
+
+func (a *App) AddProject(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("kein Pfad angegeben")
+	}
+	if strings.HasPrefix(path, "~") {
+		home, _ := os.UserHomeDir()
+		path = filepath.Join(home, strings.TrimPrefix(path, "~"))
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(abs)
+	if err != nil || !info.IsDir() {
+		return "", fmt.Errorf("Verzeichnis nicht gefunden: %s", abs)
+	}
+	st, err := core.LoadState()
+	if err != nil {
+		return "", err
+	}
+	name := filepath.Base(abs)
+	if st.ProjectByName(name) != nil {
+		return "", fmt.Errorf("Projekt %q existiert schon", name)
+	}
+	st.Projects = append(st.Projects, core.Project{Name: name, Path: abs})
+	if err := st.Save(); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+func (a *App) RemoveProject(name string) error {
+	st, err := core.LoadState()
+	if err != nil {
+		return err
+	}
+	kept := st.Projects[:0]
+	found := false
+	for _, p := range st.Projects {
+		if p.Name == name {
+			found = true
+			continue
+		}
+		kept = append(kept, p)
+	}
+	if !found {
+		return fmt.Errorf("Projekt %q nicht gefunden", name)
+	}
+	st.Projects = kept
+	return st.Save()
+}
+
+func (a *App) SaveImage(dataB64 string) (string, error) {
+	data, err := base64.StdEncoding.DecodeString(dataB64)
+	if err != nil {
+		return "", err
+	}
+	if len(data) == 0 {
+		return "", fmt.Errorf("leeres Bild")
+	}
+	ext := ".png"
+	switch {
+	case len(data) > 2 && data[0] == 0xff && data[1] == 0xd8:
+		ext = ".jpg"
+	case len(data) > 3 && string(data[:4]) == "GIF8":
+		ext = ".gif"
+	case len(data) > 11 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP":
+		ext = ".webp"
+	}
+	dir := filepath.Join(os.TempDir(), "magentic-paste")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	p := filepath.Join(dir, fmt.Sprintf("paste-%d%s", time.Now().UnixNano(), ext))
+	if err := os.WriteFile(p, data, 0o644); err != nil {
+		return "", err
+	}
+	return p, nil
 }
 
 func (a *App) AddTodo(text, project string) error {

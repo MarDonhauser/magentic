@@ -78,7 +78,7 @@ func SendSlashCommand(session, cmd string) {
 	go SendPromptWhenReady(session, cmd, true)
 }
 
-func StartSkillAgent(st *State, dir, prompt string) (string, error) {
+func StartSkillAgent(st *State, dir, prompt, kind string) (string, error) {
 	for _, a := range DiscoverNew(st) {
 		st.AddAgent(a)
 	}
@@ -87,6 +87,15 @@ func StartSkillAgent(st *State, dir, prompt string) (string, error) {
 	if err := TmuxNewClaudeSession(session, dir, ""); err != nil {
 		return "", err
 	}
+	proj := ""
+	for _, p := range st.Projects {
+		if dir == p.Path || strings.HasPrefix(dir, p.Path+string(os.PathSeparator)) {
+			proj = p.Name
+			break
+		}
+	}
+	baseCommit, baseDirty := CaptureBaseline(dir)
+	st.AddAgent(Agent{Name: name, Project: proj, Dir: dir, Kind: kind, CreatedAt: time.Now(), BaseCommit: baseCommit, BaseDirty: baseDirty})
 	go SendPromptWhenReady(session, prompt, true)
 	return name, nil
 }
@@ -119,18 +128,18 @@ func StartCleanup(st *State, path, mainBranch string) (string, error) {
 	prompt := fmt.Sprintf("Diese Session wurde von magentic zum Aufräumen dieses Worktrees gestartet. "+
 		"Sichte die uncommitteten Änderungen und die Commits auf diesem Branch, committe sinnvoll und bringe die Arbeit nach %s. "+
 		"Zeige mir zuerst deinen Plan, bevor du etwas ausführst. Sag am Ende Bescheid, wenn der Worktree entfernt werden kann.", mainBranch)
-	return StartSkillAgent(st, path, prompt)
+	return StartSkillAgent(st, path, prompt, "cleanup")
 }
 
 func StartMerge(st *State, projPath, source, target string) (string, error) {
 	prompt := fmt.Sprintf("Merge den Branch %q nach %q in diesem Repository. "+
 		"Hole vorher den aktuellen Stand (git fetch). Falls Konflikte auftreten, löse sie sinnvoll und erkläre mir deine Entscheidungen. "+
 		"Zeige mir zuerst deinen Plan, bevor du etwas ausführst, und frage mich, bevor du pushst.", source, target)
-	return StartSkillAgent(st, projPath, prompt)
+	return StartSkillAgent(st, projPath, prompt, "merge")
 }
 
 func StartDeploy(st *State, projPath string) (string, error) {
-	return StartSkillAgent(st, projPath, "/deploy ")
+	return StartSkillAgent(st, projPath, "/deploy ", "deploy")
 }
 
 func RemoveWorktree(st *State, proj *Project, path string) error {

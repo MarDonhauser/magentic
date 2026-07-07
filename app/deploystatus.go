@@ -61,11 +61,19 @@ func projectKeywords() []string {
 type DeployStatus struct {
 	AzOK       bool        `json:"azOk"`
 	AzErr      string      `json:"azErr"`
+	AzSub      string      `json:"azSub"`
+	AzSubID    string      `json:"azSubId"`
 	ArgoOK     bool        `json:"argoOk"`
 	ArgoServer string      `json:"argoServer"`
 	ArgoErr    string      `json:"argoErr"`
 	Builds     []BuildInfo `json:"builds"`
 	Apps       []ArgoApp   `json:"apps"`
+}
+
+type AzAccount struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	IsDefault bool   `json:"isDefault"`
 }
 
 var azdoRemoteRe = regexp.MustCompile(`dev\.azure\.com[:/](?:v3/)?([^/@]+)/([^/]+)(?:/_git)?/`)
@@ -143,6 +151,16 @@ func (a *App) DeployStatus() DeployStatus {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
+		if out, err := runCmd(ctx, "az", "account", "show", "-o", "json"); err == nil {
+			var acc struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			}
+			if json.Unmarshal(out, &acc) == nil {
+				ds.AzSub = acc.Name
+				ds.AzSubID = acc.ID
+			}
+		}
 		pairs := azdoOrgProjects()
 		if len(pairs) == 0 {
 			ds.AzErr = "kein Azure-DevOps-Remote in den Projekten gefunden"
@@ -261,7 +279,48 @@ func (a *App) DeployStatus() DeployStatus {
 	}()
 
 	wg.Wait()
+
+	a.dsMu.Lock()
+	prev := a.dsPrev
+	snapshot := ds
+	a.dsPrev = &snapshot
+	a.dsMu.Unlock()
+	if prev != nil {
+		notifyDeployTransitions(prev, &ds)
+	}
 	return ds
+}
+
+func notifyDeployTransitions(prev, cur *DeployStatus) {
+	prevBuild := map[string]BuildInfo{}
+	for _, b := range prev.Builds {
+		prevBuild[b.URL] = b
+	}
+	for _, b := range cur.Builds {
+		pb, known := prevBuild[b.URL]
+		if b.Status == "completed" && b.Result == "failed" && (!known || pb.Status != "completed") {
+			core.NotifyDesktop("magentic · Build failed", b.Repo+" ("+b.Branch+")", "Basso")
+		}
+		if b.Status == "completed" && b.Result == "succeeded" && known && pb.Status == "inProgress" {
+			core.NotifyDesktop("magentic · Build fertig", b.Repo+" ✓ ("+b.Branch+")", "Ping")
+		}
+	}
+	prevApp := map[string]ArgoApp{}
+	for _, ap := range prev.Apps {
+		prevApp[ap.Name] = ap
+	}
+	for _, ap := range cur.Apps {
+		pa, known := prevApp[ap.Name]
+		if !known {
+			continue
+		}
+		if pa.Health != "Degraded" && ap.Health == "Degraded" {
+			core.NotifyDesktop("magentic · Argo Degraded", ap.Name, "Basso")
+		}
+		if pa.Health == "Progressing" && ap.Health == "Healthy" {
+			core.NotifyDesktop("magentic · Argo Healthy", ap.Name+" ✓", "Ping")
+		}
+	}
 }
 
 func argoRank(a ArgoApp) int {
@@ -286,6 +345,41 @@ func shortLoginErr(msg string) string {
 		return "nicht angemeldet — argocd login nötig"
 	}
 	return msg
+}
+
+func (a *App) AzAccounts() []AzAccount {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	out, err := runCmd(ctx, "az", "account", "list", "--all", "-o", "json")
+	if err != nil {
+		return []AzAccount{}
+	}
+	var raw []struct {
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		IsDefault bool   `json:"isDefault"`
+	}
+	if json.Unmarshal(out, &raw) != nil {
+		return []AzAccount{}
+	}
+	accs := []AzAccount{}
+	for _, r := range raw {
+		accs = append(accs, AzAccount{ID: r.ID, Name: r.Name, IsDefault: r.IsDefault})
+	}
+	return accs
+}
+
+func (a *App) AzSetSubscription(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("keine Subscription angegeben")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if _, err := runCmd(ctx, "az", "account", "set", "--subscription", id); err != nil {
+		return fmt.Errorf("%s", shortLoginErr(err.Error()))
+	}
+	return nil
 }
 
 func (a *App) AzLogin() {

@@ -3,11 +3,17 @@
 import {main} from '../models';
 import {core} from '../models';
 
+export function AddProject(arg1:string):Promise<string>;
+
 export function AddTodo(arg1:string,arg2:string):Promise<void>;
 
 export function ArgoLogin():Promise<void>;
 
+export function AzAccounts():Promise<Array<main.AzAccount>>;
+
 export function AzLogin():Promise<void>;
+
+export function AzSetSubscription(arg1:string):Promise<void>;
 
 export function Cleanup(arg1:string,arg2:string):Promise<string>;
 
@@ -31,13 +37,25 @@ export function OpenTerm(arg1:string,arg2:number,arg3:number):Promise<void>;
 
 export function Overview():Promise<core.Overview>;
 
+export function PickFolder():Promise<string>;
+
 export function Projects():Promise<Array<string>>;
+
+export function RemoveProject(arg1:string):Promise<void>;
 
 export function RemoveWorktree(arg1:string,arg2:string):Promise<void>;
 
 export function ResizeTerm(arg1:string,arg2:number,arg3:number):Promise<void>;
 
+export function SaveImage(arg1:string):Promise<string>;
+
+export function SearchTranscripts(arg1:string):Promise<Array<main.SearchHit>>;
+
 export function SendSkill(arg1:string,arg2:string):Promise<void>;
+
+export function SessionPreview(arg1:string):Promise<string>;
+
+export function SetActiveTerm(arg1:string):Promise<void>;
 
 export function SetMainBranch(arg1:string,arg2:string):Promise<void>;
 
@@ -46,5 +64,7 @@ export function StartTodoSession(arg1:number):Promise<string>;
 export function Todos():Promise<Array<main.TodoInfo>>;
 
 export function UpdateTodo(arg1:number,arg2:string,arg3:string):Promise<void>;
+
+export function WorktreeDiff(arg1:string):Promise<string>;
 
 export function WriteTerm(arg1:string,arg2:string):Promise<void>;

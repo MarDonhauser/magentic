@@ -12,6 +12,7 @@ import (
 var (
 	colAccent  = lipgloss.Color("205")
 	colRunning = lipgloss.Color("42")
+	colAgents  = lipgloss.Color("44")
 	colBlocked = lipgloss.Color("214")
 	colIdle    = lipgloss.Color("245")
 	colDead    = lipgloss.Color("196")
@@ -19,6 +20,7 @@ var (
 	colText    = lipgloss.Color("252")
 
 	styleTitle   = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
+	styleAgents  = lipgloss.NewStyle().Foreground(colAgents)
 	styleDim     = lipgloss.NewStyle().Foreground(colDim)
 	styleText    = lipgloss.NewStyle().Foreground(colText)
 	styleProj    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("111"))
@@ -33,6 +35,8 @@ func statusStyle(s AgentStatus) lipgloss.Style {
 	switch s {
 	case StatusRunning:
 		return lipgloss.NewStyle().Foreground(colRunning)
+	case StatusAgents:
+		return lipgloss.NewStyle().Foreground(colAgents)
 	case StatusBlocked:
 		return lipgloss.NewStyle().Foreground(colBlocked).Bold(true)
 	case StatusDead:
@@ -106,8 +110,13 @@ func (m model) renderHeader() string {
 		counts[st]++
 	}
 	title := styleTitle.Render(" ⚡ magentic ")
-	stats := fmt.Sprintf("%s %d läuft   %s %d wartet   %s %d idle   %s %d aus",
+	agentsSeg := ""
+	if counts[StatusAgents] > 0 {
+		agentsSeg = fmt.Sprintf("%s %d agents   ", styleAgents.Render("◍"), counts[StatusAgents])
+	}
+	stats := fmt.Sprintf("%s %d läuft   %s%s %d wartet   %s %d idle   %s %d aus",
 		styleOK.Render("●"), counts[StatusRunning],
+		agentsSeg,
 		styleWarn.Render("◆"), counts[StatusBlocked],
 		styleDim.Render("○"), counts[StatusIdle],
 		styleErr.Render("✗"), counts[StatusExited]+counts[StatusDead])
@@ -324,6 +333,9 @@ func (m model) detailContent(w, h int) ([]string, int) {
 			active = " · aktiv " + formatAgeWord(act)
 		}
 		add(statusStyle(st).Render(st.Icon()+" "+st.Label()) + styleDim.Render(" · seit "+formatAge(a.CreatedAt)+active) + wtNote)
+		if d := m.poll.details[a.Name]; d != "" {
+			add(styleAgents.Render("◍ " + d))
+		}
 		add(styleDim.Render(shortPath(a.Dir)))
 		add("")
 		m.addAgentGit(a, w, add)

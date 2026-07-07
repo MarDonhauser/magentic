@@ -18,6 +18,7 @@ type Agent struct {
 	Project    string    `json:"project"`
 	Dir        string    `json:"dir"`
 	Worktree   bool      `json:"worktree"`
+	Kind       string    `json:"kind,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 	BaseCommit string    `json:"base_commit,omitempty"`
 	BaseDirty  []string  `json:"base_dirty,omitempty"`

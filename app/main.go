@@ -1,7 +1,12 @@
 package main
 
 import (
+	"context"
 	"embed"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -12,7 +17,30 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+func fixPath() {
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/zsh"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, shell, "-l", "-c", "echo -n $PATH").Output(); err == nil {
+		if p := strings.TrimSpace(string(out)); p != "" {
+			os.Setenv("PATH", p)
+		}
+	}
+	home, _ := os.UserHomeDir()
+	path := os.Getenv("PATH")
+	for _, d := range []string{"/opt/homebrew/bin", "/usr/local/bin", home + "/.local/bin"} {
+		if !strings.Contains(path, d) {
+			path += ":" + d
+		}
+	}
+	os.Setenv("PATH", path)
+}
+
 func main() {
+	fixPath()
 	app := NewApp()
 
 	err := wails.Run(&options.App{
@@ -24,9 +52,14 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour: &options.RGBA{R: 13, G: 13, B: 13, A: 1},
-		OnStartup:        app.startup,
-		OnShutdown:       app.shutdown,
+		BackgroundColour:  &options.RGBA{R: 32, G: 36, B: 43, A: 1},
+		HideWindowOnClose: true,
+		OnStartup:         app.startup,
+		OnShutdown:        app.shutdown,
+		DragAndDrop: &options.DragAndDrop{
+			EnableFileDrop:     true,
+			DisableWebViewDrop: true,
+		},
 		Bind: []interface{}{
 			app,
 		},

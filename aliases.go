@@ -19,6 +19,7 @@ type (
 const (
 	StatusUnknown = core.StatusUnknown
 	StatusRunning = core.StatusRunning
+	StatusAgents  = core.StatusAgents
 	StatusBlocked = core.StatusBlocked
 	StatusIdle    = core.StatusIdle
 	StatusExited  = core.StatusExited
@@ -41,11 +42,13 @@ var (
 
 	LoadState = core.LoadState
 
-	CollectStatuses    = core.CollectStatuses
-	DetectClaudeStatus = core.DetectClaudeStatus
-	lastLines          = core.LastLines
-	statusRank         = core.StatusRank
-	notifyDesktop      = core.NotifyDesktop
+	CollectStatuses      = core.CollectStatuses
+	DetectClaudeStatus   = core.DetectClaudeStatus
+	lastLines            = core.LastLines
+	statusRank           = core.StatusRank
+	notifyDesktop        = core.NotifyDesktop
+	backgroundAgentCount = core.BackgroundAgentCount
+	agentsDetail         = core.AgentsDetail
 
 	gitCmd                = core.GitCmd
 	CollectGitInfo        = core.CollectGitInfo

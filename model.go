@@ -55,6 +55,7 @@ type pollResult struct {
 	git        map[string]GitInfo
 	session    map[string]SessionChanges
 	activity   map[string]time.Time
+	details    map[string]string
 	preview    string
 	discovered []Agent
 	diskMain   map[string]string
@@ -128,9 +129,9 @@ func (m *model) handleStatusChanges(old map[string]AgentStatus) {
 		if !seen || prev == st {
 			continue
 		}
-		if st == StatusBlocked && (prev == StatusRunning || prev == StatusIdle) {
+		if st == StatusBlocked && (prev == StatusRunning || prev == StatusAgents || prev == StatusIdle) {
 			notifyDesktop("magentic · "+name, "Agent wartet auf deine Eingabe", "Glass")
-		} else if prev == StatusRunning && st == StatusIdle {
+		} else if (prev == StatusRunning || prev == StatusAgents) && st == StatusIdle {
 			m.notifyPending[name] = StatusIdle
 		}
 	}
@@ -272,10 +273,17 @@ func tick() tea.Cmd {
 
 func pollCmd(state State, selected *Agent) tea.Cmd {
 	return func() tea.Msg {
-		res := pollResult{git: map[string]GitInfo{}, session: map[string]SessionChanges{}}
+		res := pollResult{git: map[string]GitInfo{}, session: map[string]SessionChanges{}, details: map[string]string{}}
 		statuses, contents, activity := CollectStatuses(state.Agents)
 		res.statuses = statuses
 		res.activity = activity
+		for name, st := range statuses {
+			if st == StatusAgents {
+				if n := backgroundAgentCount(lastLines(contents[name], 25)); n > 0 {
+					res.details[name] = agentsDetail(n)
+				}
+			}
+		}
 		for _, a := range state.Agents {
 			if selected != nil && a.Name == selected.Name {
 				res.preview = contents[a.Name]

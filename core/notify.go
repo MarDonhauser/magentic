@@ -6,7 +6,13 @@ import (
 	"runtime"
 )
 
+var Notifier func(title, message, sound string)
+
 func NotifyDesktop(title, message, sound string) {
+	if Notifier != nil {
+		Notifier(title, message, sound)
+		return
+	}
 	switch runtime.GOOS {
 	case "darwin":
 		script := fmt.Sprintf("display notification %q with title %q sound name %q", message, title, sound)
@@ -22,12 +28,14 @@ func StatusRank(s AgentStatus) int {
 		return 0
 	case StatusRunning:
 		return 1
-	case StatusIdle:
+	case StatusAgents:
 		return 2
-	case StatusExited:
+	case StatusIdle:
 		return 3
-	case StatusDead:
+	case StatusExited:
 		return 4
+	case StatusDead:
+		return 5
 	}
-	return 5
+	return 6
 }

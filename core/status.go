@@ -1,7 +1,9 @@
 package core
 
 import (
+	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -11,6 +13,7 @@ type AgentStatus int
 const (
 	StatusUnknown AgentStatus = iota
 	StatusRunning
+	StatusAgents
 	StatusBlocked
 	StatusIdle
 	StatusExited
@@ -21,6 +24,8 @@ func (s AgentStatus) Label() string {
 	switch s {
 	case StatusRunning:
 		return "läuft"
+	case StatusAgents:
+		return "Agents"
 	case StatusBlocked:
 		return "wartet"
 	case StatusIdle:
@@ -37,6 +42,8 @@ func (s AgentStatus) Icon() string {
 	switch s {
 	case StatusRunning:
 		return "●"
+	case StatusAgents:
+		return "◍"
 	case StatusBlocked:
 		return "◆"
 	case StatusIdle:
@@ -49,7 +56,33 @@ func (s AgentStatus) Icon() string {
 	return "?"
 }
 
-var spinnerRe = regexp.MustCompile(`(?m)^\s*[·✢✳✶✻✽✺✹✸✷+*]\s+\p{L}+…`)
+var bgAgentsRe = regexp.MustCompile(`(?i)waiting for (\d+) background agent`)
+
+var agentTreeRe = regexp.MustCompile(`(?m)^\s*[◯○◌]\s+\S+`)
+
+func BackgroundAgentCount(content string) int {
+	if n := len(agentTreeRe.FindAllString(content, -1)); n > 0 {
+		return n
+	}
+	ms := bgAgentsRe.FindAllStringSubmatch(content, -1)
+	if len(ms) == 0 {
+		return 0
+	}
+	n, _ := strconv.Atoi(ms[len(ms)-1][1])
+	return n
+}
+
+func AgentsDetail(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if n == 1 {
+		return "wartet auf 1 Agent"
+	}
+	return fmt.Sprintf("wartet auf %d Agents", n)
+}
+
+var spinnerRe = regexp.MustCompile(`(?m)^\s*[·✢✳✶✻✽✺✹✸✷+*]\s+[^\n…]{1,80}…`)
 
 var runningPatterns = []string{
 	"esc to interrupt",
@@ -123,6 +156,9 @@ func DetectClaudeStatus(sessionExists bool, paneCommand, paneContent string) Age
 		if strings.Contains(content, p) {
 			return StatusBlocked
 		}
+	}
+	if bgAgentsRe.MatchString(paneContent) || agentTreeRe.MatchString(paneContent) {
+		return StatusAgents
 	}
 	return StatusIdle
 }

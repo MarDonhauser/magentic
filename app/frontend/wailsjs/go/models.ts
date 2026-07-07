@@ -4,8 +4,11 @@ export namespace core {
 	    name: string;
 	    status: string;
 	    label: string;
+	    detail: string;
 	    age: string;
 	    worktree: boolean;
+	    phase?: string;
+	    phaseLabel?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new OvAgent(source);
@@ -16,8 +19,11 @@ export namespace core {
 	        this.name = source["name"];
 	        this.status = source["status"];
 	        this.label = source["label"];
+	        this.detail = source["detail"];
 	        this.age = source["age"];
 	        this.worktree = source["worktree"];
+	        this.phase = source["phase"];
+	        this.phaseLabel = source["phaseLabel"];
 	    }
 	}
 	export class OvWorktree {
@@ -194,6 +200,22 @@ export namespace main {
 	        this.url = source["url"];
 	    }
 	}
+	export class AzAccount {
+	    id: string;
+	    name: string;
+	    isDefault: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new AzAccount(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.isDefault = source["isDefault"];
+	    }
+	}
 	export class BuildInfo {
 	    repo: string;
 	    status: string;
@@ -219,6 +241,8 @@ export namespace main {
 	export class DeployStatus {
 	    azOk: boolean;
 	    azErr: string;
+	    azSub: string;
+	    azSubId: string;
 	    argoOk: boolean;
 	    argoServer: string;
 	    argoErr: string;
@@ -233,6 +257,8 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.azOk = source["azOk"];
 	        this.azErr = source["azErr"];
+	        this.azSub = source["azSub"];
+	        this.azSubId = source["azSubId"];
 	        this.argoOk = source["argoOk"];
 	        this.argoServer = source["argoServer"];
 	        this.argoErr = source["argoErr"];
@@ -257,6 +283,28 @@ export namespace main {
 		    }
 		    return a;
 		}
+	}
+	export class SearchHit {
+	    project: string;
+	    role: string;
+	    time: string;
+	    timeRaw: string;
+	    snippet: string;
+	    full: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SearchHit(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.project = source["project"];
+	        this.role = source["role"];
+	        this.time = source["time"];
+	        this.timeRaw = source["timeRaw"];
+	        this.snippet = source["snippet"];
+	        this.full = source["full"];
+	    }
 	}
 	export class TodoInfo {
 	    index: number;

@@ -8,12 +8,15 @@ import {
   Overview, Todos, Projects, AddTodo, UpdateTodo, DeleteTodo, StartTodoSession,
   NewSession, DoneAgent, Cleanup, Merge, Deploy, RemoveWorktree, SetMainBranch,
   OpenTerm, WriteTerm, ResizeTerm, KillSession, SendSkill,
-  DeployStatus, AzLogin, ArgoLogin,
+  DeployStatus, AzLogin, ArgoLogin, AzAccounts, AzSetSubscription,
+  WorktreeDiff, SessionPreview, SearchTranscripts, SetActiveTerm,
+  PickFolder, AddProject, RemoveProject, SaveImage,
 } from '../wailsjs/go/main/App';
 import { EventsOn, EventsOff, BrowserOpenURL } from '../wailsjs/runtime/runtime';
 
 const STATUS = {
   running: { color: 'var(--good)', icon: '●', label: 'läuft' },
+  agents:  { color: 'var(--info)', icon: '◍', label: 'Agents' },
   blocked: { color: 'var(--warning)', icon: '◆', label: 'wartet' },
   idle:    { color: 'var(--muted)', icon: '○', label: 'idle' },
   exited:  { color: 'var(--ink-2)', icon: '▪', label: 'beendet' },
@@ -21,9 +24,28 @@ const STATUS = {
   unknown: { color: 'var(--muted)', icon: '?', label: '?' },
 };
 
+const PHASE = {
+  deploy:    { color: 'var(--accent)', icon: '🚀', label: 'deployt' },
+  merge:     { color: 'var(--info)',   icon: '🔀', label: 'merge' },
+  cleanup:   { color: 'var(--info)',   icon: '🧹', label: 'cleanup' },
+  committed: { color: 'var(--good)',   icon: '✅', label: 'committed' },
+};
+
+function agentVisual(a) {
+  const st = STATUS[a?.status] || STATUS.unknown;
+  const ph = PHASE[a?.phase];
+  if (ph && !['blocked', 'dead', 'exited'].includes(a?.status)) {
+    return { color: ph.color, icon: ph.icon, label: a.phaseLabel ? `${ph.label} ${a.phaseLabel}` : ph.label };
+  }
+  return { color: st.color, icon: st.icon, label: a?.detail || st.label };
+}
+
 const $ = id => document.getElementById(id);
 const sessionsEl = $('sessions'), sideTodosEl = $('side-todos'), usageBoxEl = $('usage-box');
-const overviewEl = $('overview'), termsEl = $('terms');
+const overviewEl = $('overview'), termsEl = $('terms'), deployBadgeEl = $('deploy-badge');
+
+const TERM_THEME = { background: '#282d35', foreground: '#dbe0e6', cursor: '#5eead4', selectionBackground: 'rgba(55,207,189,0.30)' };
+const SCROLL_MULT = 4;
 
 let view = 'overview';
 let activeTerm = null;
@@ -32,11 +54,17 @@ let todos = [];
 let projects = [];
 let editingTodo = -1;
 let confirmRemove = null;
+let confirmRemoveProject = null;
 let editingMain = null;
 let sidebarSessions = [];
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function shortSub(s) {
+  s = String(s ?? '');
+  return s.length > 30 ? s.slice(0, 29) + '…' : s;
 }
 
 let toastTimer;
@@ -84,16 +112,55 @@ function makeTerm(name) {
     fontSize: 13,
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
     scrollback: 20000,
+    scrollSensitivity: 5,
+    fastScrollSensitivity: 12,
     cursorBlink: true,
     macOptionIsMeta: true,
-    theme: { background: '#0d0d0d', foreground: '#e8e6df', cursor: '#e8e6df', selectionBackground: 'rgba(58,135,229,0.35)' },
+    theme: TERM_THEME,
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.loadAddon(new WebLinksAddon((e, uri) => BrowserOpenURL(uri)));
   term.open(wrap);
+  let wheelBoosting = false;
+  term.element?.addEventListener('wheel', ev => {
+    if (wheelBoosting || term.buffer.active.type !== 'alternate') return;
+    wheelBoosting = true;
+    try {
+      for (let i = 0; i < SCROLL_MULT - 1; i++) {
+        ev.target.dispatchEvent(new WheelEvent('wheel', {
+          deltaX: ev.deltaX, deltaY: ev.deltaY, deltaZ: ev.deltaZ, deltaMode: ev.deltaMode,
+          clientX: ev.clientX, clientY: ev.clientY, bubbles: true, cancelable: true, view: window,
+        }));
+      }
+    } finally {
+      wheelBoosting = false;
+    }
+  }, { passive: true });
   term.onData(d => WriteTerm(name, toB64(d)));
   term.onResize(({ cols, rows }) => ResizeTerm(name, cols, rows));
+
+  wrap.addEventListener('paste', async e => {
+    const items = e.clipboardData?.items || [];
+    for (const it of items) {
+      if (it.kind === 'file' && it.type.startsWith('image/')) {
+        e.preventDefault();
+        e.stopPropagation();
+        const blob = it.getAsFile();
+        if (!blob) return;
+        try {
+          const buf = new Uint8Array(await blob.arrayBuffer());
+          let bin = '';
+          for (const b of buf) bin += String.fromCharCode(b);
+          const path = await SaveImage(btoa(bin));
+          WriteTerm(name, toB64(path + ' '));
+        } catch (err) {
+          toast('Bild konnte nicht eingefügt werden: ' + err, true);
+        }
+        return;
+      }
+    }
+  }, true);
   EventsOn('term:data:' + name, b64 => term.write(fromB64(b64)));
   EventsOn('term:closed:' + name, () => term.write('\r\n\x1b[31m— Verbindung beendet —\x1b[0m\r\n'));
 
@@ -137,7 +204,7 @@ function updateTermBar() {
     `<button class="btn tiny" id="tb-back" title="Übersicht (⌘0)">‹ Übersicht</button>` +
     `<span class="dot" style="background:${st.color}"></span>` +
     `<span class="tb-name">${esc(activeTerm)}</span>` +
-    `<span class="tb-st">${esc(st.label)}</span>` +
+    `<span class="tb-st">${esc(a?.detail || st.label)}</span>` +
     (a?.project && a.project !== '(ohne Projekt)' ? `<span class="tb-proj">${esc(a.project)}</span>` : '') +
     `<span class="tb-actions">` +
     `<button class="btn tiny" id="tb-done"${gone ? ' disabled' : ''} title="/done in diese Session senden — committen und auf dev bringen">✓ done</button>` +
@@ -147,7 +214,8 @@ function updateTermBar() {
   $('tb-done').onclick = () =>
     act(DoneAgent(activeTerm), `/done an „${activeTerm}" gesendet — Plan in der Session bestätigen`).catch(() => {});
   $('tb-deploy').onclick = () =>
-    act(SendSkill(activeTerm, '/deploy '), `/deploy an „${activeTerm}" gesendet — Plan in der Session bestätigen`).catch(() => {});
+    act(SendSkill(activeTerm, '/deploy '), `/deploy an „${activeTerm}" gesendet — Plan in der Session bestätigen`)
+      .then(startDeployWatch).catch(() => {});
   $('tb-kill').onclick = e => {
     const b = e.currentTarget;
     if (b.dataset.confirm) { killSession(activeTerm); return; }
@@ -162,7 +230,9 @@ function updateTermBar() {
 async function openSession(name) {
   view = 'term';
   activeTerm = name;
+  SetActiveTerm(name);
   overviewEl.style.display = 'none';
+  $('search-view').style.display = 'none';
   termsEl.style.display = 'block';
   let t = terms.get(name);
   const fresh = !t;
@@ -183,13 +253,27 @@ async function openSession(name) {
 function showOverview() {
   view = 'overview';
   activeTerm = null;
+  SetActiveTerm('');
   termsEl.style.display = 'none';
+  $('search-view').style.display = 'none';
   overviewEl.style.display = 'block';
   renderAll();
 }
 
+function showSearch() {
+  view = 'search';
+  activeTerm = null;
+  SetActiveTerm('');
+  termsEl.style.display = 'none';
+  overviewEl.style.display = 'none';
+  $('search-view').style.display = 'block';
+  $('search-input').focus();
+  renderSidebar();
+}
+
 $('nav-overview').onclick = showOverview;
 $('sidebar-head').onclick = showOverview;
+$('nav-search').onclick = showSearch;
 
 
 function renderSidebar() {
@@ -229,22 +313,23 @@ function renderSidebar() {
     }
     sessionsEl.appendChild(head);
     for (const a of agents) {
-      const st = STATUS[a.status] || STATUS.unknown;
+      const v = agentVisual(a);
       const idx = sidebarSessions.length;
       sidebarSessions.push(a.name);
       const div = document.createElement('div');
       div.className = 'session' + (view === 'term' && a.name === activeTerm ? ' selected' : '');
       const key = idx < 9 ? `<span class="skey">⌘${idx + 1}</span>` : '';
       div.innerHTML =
-        `<span class="dot" style="background:${st.color}"></span>` +
+        `<span class="dot" style="background:${v.color}"></span>` +
         `<span class="sname">${esc(a.name)}</span>` +
-        `<span class="sstatus">${esc(st.label)}</span>` +
+        `<span class="sstatus">${esc(v.label)}</span>` +
         `<span class="sage">${esc(a.age)}</span>${key}`;
       div.onclick = () => openSession(a.name);
       div.oncontextmenu = e => {
         e.preventDefault();
         showMenu(e.clientX, e.clientY, a.name, a.status);
       };
+      attachHover(div, a.name);
       sessionsEl.appendChild(div);
     }
   }
@@ -287,16 +372,16 @@ function tile(value, label, dotColor, hollow) {
 }
 
 function agentPill(a) {
-  const st = STATUS[a.status] || STATUS.unknown;
-  const done = (a.status === 'idle' || a.status === 'running')
+  const v = agentVisual(a);
+  const done = (a.status === 'idle' || a.status === 'running') && !a.phase
     ? `<button class="btn tiny" data-act="done" data-agent="${esc(a.name)}" title="/done — Arbeit committen und auf dev bringen">✓ done</button>`
     : '';
   const open = a.status !== 'dead'
     ? `<button class="btn tiny" data-act="open" data-agent="${esc(a.name)}" title="Terminal öffnen">⌨</button>`
     : '';
-  return `<span class="pill"><span class="dot" style="background:${st.color}"></span>` +
+  return `<span class="pill"><span class="dot" style="background:${v.color}"></span>` +
     `<span class="name">${esc(a.name)}</span>` +
-    `<span class="st">${st.icon} ${esc(st.label)}</span>` +
+    `<span class="st">${v.icon} ${esc(v.label)}</span>` +
     `<span class="age">${esc(a.age)}</span>${open}${done}</span>`;
 }
 
@@ -307,13 +392,14 @@ function gitState(wt) {
   if (wt.staged) parts.push(`${wt.staged} staged`);
   if (wt.modified) parts.push(`${wt.modified} geändert`);
   if (wt.untracked) parts.push(`${wt.untracked} neu`);
-  return `<span class="git-state"><span style="color:var(--warning);font-weight:700">±</span> ${parts.join(' · ')}</span>`;
+  return `<span class="git-state clickable" data-diff="${esc(wt.path)}" title="Diff anzeigen">` +
+    `<span style="color:var(--warning);font-weight:700">±</span> ${parts.join(' · ')}</span>`;
 }
 
 function worktreeActions(p, wt) {
   if (!p.path) return '';
-  const busy = (wt.agents || []).some(a => ['running', 'blocked'].includes(a.status));
-  const anySession = (wt.agents || []).some(a => ['running', 'blocked', 'idle'].includes(a.status));
+  const busy = (wt.agents || []).some(a => ['running', 'agents', 'blocked'].includes(a.status));
+  const anySession = (wt.agents || []).some(a => ['running', 'agents', 'blocked', 'idle'].includes(a.status));
   let btns = '';
   if (!busy && wt.ahead > 0 && wt.branch !== p.mainBranch) {
     btns += `<button class="btn" data-act="merge" data-project="${esc(p.name)}" data-source="${esc(wt.branch)}" data-target="${esc(p.mainBranch)}" ` +
@@ -362,10 +448,13 @@ function projectCard(p) {
         `<button class="btn tiny" data-act="maincancel">✗</button></span>`
       : `<span class="maincfg">Hauptbranch <b>${esc(p.mainBranch)}</b></span>` +
         `<button class="btn tiny" data-act="mainedit" data-project="${esc(p.name)}" title="Hauptbranch ändern">✎</button>`;
+    const rmProj = confirmRemoveProject === p.name
+      ? `<button class="btn danger confirm" data-act="rmproj2" data-project="${esc(p.name)}">Repo wirklich entfernen?</button>`
+      : `<button class="btn danger" data-act="rmproj1" data-project="${esc(p.name)}" title="Repository aus magentic entfernen — löscht keine Dateien">✕ Repo</button>`;
     mainCfg += `<span class="actions">` +
       `<button class="btn" data-act="newsession" data-project="${esc(p.name)}" title="Neue Claude-Session im Projekt">+ Session</button>` +
       `<button class="btn" data-act="newworktree" data-project="${esc(p.name)}" title="Neue Session in eigenem Worktree">⑂ Worktree</button>` +
-      `<button class="btn" data-act="deploy" data-project="${esc(p.name)}" title="Neue Claude-Session, die /deploy ausführt">🚀 deploy</button></span>`;
+      `<button class="btn" data-act="deploy" data-project="${esc(p.name)}" title="Neue Claude-Session, die /deploy ausführt">🚀 deploy</button>${rmProj}</span>`;
   }
   return `<div class="card"><div class="card-head"><h2>${esc(p.name)}</h2>` +
     `<span class="path">${esc(p.path || '')}</span>${mainCfg}</div><div class="rows">${rows}</div></div>`;
@@ -403,6 +492,68 @@ function todoSection() {
 let deployStatus = null;
 let deployStamp = '';
 let argoExpanded = false;
+let dsWatchUntil = 0;
+let deploySawRunning = false;
+let deployTerminalAt = 0;
+
+function startDeployWatch() {
+  dsWatchUntil = Date.now() + 15 * 60 * 1000;
+  deploySawRunning = false;
+  deployTerminalAt = 0;
+  refreshDeployStatus();
+}
+
+function deployStage() {
+  const ds = deployStatus;
+  if (!ds) return null;
+  const running = (ds.builds || []).filter(b => b.status === 'inProgress' || b.status === 'notStarted');
+  if (running.length) {
+    deploySawRunning = true;
+    deployTerminalAt = 0;
+    const b = running[0];
+    const extra = running.length > 1 ? ` +${running.length - 1}` : '';
+    return { cls: 'db-running', title: 'Build läuft…', sub: `${b.repo} · ${b.branch}${extra}`, age: b.age };
+  }
+  const prog = (ds.apps || []).filter(a => a.health === 'Progressing');
+  if (prog.length) {
+    deploySawRunning = true;
+    deployTerminalAt = 0;
+    const a = prog[0];
+    const extra = prog.length > 1 ? ` +${prog.length - 1}` : '';
+    return { cls: 'db-running', title: 'Rollout läuft…', sub: `${a.name} · ${a.namespace}${extra}` };
+  }
+  if (Date.now() >= dsWatchUntil) return null;
+  if (!deploySawRunning) {
+    return { cls: 'db-running', title: 'Deploy angestoßen…', sub: 'warte auf die Pipeline' };
+  }
+  if (deployTerminalAt === 0) deployTerminalAt = Date.now();
+  if (Date.now() - deployTerminalAt >= 90 * 1000) return null;
+  const failed = (ds.builds || []).some(b => b.status === 'completed' && b.result === 'failed');
+  if (failed) return { cls: 'db-failed', title: 'Build fehlgeschlagen', sub: 'Details ansehen' };
+  return { cls: 'db-done', title: 'Deploy fertig ✓', sub: 'alle Builds & Rollouts durch' };
+}
+
+function renderDeployBadge() {
+  const s = deployStage();
+  if (!s) { deployBadgeEl.className = ''; deployBadgeEl.innerHTML = ''; return; }
+  deployBadgeEl.className = s.cls;
+  const age = s.age ? `<span class="db-age">${esc(s.age)}</span>` : '';
+  deployBadgeEl.innerHTML =
+    `<div class="db-line"><span class="db-pulse"></span>` +
+    `<span class="db-title">🚀 ${esc(s.title)}</span>${age}</div>` +
+    (s.sub ? `<div class="db-sub">${esc(s.sub)}</div>` : '');
+}
+
+deployBadgeEl.onclick = () => {
+  showOverview();
+  refreshDeployStatus();
+  const card = $('deploy-card');
+  if (card) {
+    card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    card.classList.add('flash');
+    setTimeout(() => card.classList.remove('flash'), 1200);
+  }
+};
 
 const BUILD_ICON = {
   succeeded: ['✓', 'var(--good)'],
@@ -441,13 +592,16 @@ function argoRow(a) {
 function deployCard() {
   const ds = deployStatus;
   if (!ds) {
-    return `<div class="card"><div class="card-head"><h2>🚀 Pipelines &amp; Argo</h2>` +
+    return `<div class="card" id="deploy-card"><div class="card-head"><h2>🚀 Pipelines &amp; Argo</h2>` +
       `<span class="path">lade…</span></div></div>`;
   }
   const azChip = ds.azOk
     ? `<span class="ds-chip ok">Azure ✓</span>`
     : `<span class="ds-chip bad" title="${esc(ds.azErr)}">Azure ✗</span>` +
       `<button class="btn tiny" data-act="azlogin">az login</button>`;
+  const subChip = ds.azSub
+    ? `<button class="ds-chip sub" data-act="azsub" title="Azure-Subscription wechseln · ${esc(ds.azSub)}\n${esc(ds.azSubId)}">☁ ${esc(shortSub(ds.azSub))} ▾</button>`
+    : '';
   const argoChip = ds.argoOk
     ? `<span class="ds-chip ok" title="${esc(ds.argoServer)}">Argo ✓</span>`
     : `<span class="ds-chip bad" title="${esc(ds.argoErr)}">Argo ✗</span>` +
@@ -465,8 +619,10 @@ function deployCard() {
       : `<div class="ds-more" data-act="argomore">✓ ${healthy} Apps Synced &amp; Healthy — anzeigen ▾</div>`;
   }
   if (!apps.length && !ds.argoOk) argoHtml = `<div class="none">${esc(ds.argoErr)}</div>`;
-  return `<div class="card"><div class="card-head"><h2>🚀 Pipelines &amp; Argo</h2>` +
-    `${azChip}${argoChip}` +
+  const watching = Date.now() < dsWatchUntil
+    ? `<span class="ds-chip watch">⏱ verfolge Deploy (10s-Takt)</span>` : '';
+  return `<div class="card" id="deploy-card"><div class="card-head"><h2>🚀 Pipelines &amp; Argo</h2>` +
+    `${azChip}${subChip}${argoChip}${watching}` +
     `<span class="actions"><span class="path">${esc(deployStamp)}</span>` +
     `<button class="btn tiny" data-act="dsrefresh" title="Status neu laden">↻</button></span></div>` +
     `<div class="ds-cols"><div class="ds-col"><div class="ds-title">Azure DevOps Builds</div>${builds}</div>` +
@@ -480,6 +636,7 @@ async function refreshDeployStatus() {
   try {
     deployStatus = await DeployStatus();
     deployStamp = 'Stand ' + new Date().toLocaleTimeString('de-DE');
+    renderDeployBadge();
     if (view === 'overview') renderOverview();
   } catch (e) { /* Backend nicht bereit */ }
   dsLoading = false;
@@ -506,6 +663,7 @@ function renderOverview() {
   const u = ov.usage;
   const tiles =
     tile(c.running || 0, 'läuft', 'var(--good)') +
+    tile(c.agents || 0, 'Agents aktiv', 'var(--info)') +
     tile(c.blocked || 0, 'wartet auf Input', 'var(--warning)') +
     tile(c.idle || 0, 'idle', 'var(--muted)', true) +
     tile(c.dirty || 0, 'Worktrees mit Änderungen', 'var(--warning)') +
@@ -514,6 +672,7 @@ function renderOverview() {
          tile(`${Math.round(u.sevenDay)}%`, `Wochenlimit · ↻ ${esc(u.sevenDayReset)}`, usageColor(u.sevenDay)) : '');
   const cards = (ov.projects || []).map(projectCard).join('');
   overviewEl.innerHTML = `<div class="tiles">${tiles}</div>${deployCard()}${todoSection()}${cards}` +
+    `<div class="add-repo"><button class="btn" data-act="addproject" title="Git-Repository als Projekt hinzufügen">+ Repository hinzufügen…</button></div>` +
     `<div class="stamp">Stand ${esc(ov.generatedAt || '')}</div>`;
   if (savedText) $('todo-new').value = savedText;
   if (savedProj) $('todo-new-proj').value = savedProj;
@@ -526,6 +685,17 @@ function renderAll() {
 }
 
 overviewEl.addEventListener('click', async e => {
+  const gs = e.target.closest('.git-state[data-diff]');
+  if (gs) {
+    showModal('Diff · ' + gs.dataset.diff, 'lade…', false);
+    try {
+      const diff = await WorktreeDiff(gs.dataset.diff);
+      showModal('Diff · ' + gs.dataset.diff, diff, true);
+    } catch (err) {
+      showModal('Diff', 'Fehler: ' + err, false);
+    }
+    return;
+  }
   const row = e.target.closest('.ds-row[data-url]');
   if (row) { BrowserOpenURL(row.dataset.url); return; }
   const more = e.target.closest('.ds-more[data-act]');
@@ -544,9 +714,22 @@ overviewEl.addEventListener('click', async e => {
       case 'done': await act(DoneAgent(d.agent), `/done an „${d.agent}" gesendet — Plan in der Session bestätigen`); break;
       case 'cleanup': await act(Cleanup(d.path, d.main), n => `Cleanup-Agent „${n}" gestartet`); break;
       case 'merge': await act(Merge(d.project, d.source, d.target), n => `Merge-Agent „${n}" gestartet (${d.source} → ${d.target})`); break;
-      case 'deploy': await act(Deploy(d.project), n => `Deploy-Agent „${n}" gestartet (/deploy)`); break;
+      case 'deploy':
+        await act(Deploy(d.project), n => `Deploy-Agent „${n}" gestartet (/deploy)`);
+        startDeployWatch();
+        break;
       case 'newsession': await act(NewSession(d.project, false, ''), n => `Session „${n}" gestartet`); break;
       case 'newworktree': await act(NewSession(d.project, true, ''), n => `Worktree-Session „${n}" gestartet`); break;
+      case 'addproject': {
+        const path = await PickFolder();
+        if (path) await act(AddProject(path), n => `Repository „${n}" hinzugefügt`);
+        break;
+      }
+      case 'rmproj1': confirmRemoveProject = d.project; renderOverview(); break;
+      case 'rmproj2':
+        confirmRemoveProject = null;
+        await act(RemoveProject(d.project), `Repository „${d.project}" entfernt`);
+        break;
       case 'remove1': confirmRemove = d.project + '|' + d.path; renderOverview(); break;
       case 'remove2':
         confirmRemove = null;
@@ -580,6 +763,7 @@ overviewEl.addEventListener('click', async e => {
       }
       case 'tododelete': await act(DeleteTodo(parseInt(d.idx)), 'Todo gelöscht'); break;
       case 'dsrefresh': refreshDeployStatus(); break;
+      case 'azsub': await openSubPicker(b); break;
       case 'azlogin': AzLogin(); toast('Browser öffnet sich für den Azure-Login…'); break;
       case 'argologin': ArgoLogin(); toast('Browser öffnet sich für den Argo-SSO-Login…'); break;
       case 'todostart': {
@@ -614,6 +798,106 @@ async function refresh(force) {
 window.addEventListener('resize', () => {
   const t = activeTerm && terms.get(activeTerm);
   if (t) t.fit.fit();
+});
+
+const modalEl = document.createElement('div');
+modalEl.id = 'modal';
+modalEl.innerHTML =
+  '<div id="modal-box"><div id="modal-head"><span id="modal-title"></span>' +
+  '<button class="btn tiny" id="modal-close">schließen ✗</button></div><pre id="modal-pre"></pre></div>';
+document.body.appendChild(modalEl);
+$('modal-close').onclick = () => { modalEl.style.display = 'none'; };
+modalEl.addEventListener('mousedown', e => { if (e.target === modalEl) modalEl.style.display = 'none'; });
+
+function showModal(title, content, colorizeDiff) {
+  $('modal-title').textContent = title;
+  const pre = $('modal-pre');
+  if (colorizeDiff) {
+    pre.innerHTML = content.split('\n').map(l => {
+      const el = esc(l);
+      if (l.startsWith('diff --git') || l.startsWith('──')) return `<span class="dl-file">${el}</span>`;
+      if (l.startsWith('@@')) return `<span class="dl-hunk">${el}</span>`;
+      if (l.startsWith('+')) return `<span class="dl-add">${el}</span>`;
+      if (l.startsWith('-')) return `<span class="dl-del">${el}</span>`;
+      return el;
+    }).join('\n');
+  } else {
+    pre.textContent = content;
+  }
+  modalEl.style.display = 'flex';
+}
+
+const hoverEl = document.createElement('div');
+hoverEl.id = 'hoverprev';
+document.body.appendChild(hoverEl);
+let hoverTimer = null;
+
+function attachHover(div, name) {
+  div.addEventListener('mouseenter', () => {
+    clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(async () => {
+      try {
+        const txt = await SessionPreview(name);
+        if (!txt || !div.isConnected) return;
+        const r = div.getBoundingClientRect();
+        hoverEl.textContent = txt;
+        hoverEl.style.display = 'block';
+        hoverEl.style.left = (r.right + 10) + 'px';
+        hoverEl.style.top = '0px';
+        const top = Math.max(4, Math.min(r.top, window.innerHeight - hoverEl.offsetHeight - 10));
+        hoverEl.style.top = top + 'px';
+      } catch { /* Session weg */ }
+    }, 350);
+  });
+  div.addEventListener('mouseleave', () => {
+    clearTimeout(hoverTimer);
+    hoverEl.style.display = 'none';
+  });
+  div.addEventListener('mousedown', () => {
+    clearTimeout(hoverTimer);
+    hoverEl.style.display = 'none';
+  });
+}
+
+let searchHits = [];
+
+function highlightQuery(text, q) {
+  const et = esc(text);
+  const eq = esc(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  try {
+    return et.replace(new RegExp(eq, 'gi'), m => `<mark>${m}</mark>`);
+  } catch {
+    return et;
+  }
+}
+
+async function runSearch() {
+  const q = $('search-input').value.trim();
+  const res = $('search-results');
+  if (q.length < 3) { res.innerHTML = '<div class="none">mindestens 3 Zeichen</div>'; return; }
+  res.innerHTML = '<div class="none">suche in allen Transkripten…</div>';
+  try {
+    searchHits = (await SearchTranscripts(q)) || [];
+    if (!searchHits.length) { res.innerHTML = '<div class="none">keine Treffer</div>'; return; }
+    res.innerHTML = searchHits.map((h, i) =>
+      `<div class="hit" data-hit="${i}">` +
+      `<div class="hit-meta"><span class="hit-proj">${esc(h.project)}</span>` +
+      `<span class="hit-role ${h.role}">${h.role === 'user' ? 'Du' : 'Claude'}</span>` +
+      `<span class="hit-time">${esc(h.time)}</span></div>` +
+      `<div class="hit-snippet">${highlightQuery(h.snippet, q)}</div></div>`
+    ).join('');
+  } catch (err) {
+    res.innerHTML = `<div class="none">Fehler: ${esc(err)}</div>`;
+  }
+}
+
+$('search-go').onclick = runSearch;
+$('search-input').addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
+$('search-results').addEventListener('click', e => {
+  const hit = e.target.closest('.hit[data-hit]');
+  if (!hit) return;
+  const h = searchHits[parseInt(hit.dataset.hit)];
+  if (h) showModal(`${h.project} · ${h.role === 'user' ? 'Du' : 'Claude'} · ${h.time}`, h.full, false);
 });
 
 const menuEl = document.createElement('div');
@@ -673,7 +957,53 @@ menuEl.addEventListener('click', async e => {
 document.addEventListener('mousedown', e => { if (!menuEl.contains(e.target)) hideMenu(); });
 window.addEventListener('blur', hideMenu);
 
+const subMenuEl = document.createElement('div');
+subMenuEl.id = 'submenu';
+document.body.appendChild(subMenuEl);
+function hideSubMenu() { subMenuEl.style.display = 'none'; }
+
+async function openSubPicker(anchor) {
+  const r = anchor.getBoundingClientRect();
+  subMenuEl.innerHTML = `<div class="mi-head">Azure-Subscription</div><div class="mi muted">lade…</div>`;
+  subMenuEl.style.display = 'block';
+  subMenuEl.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 360)) + 'px';
+  subMenuEl.style.top = (r.bottom + 6) + 'px';
+  let accs = [];
+  try { accs = await AzAccounts(); } catch { accs = []; }
+  if (subMenuEl.style.display === 'none') return;
+  if (!accs.length) {
+    subMenuEl.innerHTML = `<div class="mi-head">Azure-Subscription</div>` +
+      `<div class="mi muted">keine gefunden — erst „az login"</div>`;
+    return;
+  }
+  const cur = deployStatus?.azSubId || '';
+  subMenuEl.innerHTML = `<div class="mi-head">Subscription wechseln</div>` +
+    accs.map(s => {
+      const active = s.id === cur || (!cur && s.isDefault);
+      return `<div class="mi${active ? ' active' : ''}" data-sub="${esc(s.id)}" title="${esc(s.id)}">` +
+        `<span class="submark">${active ? '●' : '○'}</span>` +
+        `<span class="subname">${esc(s.name)}</span></div>`;
+    }).join('');
+}
+
+subMenuEl.addEventListener('click', async e => {
+  const mi = e.target.closest('.mi[data-sub]');
+  if (!mi) return;
+  const id = mi.dataset.sub;
+  hideSubMenu();
+  try {
+    await act(AzSetSubscription(id), 'Subscription gewechselt — Status wird neu geladen');
+    refreshDeployStatus();
+  } catch { /* toast zeigt den Fehler */ }
+});
+document.addEventListener('mousedown', e => {
+  if (!subMenuEl.contains(e.target) && !e.target.closest('[data-act="azsub"]')) hideSubMenu();
+});
+window.addEventListener('blur', hideSubMenu);
+
 window.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && subMenuEl.style.display === 'block') { hideSubMenu(); return; }
+  if (e.key === 'Escape' && modalEl.style.display === 'flex') { modalEl.style.display = 'none'; return; }
   if (e.key === 'Escape' && menuEl.style.display === 'block') { hideMenu(); return; }
   if (!e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.key >= '1' && e.key <= '9') {
@@ -695,4 +1025,8 @@ window.addEventListener('keydown', e => {
 refresh(true);
 setInterval(() => refresh(false), 3000);
 refreshDeployStatus();
-setInterval(refreshDeployStatus, 30000);
+let dsTick = 0;
+setInterval(() => {
+  dsTick++;
+  if (Date.now() < dsWatchUntil || dsTick % 3 === 0) refreshDeployStatus();
+}, 10000);

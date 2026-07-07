@@ -11,6 +11,8 @@
     <aside id="sidebar">
         <div id="sidebar-head">⚡ magentic</div>
         <div class="nav-btn" id="nav-overview">▦ Übersicht</div>
+        <div class="nav-btn" id="nav-search">🔍 Suche</div>
+        <div id="deploy-badge" title="Deploy-Stand — klick für Details"></div>
         <div class="side-label">Sessions</div>
         <div id="sessions"></div>
         <div class="side-label">Todos</div>
@@ -19,6 +21,13 @@
     </aside>
     <main id="main">
         <div id="overview"></div>
+        <div id="search-view">
+            <div id="search-bar">
+                <input class="inline-input wide" id="search-input" placeholder="Volltextsuche über alle Claude-Session-Transkripte… (Enter)">
+                <button class="btn" id="search-go">Suchen</button>
+            </div>
+            <div id="search-results"></div>
+        </div>
         <div id="terms"><div id="term-bar"></div></div>
     </main>
 </div>
