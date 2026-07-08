@@ -17,6 +17,8 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+const azureDevOpsResourceID = "499b84ac-1321-427f-aa17-267ca6975798"
+
 type BuildInfo struct {
 	Repo     string `json:"repo"`
 	Status   string `json:"status"`
@@ -384,7 +386,15 @@ func (a *App) AzSetSubscription(id string) error {
 
 func (a *App) AzLogin() {
 	go func() {
-		cmd := exec.Command("az", "login")
+		args := []string{"login", "--scope", azureDevOpsResourceID + "/.default"}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if out, err := runCmd(ctx, "az", "account", "show", "--query", "tenantId", "-o", "tsv"); err == nil {
+			if tenant := strings.TrimSpace(string(out)); tenant != "" {
+				args = append(args, "--tenant", tenant)
+			}
+		}
+		cancel()
+		cmd := exec.Command("az", args...)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			msg := strings.TrimSpace(string(out))
