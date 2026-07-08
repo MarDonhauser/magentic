@@ -17,6 +17,7 @@ import { EventsOn, EventsOff, BrowserOpenURL } from '../wailsjs/runtime/runtime'
 const STATUS = {
   running: { color: 'var(--good)', icon: '●', label: 'läuft' },
   agents:  { color: 'var(--info)', icon: '◍', label: 'Agents' },
+  shell:   { color: 'var(--accent)', icon: '⚙', label: 'Shell läuft' },
   blocked: { color: 'var(--warning)', icon: '◆', label: 'wartet' },
   idle:    { color: 'var(--muted)', icon: '○', label: 'idle' },
   exited:  { color: 'var(--ink-2)', icon: '▪', label: 'beendet' },
@@ -25,19 +26,50 @@ const STATUS = {
 };
 
 const PHASE = {
-  deploy:    { color: 'var(--accent)', icon: '🚀', label: 'deployt' },
-  merge:     { color: 'var(--info)',   icon: '🔀', label: 'merge' },
-  cleanup:   { color: 'var(--info)',   icon: '🧹', label: 'cleanup' },
-  committed: { color: 'var(--good)',   icon: '✅', label: 'committed' },
+  deploy:    { color: 'var(--accent)',  icon: '🚀', label: 'deployt' },
+  merge:     { color: 'var(--info)',    icon: '🔀', label: 'merge' },
+  cleanup:   { color: 'var(--info)',    icon: '🧹', label: 'cleanup' },
+  committed: { color: 'var(--good)',    icon: '✓',  label: '' },
+  pipeline:  { color: 'var(--accent)',  icon: '⏳', label: 'Pipeline' },
 };
 
-function agentVisual(a) {
+function normName(s) {
+  return String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function pipelineRunningFor(project) {
+  const running = (deployStatus?.builds || []).filter(b => b.status === 'inProgress' || b.status === 'notStarted');
+  if (!running.length) return false;
+  const pn = normName(project);
+  if (!pn) return false;
+  return running.some(b => {
+    const rn = normName(b.repo);
+    return rn && (rn.includes(pn) || pn.includes(rn));
+  });
+}
+
+function agentVisual(a, project) {
+  const proj = project ?? a?.project;
   const st = STATUS[a?.status] || STATUS.unknown;
+  const alive = ['running', 'agents', 'blocked', 'idle'].includes(a?.status);
+  if (alive && (a?.phase === 'deploy' || a?.phase === 'committed') && pipelineRunningFor(proj)) {
+    const p = PHASE.pipeline;
+    return { color: p.color, icon: p.icon, label: p.label, text: `${p.icon} ${p.label}` };
+  }
   const ph = PHASE[a?.phase];
   if (ph && !['blocked', 'dead', 'exited'].includes(a?.status)) {
-    return { color: ph.color, icon: ph.icon, label: a.phaseLabel ? `${ph.label} ${a.phaseLabel}` : ph.label };
+    const label = ph.label && a.phaseLabel ? `${ph.label} ${a.phaseLabel}` : (a.phaseLabel || ph.label);
+    return { color: ph.color, icon: ph.icon, label, text: `${ph.icon} ${label}` };
   }
-  return { color: st.color, icon: st.icon, label: a?.detail || st.label };
+  if (a?.status === 'blocked' && a?.detail) {
+    return { color: st.color, icon: '🔒', label: a.detail, text: `🔒 ${a.detail}` };
+  }
+  if ((a?.status === 'idle' || a?.status === 'exited') && a?.known) {
+    if (a.ownDirty > 0) return { color: 'var(--warning)', icon: '±', label: `${a.ownDirty} uncommitted`, text: `± ${a.ownDirty} uncommitted` };
+    if (a.ownCommits > 0) return { color: 'var(--good)', icon: '✓', label: 'committed', text: '✓ committed' };
+  }
+  const base = a?.detail || st.label;
+  return { color: st.color, icon: st.icon, label: base, text: base };
 }
 
 const $ = id => document.getElementById(id);
@@ -198,13 +230,13 @@ function agentInfo(name) {
 function updateTermBar() {
   if (view !== 'term' || !activeTerm) return;
   const a = agentInfo(activeTerm);
-  const st = STATUS[a?.status] || STATUS.unknown;
+  const v = agentVisual(a, a?.project);
   const gone = !a || ['exited', 'dead'].includes(a.status);
   termBarEl.innerHTML =
     `<button class="btn tiny" id="tb-back" title="Übersicht (⌘0)">‹ Übersicht</button>` +
-    `<span class="dot" style="background:${st.color}"></span>` +
+    `<span class="dot" style="background:${v.color}"></span>` +
     `<span class="tb-name">${esc(activeTerm)}</span>` +
-    `<span class="tb-st">${esc(a?.detail || st.label)}</span>` +
+    `<span class="tb-st">${esc(v.text)}</span>` +
     (a?.project && a.project !== '(ohne Projekt)' ? `<span class="tb-proj">${esc(a.project)}</span>` : '') +
     `<span class="tb-actions">` +
     `<button class="btn tiny" id="tb-done"${gone ? ' disabled' : ''} title="/done in diese Session senden — committen und auf dev bringen">✓ done</button>` +
@@ -313,7 +345,7 @@ function renderSidebar() {
     }
     sessionsEl.appendChild(head);
     for (const a of agents) {
-      const v = agentVisual(a);
+      const v = agentVisual(a, p.name);
       const idx = sidebarSessions.length;
       sidebarSessions.push(a.name);
       const div = document.createElement('div');
@@ -322,7 +354,7 @@ function renderSidebar() {
       div.innerHTML =
         `<span class="dot" style="background:${v.color}"></span>` +
         `<span class="sname">${esc(a.name)}</span>` +
-        `<span class="sstatus">${esc(v.label)}</span>` +
+        `<span class="sstatus">${esc(v.text)}</span>` +
         `<span class="sage">${esc(a.age)}</span>${key}`;
       div.onclick = () => openSession(a.name);
       div.oncontextmenu = e => {
@@ -371,8 +403,8 @@ function tile(value, label, dotColor, hollow) {
   return `<div class="tile"><div class="val">${value}</div><div class="lbl">${dot}${esc(label)}</div></div>`;
 }
 
-function agentPill(a) {
-  const v = agentVisual(a);
+function agentPill(a, project) {
+  const v = agentVisual(a, project);
   const done = (a.status === 'idle' || a.status === 'running') && !a.phase
     ? `<button class="btn tiny" data-act="done" data-agent="${esc(a.name)}" title="/done — Arbeit committen und auf dev bringen">✓ done</button>`
     : '';
@@ -381,7 +413,7 @@ function agentPill(a) {
     : '';
   return `<span class="pill"><span class="dot" style="background:${v.color}"></span>` +
     `<span class="name">${esc(a.name)}</span>` +
-    `<span class="st">${v.icon} ${esc(v.label)}</span>` +
+    `<span class="st">${esc(v.text)}</span>` +
     `<span class="age">${esc(a.age)}</span>${open}${done}</span>`;
 }
 
@@ -430,7 +462,7 @@ function worktreeRow(p, wt, idx, total) {
   if (!wt.ahead && wt.branch !== p.mainBranch && wt.branch !== '(kein git)' && wt.branch !== '—' && p.path) {
     abHtml += `<span class="git-state" style="color:var(--good)" title="alle Commits sind in ${esc(p.mainBranch)}">✓ in ${esc(p.mainBranch)}</span>`;
   }
-  const agents = (wt.agents || []).map(agentPill).join('');
+  const agents = (wt.agents || []).map(a => agentPill(a, p.name)).join('');
   const warns = (wt.warnings || []).map(w => `<span class="warn"><span class="ic">⚠</span>${esc(w)}</span>`).join('');
   const pathHtml = wt.isMain ? '' : `<span class="wt-path" title="${esc(wt.path)}">${esc(wt.shortPath)}</span>`;
   const last = wt.lastMsg ? `<span class="lastmsg" title="letzter Commit">„${esc(wt.lastMsg)}“</span>` : '';

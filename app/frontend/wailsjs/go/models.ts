@@ -9,6 +9,9 @@ export namespace core {
 	    worktree: boolean;
 	    phase?: string;
 	    phaseLabel?: string;
+	    known: boolean;
+	    ownDirty: number;
+	    ownCommits: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new OvAgent(source);
@@ -24,6 +27,9 @@ export namespace core {
 	        this.worktree = source["worktree"];
 	        this.phase = source["phase"];
 	        this.phaseLabel = source["phaseLabel"];
+	        this.known = source["known"];
+	        this.ownDirty = source["ownDirty"];
+	        this.ownCommits = source["ownCommits"];
 	    }
 	}
 	export class OvWorktree {

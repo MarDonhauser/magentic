@@ -30,12 +30,14 @@ func StatusRank(s AgentStatus) int {
 		return 1
 	case StatusAgents:
 		return 2
-	case StatusIdle:
+	case StatusShell:
 		return 3
-	case StatusExited:
+	case StatusIdle:
 		return 4
-	case StatusDead:
+	case StatusExited:
 		return 5
+	case StatusDead:
+		return 6
 	}
-	return 6
+	return 7
 }

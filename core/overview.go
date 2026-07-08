@@ -16,6 +16,9 @@ type OvAgent struct {
 	Worktree   bool   `json:"worktree"`
 	Phase      string `json:"phase,omitempty"`
 	PhaseLabel string `json:"phaseLabel,omitempty"`
+	Known      bool   `json:"known"`
+	OwnDirty   int    `json:"ownDirty"`
+	OwnCommits int    `json:"ownCommits"`
 }
 
 type OvWorktree struct {
@@ -63,6 +66,8 @@ func statusKey(s AgentStatus) string {
 		return "running"
 	case StatusAgents:
 		return "agents"
+	case StatusShell:
+		return "shell"
 	case StatusBlocked:
 		return "blocked"
 	case StatusIdle:
@@ -76,13 +81,14 @@ func statusKey(s AgentStatus) string {
 }
 
 func agentAlive(s AgentStatus) bool {
-	return s == StatusRunning || s == StatusAgents || s == StatusBlocked || s == StatusIdle
+	return s == StatusRunning || s == StatusAgents || s == StatusShell || s == StatusBlocked || s == StatusIdle
 }
 
 func BuildOverview(s *State) Overview {
 	for _, a := range DiscoverNew(s) {
 		s.AddAgent(a)
 	}
+	gitCache := map[string]GitInfo{}
 	statuses, contents, activity := CollectStatuses(s.Agents)
 	kept := s.Agents[:0]
 	removed := false
@@ -127,7 +133,7 @@ func BuildOverview(s *State) Overview {
 			proj.MainConfigured = true
 		}
 		for i, wt := range wts {
-			owt := buildWorktree(s, statuses, activity, contents, assigned, wt, i == 0, proj.MainBranch)
+			owt := buildWorktree(s, statuses, activity, contents, assigned, wt, i == 0, proj.MainBranch, gitCache)
 			proj.Worktrees = append(proj.Worktrees, owt)
 		}
 		for _, a := range s.AgentsFor(p.Name) {
@@ -135,7 +141,7 @@ func BuildOverview(s *State) Overview {
 				continue
 			}
 			assigned[a.Name] = true
-			proj.Worktrees[0].Agents = append(proj.Worktrees[0].Agents, toOvAgent(a, statuses, activity, contents, proj.MainBranch))
+			proj.Worktrees[0].Agents = append(proj.Worktrees[0].Agents, toOvAgent(a, statuses, activity, contents, proj.MainBranch, gitCache))
 		}
 		finishWarnings(&proj, statuses, s)
 		ov.Projects = append(ov.Projects, proj)
@@ -151,7 +157,7 @@ func BuildOverview(s *State) Overview {
 			continue
 		}
 		hasOrphans = true
-		orphanWt.Agents = append(orphanWt.Agents, toOvAgent(a, statuses, activity, contents, ""))
+		orphanWt.Agents = append(orphanWt.Agents, toOvAgent(a, statuses, activity, contents, "", gitCache))
 	}
 	if hasOrphans {
 		orphanWt.Branch = "—"
@@ -173,8 +179,17 @@ func BuildOverview(s *State) Overview {
 	return ov
 }
 
-func buildWorktree(s *State, statuses map[string]AgentStatus, activity map[string]time.Time, contents map[string]string, assigned map[string]bool, wt WorktreeInfo, isMain bool, mainBranch string) OvWorktree {
-	git := CollectGitInfo(wt.Path)
+func cachedGit(cache map[string]GitInfo, dir string) GitInfo {
+	if gi, ok := cache[dir]; ok {
+		return gi
+	}
+	gi := CollectGitInfo(dir)
+	cache[dir] = gi
+	return gi
+}
+
+func buildWorktree(s *State, statuses map[string]AgentStatus, activity map[string]time.Time, contents map[string]string, assigned map[string]bool, wt WorktreeInfo, isMain bool, mainBranch string, gitCache map[string]GitInfo) OvWorktree {
+	git := cachedGit(gitCache, wt.Path)
 	owt := OvWorktree{
 		Path:      wt.Path,
 		ShortPath: ShortPath(wt.Path),
@@ -200,23 +215,32 @@ func buildWorktree(s *State, statuses map[string]AgentStatus, activity map[strin
 	for _, a := range s.Agents {
 		if a.Dir == wt.Path && !assigned[a.Name] {
 			assigned[a.Name] = true
-			owt.Agents = append(owt.Agents, toOvAgent(a, statuses, activity, contents, mainBranch))
+			owt.Agents = append(owt.Agents, toOvAgent(a, statuses, activity, contents, mainBranch, gitCache))
 		}
 	}
 	return owt
 }
 
-func toOvAgent(a Agent, statuses map[string]AgentStatus, activity map[string]time.Time, contents map[string]string, mainBranch string) OvAgent {
+func toOvAgent(a Agent, statuses map[string]AgentStatus, activity map[string]time.Time, contents map[string]string, mainBranch string, gitCache map[string]GitInfo) OvAgent {
 	st := statuses[a.Name]
 	lastActive := a.CreatedAt
 	if act, ok := activity[a.Name]; ok {
 		lastActive = act
 	}
 	detail := ""
-	if st == StatusAgents {
+	switch st {
+	case StatusAgents:
 		detail = AgentsDetail(BackgroundAgentCount(LastLines(contents[a.Name], 25)))
+	case StatusShell:
+		detail = ShellDetail(BackgroundShellCount(LastLines(contents[a.Name], 25)))
+	case StatusBlocked:
+		detail = BlockedDetail(LastLines(contents[a.Name], 25))
 	}
 	phase, phaseLabel := agentPhase(a, mainBranch, agentAlive(st))
+	var sc SessionChanges
+	if gi := cachedGit(gitCache, a.Dir); gi.IsRepo {
+		sc = CollectSessionChanges(a, gi)
+	}
 	return OvAgent{
 		Name:       a.Name,
 		Status:     statusKey(st),
@@ -226,6 +250,9 @@ func toOvAgent(a Agent, statuses map[string]AgentStatus, activity map[string]tim
 		Worktree:   a.Worktree,
 		Phase:      phase,
 		PhaseLabel: phaseLabel,
+		Known:      sc.Known,
+		OwnDirty:   len(sc.Files),
+		OwnCommits: sc.Commits,
 	}
 }
 
@@ -269,7 +296,7 @@ func agentPhase(a Agent, mainBranch string, alive bool) (string, string) {
 	if ts == 0 || time.Since(time.Unix(ts, 0)) > 15*time.Minute {
 		return "", ""
 	}
-	return "committed", "→ " + branch
+	return "committed", branch
 }
 
 func finishWarnings(proj *OvProject, statuses map[string]AgentStatus, s *State) {

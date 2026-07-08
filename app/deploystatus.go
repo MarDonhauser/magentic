@@ -172,7 +172,8 @@ func (a *App) DeployStatus() DeployStatus {
 			org, proj := pair[0], pair[1]
 			out, err := runCmd(ctx, "az", "pipelines", "runs", "list",
 				"--organization", "https://dev.azure.com/"+org,
-				"--project", proj, "--top", "8", "-o", "json")
+				"--project", proj, "--top", "8",
+				"--status", "all", "--query-order", "QueueTimeDesc", "-o", "json")
 			if err != nil {
 				ds.AzErr = shortLoginErr(err.Error())
 				return

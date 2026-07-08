@@ -129,9 +129,9 @@ func (m *model) handleStatusChanges(old map[string]AgentStatus) {
 		if !seen || prev == st {
 			continue
 		}
-		if st == StatusBlocked && (prev == StatusRunning || prev == StatusAgents || prev == StatusIdle) {
+		if st == StatusBlocked && (prev == StatusRunning || prev == StatusAgents || prev == StatusShell || prev == StatusIdle) {
 			notifyDesktop("magentic · "+name, "Agent wartet auf deine Eingabe", "Glass")
-		} else if (prev == StatusRunning || prev == StatusAgents) && st == StatusIdle {
+		} else if (prev == StatusRunning || prev == StatusAgents || prev == StatusShell) && st == StatusIdle {
 			m.notifyPending[name] = StatusIdle
 		}
 	}
@@ -281,6 +281,11 @@ func pollCmd(state State, selected *Agent) tea.Cmd {
 			if st == StatusAgents {
 				if n := backgroundAgentCount(lastLines(contents[name], 25)); n > 0 {
 					res.details[name] = agentsDetail(n)
+				}
+			}
+			if st == StatusShell {
+				if n := backgroundShellCount(lastLines(contents[name], 25)); n > 0 {
+					res.details[name] = shellDetail(n)
 				}
 			}
 		}

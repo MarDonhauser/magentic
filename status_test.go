@@ -30,6 +30,10 @@ func TestDetectClaudeStatus(t *testing.T) {
 		{"agent tree fertig ist idle", true, "2.1.198", "❯ \n  ⏺ main\n  ◉ Explore  Comparing llm-classifier   4m 2s · ↓ 51.4k tokens", StatusIdle},
 		{"launched-zeile allein ist idle", true, "2.1.198", "⏺ 2 background agents launched (↓ to manage)\n❯ ", StatusIdle},
 		{"tree aber hauptloop läuft", true, "2.1.198", "✢ Suche toten Code… (9m 24s)\n❯ \n  ⏺ main\n  ◯ Explore  Dead-Code-Suche   1m 2s", StatusRunning},
+		{"background shell läuft", true, "2.1.198", "✻ Churned for 4m 0s · 1 shell still running\n❯ warte auf das ergebnis\n  ⏵⏵ auto mode on · ← for agents · 1 shell", StatusShell},
+		{"background shell nur statusleiste", true, "2.1.198", "❯ \n  ⏵⏵ auto mode on · ← for agents · 2 shells", StatusShell},
+		{"shell aber hauptloop läuft", true, "2.1.198", "✳ Puttering… (esc to interrupt)\n❯ \n  ⏵⏵ auto mode on · ← for agents · 1 shell", StatusRunning},
+		{"synchroner shell-befehl ohne spinner ist idle", true, "2.1.198", "⏺ running 1 shell command…\n❯ \n  🌿 main", StatusIdle},
 	}
 	for _, c := range cases {
 		got := DetectClaudeStatus(c.exists, c.cmd, c.content)
@@ -52,6 +56,25 @@ func TestBackgroundAgentCount(t *testing.T) {
 	}
 	for _, c := range cases {
 		if got := backgroundAgentCount(c.content); got != c.want {
+			t.Errorf("%s: got %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+func TestBackgroundShellCount(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    int
+	}{
+		{"keine shell", "❯ ", 0},
+		{"still running singular", "✻ Churned for 4m 0s · 1 shell still running", 1},
+		{"statusleiste singular", "  ⏵⏵ auto mode on · ← for agents · 1 shell", 1},
+		{"statusleiste plural", "  ⏵⏵ auto mode on · ← for agents · 3 shells", 3},
+		{"synchroner befehl zählt nicht", "⏺ running 1 shell command…", 0},
+	}
+	for _, c := range cases {
+		if got := backgroundShellCount(c.content); got != c.want {
 			t.Errorf("%s: got %d, want %d", c.name, got, c.want)
 		}
 	}

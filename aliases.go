@@ -20,6 +20,7 @@ const (
 	StatusUnknown = core.StatusUnknown
 	StatusRunning = core.StatusRunning
 	StatusAgents  = core.StatusAgents
+	StatusShell   = core.StatusShell
 	StatusBlocked = core.StatusBlocked
 	StatusIdle    = core.StatusIdle
 	StatusExited  = core.StatusExited
@@ -49,6 +50,8 @@ var (
 	notifyDesktop        = core.NotifyDesktop
 	backgroundAgentCount = core.BackgroundAgentCount
 	agentsDetail         = core.AgentsDetail
+	backgroundShellCount = core.BackgroundShellCount
+	shellDetail          = core.ShellDetail
 
 	gitCmd                = core.GitCmd
 	CollectGitInfo        = core.CollectGitInfo

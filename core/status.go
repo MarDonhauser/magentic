@@ -14,6 +14,7 @@ const (
 	StatusUnknown AgentStatus = iota
 	StatusRunning
 	StatusAgents
+	StatusShell
 	StatusBlocked
 	StatusIdle
 	StatusExited
@@ -26,6 +27,8 @@ func (s AgentStatus) Label() string {
 		return "läuft"
 	case StatusAgents:
 		return "Agents"
+	case StatusShell:
+		return "Shell läuft"
 	case StatusBlocked:
 		return "wartet"
 	case StatusIdle:
@@ -44,6 +47,8 @@ func (s AgentStatus) Icon() string {
 		return "●"
 	case StatusAgents:
 		return "◍"
+	case StatusShell:
+		return "⚙"
 	case StatusBlocked:
 		return "◆"
 	case StatusIdle:
@@ -82,6 +87,31 @@ func AgentsDetail(n int) string {
 	return fmt.Sprintf("wartet auf %d Agents", n)
 }
 
+var bgShellRe = regexp.MustCompile(`(?i)(\d+)\s+shells?\s+still\s+running`)
+var bgShellBarRe = regexp.MustCompile(`(?im)·\s+(\d+)\s+shells?\s*$`)
+
+func BackgroundShellCount(content string) int {
+	if m := bgShellRe.FindStringSubmatch(content); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		return n
+	}
+	if m := bgShellBarRe.FindStringSubmatch(content); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		return n
+	}
+	return 0
+}
+
+func ShellDetail(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if n == 1 {
+		return "1 Shell läuft"
+	}
+	return fmt.Sprintf("%d Shells laufen", n)
+}
+
 var spinnerRe = regexp.MustCompile(`(?m)^\s*[·✢✳✶✻✽✺✹✸✷+*]\s+[^\n…]{1,80}…`)
 
 var runningPatterns = []string{
@@ -105,6 +135,30 @@ var blockedPatterns = []string{
 var shellCommands = map[string]bool{
 	"zsh": true, "bash": true, "fish": true, "sh": true,
 	"-zsh": true, "-bash": true, "login": true,
+}
+
+var permissionDetails = []struct {
+	label    string
+	patterns []string
+}{
+	{"Ordner-Freigabe", []string{"trust this folder", "do you trust the files"}},
+	{"Datei-Freigabe", []string{"make this edit", "edit this file", "edit file", "create this file", "create file", "write this file", "write file", "apply this change"}},
+	{"Shell-Freigabe", []string{"bash command", "shell command", "run this command", "run the following command", "execute this command"}},
+}
+
+func BlockedDetail(content string) string {
+	lc := strings.ToLower(content)
+	for _, d := range permissionDetails {
+		for _, p := range d.patterns {
+			if strings.Contains(lc, p) {
+				return d.label
+			}
+		}
+	}
+	if strings.Contains(lc, "don't ask again") || strings.Contains(lc, "dont ask again") {
+		return "Freigabe"
+	}
+	return ""
 }
 
 func LastLines(s string, n int) string {
@@ -159,6 +213,9 @@ func DetectClaudeStatus(sessionExists bool, paneCommand, paneContent string) Age
 	}
 	if bgAgentsRe.MatchString(paneContent) || agentTreeRe.MatchString(paneContent) {
 		return StatusAgents
+	}
+	if BackgroundShellCount(paneContent) > 0 {
+		return StatusShell
 	}
 	return StatusIdle
 }

@@ -37,6 +37,8 @@ func statusStyle(s AgentStatus) lipgloss.Style {
 		return lipgloss.NewStyle().Foreground(colRunning)
 	case StatusAgents:
 		return lipgloss.NewStyle().Foreground(colAgents)
+	case StatusShell:
+		return lipgloss.NewStyle().Foreground(colAgents)
 	case StatusBlocked:
 		return lipgloss.NewStyle().Foreground(colBlocked).Bold(true)
 	case StatusDead:
