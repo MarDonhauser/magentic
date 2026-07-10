@@ -12,7 +12,7 @@ import {
   WorktreeDiff, SessionPreview, SearchTranscripts, SetActiveTerm,
   PickFolder, AddProject, RemoveProject, SaveImage, Timeline,
 } from '../wailsjs/go/main/App';
-import { EventsOn, EventsOff, BrowserOpenURL } from '../wailsjs/runtime/runtime';
+import { EventsOn, EventsOff, BrowserOpenURL, ClipboardSetText } from '../wailsjs/runtime/runtime';
 
 const STATUS = {
   running: { color: 'var(--good)', icon: '●', label: 'läuft' },
@@ -172,6 +172,25 @@ function makeTerm(name) {
   }, { passive: true });
   term.onData(d => WriteTerm(name, toB64(d)));
   term.onResize(({ cols, rows }) => ResizeTerm(name, cols, rows));
+
+  let lastSel = '';
+  let lastSelAt = 0;
+  term.onSelectionChange(() => {
+    const s = term.getSelection();
+    if (s) { lastSel = s; lastSelAt = Date.now(); }
+  });
+  term.attachCustomKeyEventHandler(e => {
+    if (e.type === 'keydown' && e.metaKey && !e.ctrlKey && !e.altKey && e.key.toLowerCase() === 'c') {
+      const s = term.getSelection() || (Date.now() - lastSelAt < 30000 ? lastSel : '');
+      if (s) {
+        ClipboardSetText(s);
+        toast('kopiert ✓');
+        e.preventDefault();
+        return false;
+      }
+    }
+    return true;
+  });
 
   wrap.addEventListener('paste', async e => {
     const items = e.clipboardData?.items || [];
@@ -940,14 +959,22 @@ overviewEl.addEventListener('keydown', e => {
 });
 
 let refreshing = false;
+let lastDataKey = '';
 async function refresh(force) {
   if (refreshing && !force) return;
   refreshing = true;
   try {
-    const [o, t, p] = await Promise.all([Overview(), Todos(), Projects()]);
+    const [o, t, p] = await Promise.all([Overview(!!force), Todos(), Projects()]);
     ov = o; todos = t || []; projects = p || [];
-    if (editingTodo < 0 && editingMain === null || force) renderAll();
-    else renderSidebar();
+    const key = JSON.stringify([{ ...o, generatedAt: '' }, todos, projects]);
+    if (key === lastDataKey && !force) {
+      const stamp = document.querySelector('.stamp');
+      if (stamp) stamp.textContent = 'Stand ' + (o.generatedAt || '');
+    } else {
+      lastDataKey = key;
+      if (editingTodo < 0 && editingMain === null || force) renderAll();
+      else renderSidebar();
+    }
   } catch (e) { /* Backend noch nicht bereit */ }
   refreshing = false;
 }
@@ -1088,7 +1115,7 @@ function tlToggle(open) {
   tlTimer = null;
   if (willOpen) {
     refreshTimeline();
-    tlTimer = setInterval(refreshTimeline, 60000);
+    tlTimer = setInterval(() => { if (!document.hidden) refreshTimeline(); }, 60000);
   }
   refitTerms();
 }
@@ -1268,10 +1295,17 @@ window.addEventListener('keydown', e => {
 }, true);
 
 refresh(true);
-setInterval(() => refresh(false), 3000);
+setInterval(() => { if (!document.hidden) refresh(false); }, 3000);
 refreshDeployStatus();
 let dsTick = 0;
 setInterval(() => {
   dsTick++;
+  if (document.hidden && Date.now() >= dsWatchUntil) return;
   if (Date.now() < dsWatchUntil || dsTick % 3 === 0) refreshDeployStatus();
 }, 10000);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    refresh(false);
+    refreshDeployStatus();
+  }
+});

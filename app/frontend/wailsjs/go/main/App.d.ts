@@ -35,7 +35,7 @@ export function NewSession(arg1:string,arg2:boolean,arg3:string):Promise<string>
 
 export function OpenTerm(arg1:string,arg2:number,arg3:number):Promise<void>;
 
-export function Overview():Promise<core.Overview>;
+export function Overview(arg1:boolean):Promise<core.Overview>;
 
 export function PickFolder():Promise<string>;
 

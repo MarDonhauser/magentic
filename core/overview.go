@@ -90,8 +90,12 @@ func BuildOverview(s *State) Overview {
 	for _, a := range DiscoverNew(s) {
 		s.AddAgent(a)
 	}
-	gitCache := map[string]GitInfo{}
 	statuses, contents, activity := CollectStatuses(s.Agents)
+	return BuildOverviewFrom(s, statuses, contents, activity)
+}
+
+func BuildOverviewFrom(s *State, statuses map[string]AgentStatus, contents map[string]string, activity map[string]time.Time) Overview {
+	gitCache := map[string]GitInfo{}
 	kept := s.Agents[:0]
 	removed := false
 	for _, a := range s.Agents {
@@ -126,7 +130,7 @@ func BuildOverview(s *State) Overview {
 
 	for _, p := range s.Projects {
 		proj := OvProject{Name: p.Name, Path: p.Path}
-		wts := CollectWorktrees(p.Path)
+		wts := CollectWorktreesCached(p.Path)
 		if len(wts) == 0 {
 			wts = []WorktreeInfo{{Path: p.Path, Branch: ""}}
 		}
@@ -187,7 +191,7 @@ func cachedGit(cache map[string]GitInfo, dir string) GitInfo {
 	if gi, ok := cache[dir]; ok {
 		return gi
 	}
-	gi := CollectGitInfo(dir)
+	gi := CollectGitInfoCached(dir)
 	cache[dir] = gi
 	return gi
 }
@@ -214,7 +218,7 @@ func buildWorktree(s *State, statuses map[string]AgentStatus, activity map[strin
 		}
 	}
 	if owt.Branch != mainBranch && mainBranch != "" && mainBranch != "(detached)" && git.IsRepo {
-		owt.Ahead, owt.Behind = AheadBehind(wt.Path, mainBranch)
+		owt.Ahead, owt.Behind = AheadBehindCached(wt.Path, mainBranch)
 	}
 	for _, a := range s.Agents {
 		if a.Dir == wt.Path && !assigned[a.Name] {
@@ -243,7 +247,7 @@ func toOvAgent(a Agent, statuses map[string]AgentStatus, activity map[string]tim
 	phase, phaseLabel := agentPhase(a, mainBranch, agentAlive(st))
 	var sc SessionChanges
 	if gi := cachedGit(gitCache, a.Dir); gi.IsRepo {
-		sc = CollectSessionChanges(a, gi)
+		sc = CollectSessionChangesCached(a, gi)
 	}
 	return OvAgent{
 		Name:       a.Name,
@@ -278,7 +282,7 @@ func agentPhase(a Agent, mainBranch string, alive bool) (string, string) {
 	if a.BaseCommit == "" {
 		return "", ""
 	}
-	branch, err := GitCmd(a.Dir, "rev-parse", "--abbrev-ref", "HEAD")
+	branch, err := GitCmdCached(a.Dir, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		return "", ""
 	}
@@ -286,14 +290,14 @@ func agentPhase(a Agent, mainBranch string, alive bool) (string, string) {
 	if branch == "" || (branch != mainBranch && !integrationBranches[branch]) {
 		return "", ""
 	}
-	cnt, err := GitCmd(a.Dir, "rev-list", "--count", a.BaseCommit+"..HEAD")
+	cnt, err := GitCmdCached(a.Dir, "rev-list", "--count", a.BaseCommit+"..HEAD")
 	if err != nil {
 		return "", ""
 	}
 	if n := strings.TrimSpace(cnt); n == "" || n == "0" {
 		return "", ""
 	}
-	tsRaw, err := GitCmd(a.Dir, "log", "-1", "--format=%ct")
+	tsRaw, err := GitCmdCached(a.Dir, "log", "-1", "--format=%ct")
 	if err != nil {
 		return "", ""
 	}

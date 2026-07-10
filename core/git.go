@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 )
 
 type GitInfo struct {
@@ -28,15 +30,58 @@ type WorktreeInfo struct {
 	Branch string
 }
 
+type gitRunner func(dir string, args ...string) (string, error)
+
 func GitCmd(dir string, args ...string) (string, error) {
 	full := append([]string{"-C", dir}, args...)
 	out, err := exec.Command("git", full...).Output()
 	return string(out), err
 }
 
+type gitMemoEntry struct {
+	out string
+	err error
+	at  time.Time
+}
+
+var (
+	gitMemoMu  sync.Mutex
+	gitMemo    = map[string]gitMemoEntry{}
+	gitMemoTTL = 10 * time.Second
+)
+
+func FlushGitMemo() {
+	gitMemoMu.Lock()
+	gitMemo = map[string]gitMemoEntry{}
+	gitMemoMu.Unlock()
+}
+
+func GitCmdCached(dir string, args ...string) (string, error) {
+	key := dir + "\x00" + strings.Join(args, "\x00")
+	gitMemoMu.Lock()
+	e, ok := gitMemo[key]
+	gitMemoMu.Unlock()
+	if ok && time.Since(e.at) < gitMemoTTL {
+		return e.out, e.err
+	}
+	out, err := GitCmd(dir, args...)
+	gitMemoMu.Lock()
+	gitMemo[key] = gitMemoEntry{out: out, err: err, at: time.Now()}
+	gitMemoMu.Unlock()
+	return out, err
+}
+
 func CollectGitInfo(dir string) GitInfo {
+	return collectGitInfo(dir, GitCmd)
+}
+
+func CollectGitInfoCached(dir string) GitInfo {
+	return collectGitInfo(dir, GitCmdCached)
+}
+
+func collectGitInfo(dir string, run gitRunner) GitInfo {
 	info := GitInfo{}
-	out, err := GitCmd(dir, "status", "--porcelain=v2", "--branch")
+	out, err := run(dir, "status", "--porcelain=v2", "--branch")
 	if err != nil {
 		return info
 	}
@@ -74,7 +119,7 @@ func CollectGitInfo(dir string) GitInfo {
 			info.Files = append(info.Files, line[2:])
 		}
 	}
-	if msg, err := GitCmd(dir, "log", "-1", "--format=%s"); err == nil {
+	if msg, err := run(dir, "log", "-1", "--format=%s"); err == nil {
 		info.LastMsg = strings.TrimSpace(msg)
 	}
 	return info
@@ -96,6 +141,14 @@ func CaptureBaseline(dir string) (string, []string) {
 }
 
 func CollectSessionChanges(a Agent, gi GitInfo) SessionChanges {
+	return collectSessionChanges(a, gi, GitCmd)
+}
+
+func CollectSessionChangesCached(a Agent, gi GitInfo) SessionChanges {
+	return collectSessionChanges(a, gi, GitCmdCached)
+}
+
+func collectSessionChanges(a Agent, gi GitInfo, run gitRunner) SessionChanges {
 	sc := SessionChanges{Known: a.BaseCommit != ""}
 	if !sc.Known {
 		sc.Files = gi.Files
@@ -110,14 +163,22 @@ func CollectSessionChanges(a Agent, gi GitInfo) SessionChanges {
 			sc.Files = append(sc.Files, f)
 		}
 	}
-	if out, err := GitCmd(a.Dir, "rev-list", "--count", a.BaseCommit+"..HEAD"); err == nil {
+	if out, err := run(a.Dir, "rev-list", "--count", a.BaseCommit+"..HEAD"); err == nil {
 		fmt.Sscanf(strings.TrimSpace(out), "%d", &sc.Commits)
 	}
 	return sc
 }
 
 func AheadBehind(dir, baseBranch string) (ahead, behind int) {
-	out, err := GitCmd(dir, "rev-list", "--left-right", "--count", baseBranch+"...HEAD")
+	return aheadBehind(dir, baseBranch, GitCmd)
+}
+
+func AheadBehindCached(dir, baseBranch string) (ahead, behind int) {
+	return aheadBehind(dir, baseBranch, GitCmdCached)
+}
+
+func aheadBehind(dir, baseBranch string, run gitRunner) (ahead, behind int) {
+	out, err := run(dir, "rev-list", "--left-right", "--count", baseBranch+"...HEAD")
 	if err != nil {
 		return 0, 0
 	}
@@ -126,7 +187,15 @@ func AheadBehind(dir, baseBranch string) (ahead, behind int) {
 }
 
 func CollectWorktrees(projectPath string) []WorktreeInfo {
-	out, err := GitCmd(projectPath, "worktree", "list", "--porcelain")
+	return collectWorktrees(projectPath, GitCmd)
+}
+
+func CollectWorktreesCached(projectPath string) []WorktreeInfo {
+	return collectWorktrees(projectPath, GitCmdCached)
+}
+
+func collectWorktrees(projectPath string, run gitRunner) []WorktreeInfo {
+	out, err := run(projectPath, "worktree", "list", "--porcelain")
 	if err != nil {
 		return nil
 	}

@@ -66,8 +66,8 @@ export function OpenTerm(arg1, arg2, arg3) {
   return window['go']['main']['App']['OpenTerm'](arg1, arg2, arg3);
 }
 
-export function Overview() {
-  return window['go']['main']['App']['Overview']();
+export function Overview(arg1) {
+  return window['go']['main']['App']['Overview'](arg1);
 }
 
 export function PickFolder() {

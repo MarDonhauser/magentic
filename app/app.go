@@ -18,12 +18,17 @@ import (
 )
 
 type App struct {
-	ctx        context.Context
-	mu         sync.Mutex
-	terms      map[string]*ptyTerm
-	activeTerm string
-	dsMu       sync.Mutex
-	dsPrev     *DeployStatus
+	ctx           context.Context
+	mu            sync.Mutex
+	terms         map[string]*ptyTerm
+	activeTerm    string
+	dsMu          sync.Mutex
+	dsPrev        *DeployStatus
+	statusMu      sync.Mutex
+	statusCache   map[string]core.AgentStatus
+	contentCache  map[string]string
+	activityCache map[string]time.Time
+	statusAt      time.Time
 }
 
 type ptyTerm struct {
@@ -91,12 +96,25 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 }
 
-func (a *App) Overview() (core.Overview, error) {
+func (a *App) Overview(fresh bool) (core.Overview, error) {
 	st, err := core.LoadState()
 	if err != nil {
 		return core.Overview{}, err
 	}
-	return core.BuildOverview(st), nil
+	for _, ag := range core.DiscoverNew(st) {
+		st.AddAgent(ag)
+	}
+	var statuses map[string]core.AgentStatus
+	var contents map[string]string
+	var activity map[string]time.Time
+	if fresh {
+		core.FlushGitMemo()
+		statuses, contents, activity = core.CollectStatuses(st.Agents)
+		a.storeStatuses(statuses, contents, activity)
+	} else {
+		statuses, contents, activity = a.statusesFor(st.Agents)
+	}
+	return core.BuildOverviewFrom(st, statuses, contents, activity), nil
 }
 
 type TodoInfo struct {
