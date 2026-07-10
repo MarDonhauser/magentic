@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -112,10 +113,133 @@ func (a *App) SearchTranscripts(query string) ([]SearchHit, error) {
 	return hits, nil
 }
 
+type TimelineEntry struct {
+	Agent   string `json:"agent"`
+	Project string `json:"project"`
+	Day     string `json:"day"`
+	Time    string `json:"time"`
+	TimeRaw string `json:"timeRaw"`
+	Text    string `json:"text"`
+}
+
+var tlWeekdays = map[time.Weekday]string{
+	time.Monday: "Mo", time.Tuesday: "Di", time.Wednesday: "Mi",
+	time.Thursday: "Do", time.Friday: "Fr", time.Saturday: "Sa", time.Sunday: "So",
+}
+
+func (a *App) Timeline() ([]TimelineEntry, error) {
+	home, _ := os.UserHomeDir()
+	base := filepath.Join(home, ".claude", "projects")
+	dirs, err := os.ReadDir(base)
+	if err != nil {
+		return nil, err
+	}
+	sidToAgent := map[string]string{}
+	if st, err := core.LoadState(); err == nil {
+		for _, ag := range st.Agents {
+			if ag.SessionID != "" {
+				sidToAgent[ag.SessionID] = ag.Name
+			}
+		}
+	}
+	cutoff := time.Now().AddDate(0, 0, -7)
+	var out []TimelineEntry
+	for _, d := range dirs {
+		if !d.IsDir() {
+			continue
+		}
+		project := decodeProjectDir(d.Name(), home)
+		files, _ := filepath.Glob(filepath.Join(base, d.Name(), "*.jsonl"))
+		for _, f := range files {
+			fi, err := os.Stat(f)
+			if err != nil || fi.ModTime().Before(cutoff) {
+				continue
+			}
+			sid := strings.TrimSuffix(filepath.Base(f), ".jsonl")
+			out = append(out, scanUserPrompts(f, project, sidToAgent[sid], cutoff)...)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].TimeRaw > out[j].TimeRaw })
+	seen := map[string]bool{}
+	kept := out[:0]
+	for _, e := range out {
+		prefix := e.Text
+		if len(prefix) > 80 {
+			prefix = prefix[:80]
+		}
+		k := e.Day + e.Time + "|" + prefix
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		kept = append(kept, e)
+	}
+	out = kept
+	if len(out) > 150 {
+		out = out[:150]
+	}
+	return out, nil
+}
+
+func scanUserPrompts(path, project, agent string, cutoff time.Time) []TimelineEntry {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	var entries []TimelineEntry
+	userMark := []byte(`"type":"user"`)
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1024*1024), 32*1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if !bytes.Contains(line, userMark) {
+			continue
+		}
+		var entry struct {
+			Type        string `json:"type"`
+			Timestamp   string `json:"timestamp"`
+			IsSidechain bool   `json:"isSidechain"`
+			IsMeta      bool   `json:"isMeta"`
+			Message     struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(line, &entry) != nil {
+			continue
+		}
+		if entry.Type != "user" || entry.IsSidechain || entry.IsMeta {
+			continue
+		}
+		text := strings.TrimSpace(extractText(entry.Message.Content))
+		if text == "" || strings.HasPrefix(text, "<") ||
+			strings.HasPrefix(text, "[Request interrupted") || strings.HasPrefix(text, "Caveat:") {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339, entry.Timestamp)
+		if err != nil || t.Before(cutoff) {
+			continue
+		}
+		lt := t.Local()
+		entries = append(entries, TimelineEntry{
+			Agent:   agent,
+			Project: project,
+			Day:     tlWeekdays[lt.Weekday()] + " " + lt.Format("02.01."),
+			Time:    lt.Format("15:04"),
+			TimeRaw: entry.Timestamp,
+			Text:    capStr(text, 500),
+		})
+	}
+	return entries
+}
+
 func decodeProjectDir(dir, home string) string {
-	prefix := strings.ReplaceAll(home, "/", "-") + "-Projects-"
-	if strings.HasPrefix(dir, prefix) {
+	homeEnc := strings.ReplaceAll(home, "/", "-")
+	if prefix := homeEnc + "-Projects-"; strings.HasPrefix(dir, prefix) {
 		return strings.TrimPrefix(dir, prefix)
+	}
+	if strings.HasPrefix(dir, homeEnc+"-") {
+		return strings.TrimPrefix(dir, homeEnc+"-")
 	}
 	return strings.TrimPrefix(dir, "-")
 }

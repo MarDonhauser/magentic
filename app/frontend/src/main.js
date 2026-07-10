@@ -10,7 +10,7 @@ import {
   OpenTerm, WriteTerm, ResizeTerm, KillSession, SendSkill,
   DeployStatus, AzLogin, ArgoLogin, AzAccounts, AzSetSubscription,
   WorktreeDiff, SessionPreview, SearchTranscripts, SetActiveTerm,
-  PickFolder, AddProject, RemoveProject, SaveImage,
+  PickFolder, AddProject, RemoveProject, SaveImage, Timeline,
 } from '../wailsjs/go/main/App';
 import { EventsOn, EventsOff, BrowserOpenURL } from '../wailsjs/runtime/runtime';
 
@@ -52,7 +52,7 @@ function agentVisual(a, project) {
   const proj = project ?? a?.project;
   const st = STATUS[a?.status] || STATUS.unknown;
   const alive = ['running', 'agents', 'blocked', 'idle'].includes(a?.status);
-  if (alive && (a?.phase === 'deploy' || a?.phase === 'committed') && pipelineRunningFor(proj)) {
+  if (alive && (a?.phase === 'deploy' || a?.deployed) && pipelineRunningFor(proj)) {
     const p = PHASE.pipeline;
     return { color: p.color, icon: p.icon, label: p.label, text: `${p.icon} ${p.label}` };
   }
@@ -89,6 +89,7 @@ let confirmRemove = null;
 let confirmRemoveProject = null;
 let editingMain = null;
 let sidebarSessions = [];
+let hydraProject = null;
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -241,12 +242,17 @@ function updateTermBar() {
     `<span class="tb-actions">` +
     `<button class="btn tiny" id="tb-done"${gone ? ' disabled' : ''} title="/done in diese Session senden — committen und auf dev bringen">✓ done</button>` +
     `<button class="btn tiny" id="tb-deploy"${gone ? ' disabled' : ''} title="/deploy in diese Session senden">🚀 deploy</button>` +
+    `<button class="btn tiny" id="tb-dd"${gone ? ' disabled' : ''} title="/done senden und danach automatisch /deploy">✓+🚀 beides</button>` +
     `<button class="btn tiny danger" id="tb-kill" title="Session beenden (⌘⇧W)">✗</button></span>`;
   $('tb-back').onclick = showOverview;
   $('tb-done').onclick = () =>
     act(DoneAgent(activeTerm), `/done an „${activeTerm}" gesendet — Plan in der Session bestätigen`).catch(() => {});
   $('tb-deploy').onclick = () =>
     act(SendSkill(activeTerm, '/deploy '), `/deploy an „${activeTerm}" gesendet — Plan in der Session bestätigen`)
+      .then(startDeployWatch).catch(() => {});
+  $('tb-dd').onclick = () =>
+    act(SendSkill(activeTerm, '/done und sobald done komplett abgeschlossen ist, führe direkt /deploy aus '),
+      `/done + /deploy an „${activeTerm}" gesendet — Plan in der Session bestätigen`)
       .then(startDeployWatch).catch(() => {});
   $('tb-kill').onclick = e => {
     const b = e.currentTarget;
@@ -261,6 +267,8 @@ function updateTermBar() {
 
 async function openSession(name) {
   view = 'term';
+  hydraProject = null;
+  termsEl.classList.remove('hydra');
   activeTerm = name;
   SetActiveTerm(name);
   overviewEl.style.display = 'none';
@@ -269,6 +277,7 @@ async function openSession(name) {
   let t = terms.get(name);
   const fresh = !t;
   if (!t) t = makeTerm(name);
+  if (t.wrap.parentElement !== termsEl) termsEl.appendChild(t.wrap);
   for (const [n, o] of terms) o.wrap.classList.toggle('active', n === name);
   t.fit.fit();
   if (fresh) {
@@ -284,6 +293,8 @@ async function openSession(name) {
 
 function showOverview() {
   view = 'overview';
+  hydraProject = null;
+  termsEl.classList.remove('hydra');
   activeTerm = null;
   SetActiveTerm('');
   termsEl.style.display = 'none';
@@ -294,6 +305,8 @@ function showOverview() {
 
 function showSearch() {
   view = 'search';
+  hydraProject = null;
+  termsEl.classList.remove('hydra');
   activeTerm = null;
   SetActiveTerm('');
   termsEl.style.display = 'none';
@@ -306,6 +319,112 @@ function showSearch() {
 $('nav-overview').onclick = showOverview;
 $('sidebar-head').onclick = showOverview;
 $('nav-search').onclick = showSearch;
+
+const hydraGridEl = $('hydra-grid');
+
+function hydraAgents() {
+  const p = (ov?.projects || []).find(x => x.name === hydraProject);
+  if (!p) return [];
+  const out = [];
+  for (const wt of p.worktrees || []) {
+    for (const a of wt.agents || []) {
+      if (a.status !== 'dead') out.push(a);
+    }
+  }
+  return out.slice(0, 6);
+}
+
+function enterHydra(project) {
+  view = 'hydra';
+  hydraProject = project;
+  activeTerm = null;
+  SetActiveTerm('');
+  overviewEl.style.display = 'none';
+  $('search-view').style.display = 'none';
+  termsEl.style.display = 'block';
+  termsEl.classList.add('hydra');
+  updateHydraBar();
+  syncHydra();
+  renderSidebar();
+}
+
+function updateHydraBar() {
+  if (view !== 'hydra') return;
+  const n = hydraAgents().length;
+  termBarEl.innerHTML =
+    `<button class="btn tiny" id="tb-back" title="Übersicht (⌘0)">‹ Übersicht</button>` +
+    `<span class="dot" style="background:var(--accent)"></span>` +
+    `<span class="tb-name">🐙 Hydra · ${esc(hydraProject)}</span>` +
+    `<span class="tb-st">${n} ${n === 1 ? 'Session' : 'Sessions'} parallel</span>` +
+    `<span class="tb-actions">` +
+    `<button class="btn tiny" id="tb-add" title="Neue Session in ${esc(hydraProject)} — erscheint direkt im Raster">+ Session</button></span>`;
+  $('tb-back').onclick = showOverview;
+  $('tb-add').onclick = () =>
+    act(NewSession(hydraProject, false, ''), n2 => `Session „${n2}" gestartet`).catch(() => {});
+}
+
+function ensureHydraHead(t) {
+  if (t.head) return;
+  const head = document.createElement('div');
+  head.className = 'hydra-head';
+  head.innerHTML =
+    `<span class="dot"></span><span class="hh-name">${esc(t.name)}</span>` +
+    `<span class="hh-status"></span>` +
+    `<button class="hh-max" title="Session groß öffnen">⤢</button>`;
+  head.querySelector('.hh-max').onclick = () => openSession(t.name);
+  head.onclick = e => { if (!e.target.closest('.hh-max')) t.term.focus(); };
+  t.wrap.appendChild(head);
+  t.head = head;
+  t.wrap.addEventListener('focusin', () => {
+    if (view !== 'hydra') return;
+    activeTerm = t.name;
+    SetActiveTerm(t.name);
+    for (const w of hydraGridEl.querySelectorAll('.term-wrap')) {
+      w.classList.toggle('focused', w === t.wrap);
+    }
+  });
+}
+
+async function syncHydra() {
+  if (view !== 'hydra') return;
+  const agents = hydraAgents();
+  const names = new Set(agents.map(a => a.name));
+  for (const [n, t] of terms) {
+    if (t.wrap.parentElement === hydraGridEl && !names.has(n)) {
+      termsEl.appendChild(t.wrap);
+      t.wrap.classList.remove('focused');
+    }
+  }
+  hydraGridEl.querySelector('.none')?.remove();
+  if (!agents.length) {
+    hydraGridEl.innerHTML = `<div class="none">Keine aktiven Sessions in ${esc(hydraProject)} — oben mit „+ Session" eine starten</div>`;
+    updateHydraBar();
+    return;
+  }
+  const fresh = [];
+  for (const a of agents) {
+    let t = terms.get(a.name);
+    if (!t) { t = makeTerm(a.name); fresh.push(a.name); }
+    ensureHydraHead(t);
+    if (t.wrap.parentElement !== hydraGridEl) hydraGridEl.appendChild(t.wrap);
+    const v = agentVisual(a, hydraProject);
+    t.head.querySelector('.dot').style.background = v.color;
+    t.head.querySelector('.hh-status').textContent = `${v.text} · ${a.age}`;
+  }
+  hydraGridEl.classList.toggle('single', agents.length === 1);
+  hydraGridEl.classList.toggle('odd', agents.length % 2 === 1 && agents.length > 1);
+  for (const a of agents) {
+    const t = terms.get(a.name);
+    if (!t) continue;
+    t.fit.fit();
+    if (fresh.includes(a.name)) {
+      try { await OpenTerm(a.name, t.term.cols, t.term.rows); }
+      catch (err) { t.term.write('\x1b[31m' + err + '\x1b[0m\r\n'); }
+    } else {
+      ResizeTerm(a.name, t.term.cols, t.term.rows);
+    }
+  }
+}
 
 
 function renderSidebar() {
@@ -325,6 +444,11 @@ function renderSidebar() {
     head.className = 'proj-head';
     const label = document.createElement('span');
     label.textContent = p.name;
+    if (p.path) {
+      label.className = 'pname';
+      label.title = '🐙 Hydra-Modus: alle Sessions von ' + p.name + ' nebeneinander';
+      label.onclick = () => enterHydra(p.name);
+    }
     head.appendChild(label);
     if (p.path) {
       const plus = document.createElement('button');
@@ -714,6 +838,7 @@ function renderAll() {
   renderSidebar();
   if (view === 'overview') renderOverview();
   if (view === 'term') updateTermBar();
+  if (view === 'hydra') { updateHydraBar(); syncHydra(); }
 }
 
 overviewEl.addEventListener('click', async e => {
@@ -828,6 +953,15 @@ async function refresh(force) {
 }
 
 window.addEventListener('resize', () => {
+  if (view === 'hydra') {
+    for (const [n, t] of terms) {
+      if (t.wrap.parentElement === hydraGridEl) {
+        t.fit.fit();
+        ResizeTerm(n, t.term.cols, t.term.rows);
+      }
+    }
+    return;
+  }
   const t = activeTerm && terms.get(activeTerm);
   if (t) t.fit.fit();
 });
@@ -932,6 +1066,79 @@ $('search-results').addEventListener('click', e => {
   if (h) showModal(`${h.project} · ${h.role === 'user' ? 'Du' : 'Claude'} · ${h.time}`, h.full, false);
 });
 
+let tlEntries = [];
+let tlTimer = null;
+let tlLoading = false;
+
+function refitTerms() {
+  if (view === 'hydra') {
+    for (const [n, t] of terms) {
+      if (t.wrap.parentElement === hydraGridEl) { t.fit.fit(); ResizeTerm(n, t.term.cols, t.term.rows); }
+    }
+  } else if (view === 'term') {
+    const t = activeTerm && terms.get(activeTerm);
+    if (t) { t.fit.fit(); ResizeTerm(activeTerm, t.term.cols, t.term.rows); }
+  }
+}
+
+function tlToggle(open) {
+  const willOpen = open ?? !document.body.classList.contains('tl-open');
+  document.body.classList.toggle('tl-open', willOpen);
+  clearInterval(tlTimer);
+  tlTimer = null;
+  if (willOpen) {
+    refreshTimeline();
+    tlTimer = setInterval(refreshTimeline, 60000);
+  }
+  refitTerms();
+}
+
+async function refreshTimeline() {
+  if (tlLoading) return;
+  tlLoading = true;
+  try {
+    tlEntries = (await Timeline()) || [];
+    renderTimeline();
+  } catch (err) {
+    $('tl-body').innerHTML = `<div class="none">Fehler: ${esc(err)}</div>`;
+  }
+  tlLoading = false;
+}
+
+function renderTimeline() {
+  const body = $('tl-body');
+  if (!tlEntries.length) {
+    body.innerHTML = '<div class="none">keine Prompts in den letzten 7 Tagen</div>';
+    return;
+  }
+  let html = '', day = '';
+  tlEntries.forEach((en, i) => {
+    if (en.day !== day) {
+      day = en.day;
+      html += `<div class="tl-day">${esc(day)}</div>`;
+    }
+    const who = en.agent ? `<span class="tl-agent">${esc(en.agent)}</span>` : '';
+    html += `<div class="tl-row" data-i="${i}" title="klick: Session öffnen / Prompt anzeigen">` +
+      `<span class="tl-time">${esc(en.time)}</span>` +
+      `<div class="tl-main"><div class="tl-meta">${who}<span class="tl-proj">${esc(en.project)}</span></div>` +
+      `<div class="tl-text">${esc(en.text)}</div></div></div>`;
+  });
+  const st = body.scrollTop;
+  body.innerHTML = html;
+  body.scrollTop = st;
+}
+
+$('nav-timeline').onclick = () => tlToggle();
+$('tl-close').onclick = () => tlToggle(false);
+$('tl-body').addEventListener('click', e => {
+  const row = e.target.closest('.tl-row[data-i]');
+  if (!row) return;
+  const en = tlEntries[parseInt(row.dataset.i)];
+  if (!en) return;
+  if (en.agent && agentInfo(en.agent)) openSession(en.agent);
+  else showModal(`${en.project} · ${en.day} ${en.time}`, en.text, false);
+});
+
 const menuEl = document.createElement('div');
 menuEl.id = 'ctxmenu';
 document.body.appendChild(menuEl);
@@ -966,6 +1173,12 @@ async function killSession(name) {
     try { t.term.dispose(); } catch { /* schon weg */ }
     t.wrap.remove();
     terms.delete(name);
+  }
+  if (view === 'hydra') {
+    if (activeTerm === name) { activeTerm = null; SetActiveTerm(''); }
+    await refresh(true);
+    syncHydra();
+    return;
   }
   if (activeTerm === name) showOverview();
 }
@@ -1048,7 +1261,7 @@ window.addEventListener('keydown', e => {
     e.preventDefault();
     if (e.shiftKey) {
       if (activeTerm) killSession(activeTerm);
-    } else if (view === 'term') {
+    } else if (view === 'term' || view === 'hydra') {
       showOverview();
     }
   }

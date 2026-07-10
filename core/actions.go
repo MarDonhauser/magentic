@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -46,6 +47,38 @@ func DiscoverNew(s *State) []Agent {
 	return out
 }
 
+func RestoreSessions(st *State) int {
+	restored := 0
+	changed := false
+	kept := st.Agents[:0]
+	for _, a := range st.Agents {
+		sn := SessionName(a.Name)
+		if TmuxHasSession(sn) {
+			kept = append(kept, a)
+			continue
+		}
+		if info, err := os.Stat(a.Dir); err != nil || !info.IsDir() {
+			changed = true
+			continue
+		}
+		extraArgs := "--continue"
+		if a.SessionID != "" {
+			extraArgs = "--resume " + a.SessionID
+		}
+		if err := TmuxNewClaudeSession(sn, a.Dir, extraArgs); err != nil {
+			kept = append(kept, a)
+			continue
+		}
+		restored++
+		kept = append(kept, a)
+	}
+	st.Agents = kept
+	if changed {
+		st.Save()
+	}
+	return restored
+}
+
 func SendPromptWhenReady(session, prompt string, submit bool) {
 	for i := 0; i < 180; i++ {
 		time.Sleep(1 * time.Second)
@@ -78,13 +111,14 @@ func SendSlashCommand(session, cmd string) {
 	go SendPromptWhenReady(session, cmd, true)
 }
 
-func StartSkillAgent(st *State, dir, prompt, kind string) (string, error) {
+func StartSkillAgent(st *State, dir, prompt, kind, nameHint string) (string, error) {
 	for _, a := range DiscoverNew(st) {
 		st.AddAgent(a)
 	}
-	name := PickAgentName(st)
+	name := PickAgentName(st, nameHint)
 	session := SessionName(name)
-	if err := TmuxNewClaudeSession(session, dir, ""); err != nil {
+	sid := NewUUID()
+	if err := TmuxNewClaudeSession(session, dir, "--session-id "+sid); err != nil {
 		return "", err
 	}
 	proj := ""
@@ -95,7 +129,7 @@ func StartSkillAgent(st *State, dir, prompt, kind string) (string, error) {
 		}
 	}
 	baseCommit, baseDirty := CaptureBaseline(dir)
-	st.AddAgent(Agent{Name: name, Project: proj, Dir: dir, Kind: kind, CreatedAt: time.Now(), BaseCommit: baseCommit, BaseDirty: baseDirty})
+	st.AddAgent(Agent{Name: name, Project: proj, Dir: dir, Kind: kind, CreatedAt: time.Now(), BaseCommit: baseCommit, BaseDirty: baseDirty, SessionID: sid})
 	go SendPromptWhenReady(session, prompt, true)
 	return name, nil
 }
@@ -128,18 +162,18 @@ func StartCleanup(st *State, path, mainBranch string) (string, error) {
 	prompt := fmt.Sprintf("Diese Session wurde von magentic zum Aufräumen dieses Worktrees gestartet. "+
 		"Sichte die uncommitteten Änderungen und die Commits auf diesem Branch, committe sinnvoll und bringe die Arbeit nach %s. "+
 		"Zeige mir zuerst deinen Plan, bevor du etwas ausführst. Sag am Ende Bescheid, wenn der Worktree entfernt werden kann.", mainBranch)
-	return StartSkillAgent(st, path, prompt, "cleanup")
+	return StartSkillAgent(st, path, prompt, "cleanup", "cleanup "+filepath.Base(path))
 }
 
 func StartMerge(st *State, projPath, source, target string) (string, error) {
 	prompt := fmt.Sprintf("Merge den Branch %q nach %q in diesem Repository. "+
 		"Hole vorher den aktuellen Stand (git fetch). Falls Konflikte auftreten, löse sie sinnvoll und erkläre mir deine Entscheidungen. "+
 		"Zeige mir zuerst deinen Plan, bevor du etwas ausführst, und frage mich, bevor du pushst.", source, target)
-	return StartSkillAgent(st, projPath, prompt, "merge")
+	return StartSkillAgent(st, projPath, prompt, "merge", "merge "+source)
 }
 
 func StartDeploy(st *State, projPath string) (string, error) {
-	return StartSkillAgent(st, projPath, "/deploy ", "deploy")
+	return StartSkillAgent(st, projPath, "/deploy ", "deploy", "deploy "+filepath.Base(projPath))
 }
 
 func RemoveWorktree(st *State, proj *Project, path string) error {
@@ -198,13 +232,14 @@ func StartTodoSession(st *State, idx int) (string, error) {
 	if proj == nil {
 		return "", fmt.Errorf("Todo hat kein Projekt — erst ein Projekt zuweisen")
 	}
-	name := PickAgentName(st)
+	name := PickAgentName(st, todo.Text)
 	session := SessionName(name)
-	if err := TmuxNewClaudeSession(session, proj.Path, ""); err != nil {
+	sid := NewUUID()
+	if err := TmuxNewClaudeSession(session, proj.Path, "--session-id "+sid); err != nil {
 		return "", fmt.Errorf("tmux: %w", err)
 	}
 	baseCommit, baseDirty := CaptureBaseline(proj.Path)
-	st.AddAgent(Agent{Name: name, Project: proj.Name, Dir: proj.Path, CreatedAt: time.Now(), BaseCommit: baseCommit, BaseDirty: baseDirty})
+	st.AddAgent(Agent{Name: name, Project: proj.Name, Dir: proj.Path, CreatedAt: time.Now(), BaseCommit: baseCommit, BaseDirty: baseDirty, SessionID: sid})
 	st.Todos = append(st.Todos[:idx], st.Todos[idx+1:]...)
 	if err := st.Save(); err != nil {
 		return "", err
@@ -219,7 +254,7 @@ func CreateAgentSession(st *State, projName string, worktree bool, name string) 
 		return "", fmt.Errorf("Projekt nicht gefunden")
 	}
 	if name == "" {
-		name = PickAgentName(st)
+		name = PickAgentName(st, projName)
 	} else {
 		name = SanitizeName(name)
 	}
@@ -234,11 +269,12 @@ func CreateAgentSession(st *State, projName string, worktree bool, name string) 
 		}
 		dir = wt
 	}
-	if err := TmuxNewClaudeSession(SessionName(name), dir, ""); err != nil {
+	sid := NewUUID()
+	if err := TmuxNewClaudeSession(SessionName(name), dir, "--session-id "+sid); err != nil {
 		return "", fmt.Errorf("tmux: %w", err)
 	}
 	baseCommit, baseDirty := CaptureBaseline(dir)
-	st.AddAgent(Agent{Name: name, Project: proj.Name, Dir: dir, Worktree: worktree, CreatedAt: time.Now(), BaseCommit: baseCommit, BaseDirty: baseDirty})
+	st.AddAgent(Agent{Name: name, Project: proj.Name, Dir: dir, Worktree: worktree, CreatedAt: time.Now(), BaseCommit: baseCommit, BaseDirty: baseDirty, SessionID: sid})
 	if err := st.Save(); err != nil {
 		return "", err
 	}

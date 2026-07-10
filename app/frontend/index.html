@@ -12,6 +12,7 @@
         <div id="sidebar-head">⚡ magentic</div>
         <div class="nav-btn" id="nav-overview">▦ Übersicht</div>
         <div class="nav-btn" id="nav-search">🔍 Suche</div>
+        <div class="nav-btn" id="nav-timeline">🕐 Verlauf</div>
         <div id="deploy-badge" title="Deploy-Stand — klick für Details"></div>
         <div class="side-label">Sessions</div>
         <div id="sessions"></div>
@@ -28,8 +29,12 @@
             </div>
             <div id="search-results"></div>
         </div>
-        <div id="terms"><div id="term-bar"></div></div>
+        <div id="terms"><div id="term-bar"></div><div id="hydra-grid"></div></div>
     </main>
+    <aside id="timeline">
+        <div id="tl-head"><span>🕐 Verlauf — deine Prompts</span><button class="btn tiny" id="tl-close">✗</button></div>
+        <div id="tl-body"><div class="none">lade…</div></div>
+    </aside>
 </div>
 <div id="toast"></div>
 <script src="./src/main.js" type="module"></script>

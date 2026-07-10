@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ type OvAgent struct {
 	Worktree   bool   `json:"worktree"`
 	Phase      string `json:"phase,omitempty"`
 	PhaseLabel string `json:"phaseLabel,omitempty"`
+	Deployed   bool   `json:"deployed"`
 	Known      bool   `json:"known"`
 	OwnDirty   int    `json:"ownDirty"`
 	OwnCommits int    `json:"ownCommits"`
@@ -94,8 +96,10 @@ func BuildOverview(s *State) Overview {
 	removed := false
 	for _, a := range s.Agents {
 		if statuses[a.Name] == StatusDead {
-			removed = true
-			continue
+			if info, err := os.Stat(a.Dir); err != nil || !info.IsDir() {
+				removed = true
+				continue
+			}
 		}
 		kept = append(kept, a)
 	}
@@ -250,6 +254,7 @@ func toOvAgent(a Agent, statuses map[string]AgentStatus, activity map[string]tim
 		Worktree:   a.Worktree,
 		Phase:      phase,
 		PhaseLabel: phaseLabel,
+		Deployed:   agentAlive(st) && !a.DeployAt.IsZero() && time.Since(a.DeployAt) < 45*time.Minute,
 		Known:      sc.Known,
 		OwnDirty:   len(sc.Files),
 		OwnCommits: sc.Commits,

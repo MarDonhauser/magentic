@@ -118,6 +118,10 @@ export function StartTodoSession(arg1) {
   return window['go']['main']['App']['StartTodoSession'](arg1);
 }
 
+export function Timeline() {
+  return window['go']['main']['App']['Timeline']();
+}
+
 export function Todos() {
   return window['go']['main']['App']['Todos']();
 }

@@ -9,6 +9,7 @@ export namespace core {
 	    worktree: boolean;
 	    phase?: string;
 	    phaseLabel?: string;
+	    deployed: boolean;
 	    known: boolean;
 	    ownDirty: number;
 	    ownCommits: number;
@@ -27,6 +28,7 @@ export namespace core {
 	        this.worktree = source["worktree"];
 	        this.phase = source["phase"];
 	        this.phaseLabel = source["phaseLabel"];
+	        this.deployed = source["deployed"];
 	        this.known = source["known"];
 	        this.ownDirty = source["ownDirty"];
 	        this.ownCommits = source["ownCommits"];
@@ -310,6 +312,28 @@ export namespace main {
 	        this.timeRaw = source["timeRaw"];
 	        this.snippet = source["snippet"];
 	        this.full = source["full"];
+	    }
+	}
+	export class TimelineEntry {
+	    agent: string;
+	    project: string;
+	    day: string;
+	    time: string;
+	    timeRaw: string;
+	    text: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TimelineEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.agent = source["agent"];
+	        this.project = source["project"];
+	        this.day = source["day"];
+	        this.time = source["time"];
+	        this.timeRaw = source["timeRaw"];
+	        this.text = source["text"];
 	    }
 	}
 	export class TodoInfo {

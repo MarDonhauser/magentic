@@ -631,7 +631,7 @@ func (m model) sendSkillToSelected(cmd string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) startSkillSession(p *Project, cmd string) (tea.Model, tea.Cmd) {
-	name := PickAgentName(m.state)
+	name := PickAgentName(m.state, cmd+" "+p.Name)
 	session := tmuxSessionName(name)
 	if err := TmuxNewClaudeSession(session, p.Path, ""); err != nil {
 		m.setFlash("tmux: "+err.Error(), true)
@@ -790,7 +790,7 @@ func (m model) todoToSession(idx int) (tea.Model, tea.Cmd) {
 		m.pendingTodoIdx = idx
 		return m.startInput(inputTodoProject)
 	}
-	name := PickAgentName(m.state)
+	name := PickAgentName(m.state, todo.Text)
 	session := tmuxSessionName(name)
 	if err := TmuxNewClaudeSession(session, proj.Path, ""); err != nil {
 		m.setFlash("tmux: "+err.Error(), true)
@@ -814,7 +814,7 @@ func (m model) createAgent(worktree bool, name string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if name == "" {
-		name = PickAgentName(m.state)
+		name = PickAgentName(m.state, proj.Name)
 	} else {
 		name = sanitizeName(name)
 	}

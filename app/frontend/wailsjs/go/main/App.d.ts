@@ -61,6 +61,8 @@ export function SetMainBranch(arg1:string,arg2:string):Promise<void>;
 
 export function StartTodoSession(arg1:number):Promise<string>;
 
+export function Timeline():Promise<Array<main.TimelineEntry>>;
+
 export function Todos():Promise<Array<main.TodoInfo>>;
 
 export function UpdateTodo(arg1:number,arg2:string,arg3:string):Promise<void>;

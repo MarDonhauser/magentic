@@ -22,6 +22,8 @@ type Agent struct {
 	CreatedAt  time.Time `json:"created_at"`
 	BaseCommit string    `json:"base_commit,omitempty"`
 	BaseDirty  []string  `json:"base_dirty,omitempty"`
+	SessionID  string    `json:"session_id,omitempty"`
+	DeployAt   time.Time `json:"deploy_at,omitzero"`
 }
 
 type Todo struct {
@@ -106,6 +108,14 @@ func (s *State) RemoveAgent(name string) {
 		}
 	}
 	s.Agents = out
+}
+
+func (s *State) MarkDeploy(name string) {
+	for i := range s.Agents {
+		if s.Agents[i].Name == name {
+			s.Agents[i].DeployAt = time.Now()
+		}
+	}
 }
 
 func (s *State) RenameAgent(oldName, newName string) {

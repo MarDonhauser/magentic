@@ -39,6 +39,15 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	installNativeNotifier()
 	runtime.OnFileDrop(ctx, a.onFileDrop)
+	if st, err := core.LoadState(); err == nil {
+		if n := core.RestoreSessions(st); n > 0 {
+			word := "Sessions"
+			if n == 1 {
+				word = "Session"
+			}
+			core.NotifyDesktop("magentic", fmt.Sprintf("%d %s wiederhergestellt", n, word), "")
+		}
+	}
 	go a.watchLoop()
 }
 
@@ -270,7 +279,16 @@ func (a *App) SendSkill(name, cmd string) error {
 	if !strings.HasPrefix(cmd, "/") {
 		return fmt.Errorf("nur Slash-Kommandos erlaubt")
 	}
-	return core.SendSkill(name, cmd)
+	if err := core.SendSkill(name, cmd); err != nil {
+		return err
+	}
+	if strings.Contains(cmd, "/deploy") {
+		if st, err := core.LoadState(); err == nil {
+			st.MarkDeploy(name)
+			st.Save()
+		}
+	}
+	return nil
 }
 
 func (a *App) Cleanup(path, mainBranch string) (string, error) {
@@ -350,12 +368,11 @@ func (a *App) SetMainBranch(project, main string) error {
 
 func (a *App) KillSession(name string) error {
 	sn := core.SessionName(name)
-	if !core.TmuxHasSession(sn) {
-		return fmt.Errorf("Session läuft nicht")
-	}
 	a.CloseTerm(name)
-	if err := core.TmuxKillSession(sn); err != nil {
-		return err
+	if core.TmuxHasSession(sn) {
+		if err := core.TmuxKillSession(sn); err != nil {
+			return err
+		}
 	}
 	if st, err := core.LoadState(); err == nil {
 		st.RemoveAgent(name)
