@@ -7,6 +7,7 @@ export namespace core {
 	    detail: string;
 	    age: string;
 	    worktree: boolean;
+	    term: boolean;
 	    phase?: string;
 	    phaseLabel?: string;
 	    deployed: boolean;
@@ -26,12 +27,31 @@ export namespace core {
 	        this.detail = source["detail"];
 	        this.age = source["age"];
 	        this.worktree = source["worktree"];
+	        this.term = source["term"];
 	        this.phase = source["phase"];
 	        this.phaseLabel = source["phaseLabel"];
 	        this.deployed = source["deployed"];
 	        this.known = source["known"];
 	        this.ownDirty = source["ownDirty"];
 	        this.ownCommits = source["ownCommits"];
+	    }
+	}
+	export class OvLater {
+	    name: string;
+	    project: string;
+	    age: string;
+	    term: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new OvLater(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.project = source["project"];
+	        this.age = source["age"];
+	        this.term = source["term"];
 	    }
 	}
 	export class OvWorktree {
@@ -152,6 +172,7 @@ export namespace core {
 	    counts: Record<string, number>;
 	    usage?: OvUsage;
 	    projects: OvProject[];
+	    later: OvLater[];
 	
 	    static createFrom(source: any = {}) {
 	        return new Overview(source);
@@ -163,6 +184,7 @@ export namespace core {
 	        this.counts = source["counts"];
 	        this.usage = this.convertValues(source["usage"], OvUsage);
 	        this.projects = this.convertValues(source["projects"], OvProject);
+	        this.later = this.convertValues(source["later"], OvLater);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -182,6 +204,97 @@ export namespace core {
 		    }
 		    return a;
 		}
+	}
+	export class ZgProject {
+	    id: string;
+	    name: string;
+	    client: string;
+	    rate: number;
+	    color: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ZgProject(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.client = source["client"];
+	        this.rate = source["rate"];
+	        this.color = source["color"];
+	    }
+	}
+	export class ZgInfo {
+	    exists: boolean;
+	    active: boolean;
+	    state: string;
+	    project: string;
+	    rate: number;
+	    start: string;
+	    elapsedSec: number;
+	    earnings: number;
+	    todaySec: number;
+	    todayCash: number;
+	    lastProject: string;
+	    projects: ZgProject[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ZgInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.exists = source["exists"];
+	        this.active = source["active"];
+	        this.state = source["state"];
+	        this.project = source["project"];
+	        this.rate = source["rate"];
+	        this.start = source["start"];
+	        this.elapsedSec = source["elapsedSec"];
+	        this.earnings = source["earnings"];
+	        this.todaySec = source["todaySec"];
+	        this.todayCash = source["todayCash"];
+	        this.lastProject = source["lastProject"];
+	        this.projects = this.convertValues(source["projects"], ZgProject);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class ZgStopped {
+	    id: string;
+	    project: string;
+	    durationSec: number;
+	    earnings: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ZgStopped(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.project = source["project"];
+	        this.durationSec = source["durationSec"];
+	        this.earnings = source["earnings"];
+	    }
 	}
 
 }
@@ -291,6 +404,20 @@ export namespace main {
 		    }
 		    return a;
 		}
+	}
+	export class LinkInfo {
+	    url: string;
+	    time: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LinkInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.url = source["url"];
+	        this.time = source["time"];
+	    }
 	}
 	export class SearchHit {
 	    project: string;

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -207,6 +208,29 @@ func (a *App) RemoveProject(name string) error {
 	return st.Save()
 }
 
+func (a *App) ReorderProjects(order []string) error {
+	st, err := core.LoadState()
+	if err != nil {
+		return err
+	}
+	rank := make(map[string]int, len(order))
+	for i, n := range order {
+		rank[n] = i
+	}
+	sort.SliceStable(st.Projects, func(i, j int) bool {
+		ri, oki := rank[st.Projects[i].Name]
+		rj, okj := rank[st.Projects[j].Name]
+		if !oki {
+			ri = len(rank)
+		}
+		if !okj {
+			rj = len(rank)
+		}
+		return ri < rj
+	})
+	return st.Save()
+}
+
 func (a *App) SaveImage(dataB64 string) (string, error) {
 	data, err := base64.StdEncoding.DecodeString(dataB64)
 	if err != nil {
@@ -273,6 +297,26 @@ func (a *App) DeleteTodo(idx int) error {
 	return st.Save()
 }
 
+func (a *App) Zeitgeist() core.ZgInfo {
+	return core.ZeitgeistInfo()
+}
+
+func (a *App) ZeitgeistStart(ref string) (core.ZgProject, error) {
+	return core.ZeitgeistStart(ref)
+}
+
+func (a *App) ZeitgeistPause() error {
+	return core.ZeitgeistPause()
+}
+
+func (a *App) ZeitgeistResume() error {
+	return core.ZeitgeistResume()
+}
+
+func (a *App) ZeitgeistStop(note string) (core.ZgStopped, error) {
+	return core.ZeitgeistStop(note)
+}
+
 func (a *App) StartTodoSession(idx int) (string, error) {
 	st, err := core.LoadState()
 	if err != nil {
@@ -287,6 +331,22 @@ func (a *App) NewSession(project string, worktree bool, name string) (string, er
 		return "", err
 	}
 	return core.CreateAgentSession(st, project, worktree, name)
+}
+
+func (a *App) NewTermSession(project string, worktree bool, name string) (string, error) {
+	st, err := core.LoadState()
+	if err != nil {
+		return "", err
+	}
+	return core.CreateTermSession(st, project, worktree, name)
+}
+
+func (a *App) NewTermSessionFor(agent string) (string, error) {
+	st, err := core.LoadState()
+	if err != nil {
+		return "", err
+	}
+	return core.CreateTermSessionFor(st, agent, "")
 }
 
 func (a *App) DoneAgent(name string) error {
@@ -397,6 +457,38 @@ func (a *App) KillSession(name string) error {
 		st.Save()
 	}
 	return nil
+}
+
+func (a *App) LaterSession(name string) error {
+	st, err := core.LoadState()
+	if err != nil {
+		return err
+	}
+	if !st.HasAgent(name) {
+		for _, ag := range core.DiscoverNew(st) {
+			st.AddAgent(ag)
+		}
+	}
+	if !st.HasAgent(name) {
+		return fmt.Errorf("unbekannte Session: %s", name)
+	}
+	a.CloseTerm(name)
+	sn := core.SessionName(name)
+	if core.TmuxHasSession(sn) {
+		if err := core.TmuxKillSession(sn); err != nil {
+			return err
+		}
+	}
+	st.MarkLater(name)
+	return st.Save()
+}
+
+func (a *App) ReopenSession(name string) error {
+	st, err := core.LoadState()
+	if err != nil {
+		return err
+	}
+	return core.ReopenLater(st, name)
 }
 
 func (a *App) OpenTerm(name string, cols, rows int) error {

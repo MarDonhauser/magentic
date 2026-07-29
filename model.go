@@ -43,11 +43,14 @@ const (
 	inputNone inputKind = iota
 	inputNewSession
 	inputNewWorktree
+	inputNewTerm
 	inputAddProject
 	inputRename
 	inputNewTodo
 	inputEditTodo
 	inputTodoProject
+	inputZgStart
+	inputZgStop
 )
 
 type pollResult struct {
@@ -59,6 +62,7 @@ type pollResult struct {
 	preview    string
 	discovered []Agent
 	diskMain   map[string]string
+	zeitgeist  ZgInfo
 }
 
 type tickMsg time.Time
@@ -306,6 +310,7 @@ func pollCmd(state State, selected *Agent) tea.Cmd {
 			}
 		}
 		res.discovered = discoverNew(&state)
+		res.zeitgeist = zeitgeistInfo()
 		if disk, err := LoadState(); err == nil {
 			res.diskMain = map[string]string{}
 			for _, p := range disk.Projects {
@@ -565,6 +570,8 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startInput(inputNewSession)
 	case "w":
 		return m.startInput(inputNewWorktree)
+	case "T":
+		return m.startInput(inputNewTerm)
 	case "t":
 		return m.startInput(inputNewTodo)
 	case "e", "r":
@@ -597,10 +604,75 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.sendSkillToSelected("/done ")
 	case "D":
 		return m.sendSkillToSelected("/deploy ")
+	case "z":
+		if m.poll.zeitgeist.Active {
+			return m.startInput(inputZgStop)
+		}
+		if !m.poll.zeitgeist.Exists {
+			m.setFlash("Zeitgeist-Daten nicht gefunden (~/.zeitgeist/data.json)", true)
+			return m, nil
+		}
+		return m.startInput(inputZgStart)
+	case "Z":
+		return m.zgTogglePause()
 	case "g":
 		return m, m.pollNow()
 	}
 	return m, nil
+}
+
+func (m model) zgTogglePause() (tea.Model, tea.Cmd) {
+	zg := m.poll.zeitgeist
+	if !zg.Active {
+		m.setFlash("Kein Zeitgeist-Timer aktiv — z startet einen", true)
+		return m, nil
+	}
+	if zg.State == "running" {
+		if err := zeitgeistPause(); err != nil {
+			m.setFlash(err.Error(), true)
+			return m, nil
+		}
+		m.setFlash("⏸ Zeitgeist-Timer pausiert", false)
+	} else {
+		if err := zeitgeistResume(); err != nil {
+			m.setFlash(err.Error(), true)
+			return m, nil
+		}
+		m.setFlash("▶ Zeitgeist-Timer läuft weiter", false)
+	}
+	return m, m.pollNow()
+}
+
+func (m model) zgStart(ref string) (tea.Model, tea.Cmd) {
+	if ref == "" {
+		m.setFlash("Kein Projekt angegeben", true)
+		return m, nil
+	}
+	p, err := zeitgeistStart(ref)
+	if err != nil {
+		msg := err.Error()
+		var names []string
+		for _, pr := range m.poll.zeitgeist.Projects {
+			names = append(names, pr.Name)
+		}
+		if len(names) > 0 {
+			msg += " — Projekte: " + strings.Join(names, ", ")
+		}
+		m.setFlash(msg, true)
+		return m, nil
+	}
+	m.setFlash(fmt.Sprintf("▶ Zeitgeist-Timer läuft: %s (%s/h)", p.Name, formatEuro(p.Rate)), false)
+	return m, m.pollNow()
+}
+
+func (m model) zgStop(note string) (tea.Model, tea.Cmd) {
+	s, err := zeitgeistStop(note)
+	if err != nil {
+		m.setFlash(err.Error(), true)
+		return m, nil
+	}
+	m.setFlash(fmt.Sprintf("■ %s abgeschlossen: %s — %s", s.Project, formatDurShort(s.DurationSec), formatEuro(s.Earnings)), false)
+	return m, m.pollNow()
 }
 
 func (m model) sendSkillToSelected(cmd string) (tea.Model, tea.Cmd) {
@@ -613,6 +685,10 @@ func (m model) sendSkillToSelected(cmd string) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.setFlash("Erst einen Agent auswählen ("+label+" läuft in dessen Session)", true)
+		return m, nil
+	}
+	if a.IsTerm() {
+		m.setFlash(a.Name+" ist eine Terminal-Session — dort läuft kein Claude", true)
 		return m, nil
 	}
 	sn := tmuxSessionName(a.Name)
@@ -648,7 +724,9 @@ func (m model) startSkillSession(p *Project, cmd string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) startInput(kind inputKind) (tea.Model, tea.Cmd) {
-	if kind == inputNewSession || kind == inputNewWorktree {
+	needProject := kind == inputNewSession || kind == inputNewWorktree ||
+		(kind == inputNewTerm && m.selectedAgent() == nil)
+	if needProject {
 		p := m.contextProject()
 		if p == nil {
 			m.setFlash("Kein Projekt gewählt — erst mit p ein Projekt anlegen bzw. eins auswählen", true)
@@ -663,6 +741,12 @@ func (m model) startInput(kind inputKind) (tea.Model, tea.Cmd) {
 		ti.Prompt = fmt.Sprintf("Neuer Agent in %s (leer = auto): ", m.pendingProject)
 	case inputNewWorktree:
 		ti.Prompt = fmt.Sprintf("Neuer Agent im Worktree von %s (leer = auto): ", m.pendingProject)
+	case inputNewTerm:
+		where := m.pendingProject
+		if a := m.selectedAgent(); a != nil {
+			where = shortPath(a.Dir)
+		}
+		ti.Prompt = fmt.Sprintf("Neues Terminal in %s (leer = auto): ", where)
 	case inputAddProject:
 		ti.Prompt = "Projektpfad: "
 		ti.SetValue("~/Projects/")
@@ -685,6 +769,11 @@ func (m model) startInput(kind inputKind) (tea.Model, tea.Cmd) {
 		if len(m.state.Projects) > 0 {
 			ti.SetValue(m.state.Projects[0].Name)
 		}
+	case inputZgStart:
+		ti.Prompt = "▶ Zeitgeist-Timer starten — Projekt: "
+		ti.SetValue(m.poll.zeitgeist.LastProject)
+	case inputZgStop:
+		ti.Prompt = "■ Zeitgeist-Timer stoppen — Notiz (leer = ohne): "
 	}
 	ti.Focus()
 	m.input = ti
@@ -711,7 +800,9 @@ func (m model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) commitInput(kind inputKind, value string) (tea.Model, tea.Cmd) {
 	switch kind {
 	case inputNewSession, inputNewWorktree:
-		return m.createAgent(kind == inputNewWorktree, value)
+		return m.createAgent(kind == inputNewWorktree, value, "")
+	case inputNewTerm:
+		return m.createTermAgent(value)
 	case inputAddProject:
 		return m.addProject(value)
 	case inputRename:
@@ -720,6 +811,10 @@ func (m model) commitInput(kind inputKind, value string) (tea.Model, tea.Cmd) {
 		return m.addTodo(value)
 	case inputEditTodo:
 		return m.editTodo(value)
+	case inputZgStart:
+		return m.zgStart(value)
+	case inputZgStop:
+		return m.zgStop(value)
 	case inputTodoProject:
 		if p := m.state.ProjectByName(strings.TrimSpace(value)); p != nil {
 			if m.pendingTodoIdx < len(m.state.Todos) {
@@ -807,14 +902,33 @@ func (m model) todoToSession(idx int) (tea.Model, tea.Cmd) {
 	return m, m.pollNow()
 }
 
-func (m model) createAgent(worktree bool, name string) (tea.Model, tea.Cmd) {
+func (m model) createTermAgent(name string) (tea.Model, tea.Cmd) {
+	a := m.selectedAgent()
+	if a == nil {
+		return m.createAgent(false, name, KindTerm)
+	}
+	n, err := createTermSessionFor(m.state, a.Name, name)
+	if err != nil {
+		m.setFlash(err.Error(), true)
+		return m, nil
+	}
+	m.selectAgent(n)
+	m.setFlash(fmt.Sprintf("Terminal %q geöffnet (%s)", n, shortPath(a.Dir)), false)
+	return m, m.pollNow()
+}
+
+func (m model) createAgent(worktree bool, name, kind string) (tea.Model, tea.Cmd) {
 	proj := m.state.ProjectByName(m.pendingProject)
 	if proj == nil {
 		m.setFlash("Projekt nicht gefunden", true)
 		return m, nil
 	}
 	if name == "" {
-		name = PickAgentName(m.state, proj.Name)
+		hint := proj.Name
+		if kind == KindTerm {
+			hint = "term " + proj.Name
+		}
+		name = PickAgentName(m.state, hint)
 	} else {
 		name = sanitizeName(name)
 	}
@@ -831,20 +945,29 @@ func (m model) createAgent(worktree bool, name string) (tea.Model, tea.Cmd) {
 		}
 		dir = wt
 	}
-	if err := TmuxNewClaudeSession(tmuxSessionName(name), dir, ""); err != nil {
+	var err error
+	if kind == KindTerm {
+		err = TmuxNewShellSession(tmuxSessionName(name), dir)
+	} else {
+		err = TmuxNewClaudeSession(tmuxSessionName(name), dir, "")
+	}
+	if err != nil {
 		m.setFlash("tmux: "+err.Error(), true)
 		return m, nil
 	}
 	baseCommit, baseDirty := CaptureBaseline(dir)
-	m.state.AddAgent(Agent{Name: name, Project: proj.Name, Dir: dir, Worktree: worktree, CreatedAt: time.Now(), BaseCommit: baseCommit, BaseDirty: baseDirty})
+	m.state.AddAgent(Agent{Name: name, Project: proj.Name, Dir: dir, Worktree: worktree, Kind: kind, CreatedAt: time.Now(), BaseCommit: baseCommit, BaseDirty: baseDirty})
 	m.state.Save()
 	m.collapsed[proj.Name] = false
 	m.selectAgent(name)
-	kind := "Session"
-	if worktree {
-		kind = "Worktree-Session"
+	label := "Session"
+	switch {
+	case kind == KindTerm:
+		label = "Terminal"
+	case worktree:
+		label = "Worktree-Session"
 	}
-	m.setFlash(fmt.Sprintf("Agent %q gestartet (%s in %s)", name, kind, proj.Name), false)
+	m.setFlash(fmt.Sprintf("Agent %q gestartet (%s in %s)", name, label, proj.Name), false)
 	return m, m.pollNow()
 }
 

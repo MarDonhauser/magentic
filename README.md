@@ -40,9 +40,12 @@ open app/build/bin/magentic.app   # Desktop-App
 |---|---|
 | `n` | Neue Claude-Session im Projektverzeichnis (Name leer = auto) |
 | `w` | Neue Claude-Session in frischem Git-Worktree (Branch `agent/<name>`) |
+| `T` | Neues **Terminal** — reine Shell, kein Claude. Ist ein Agent ausgewählt, öffnet es in *dessen* Verzeichnis (also im Worktree), sonst im Projektverzeichnis |
 | `⏎` / `a` | Agent: an die tmux-Session attachen (zurück mit `ctrl-b d`) · Projekt: auf-/zuklappen |
 | `d` | `/done` an die Session des gewählten Agents senden |
 | `D` | `/deploy` senden (ohne Agent: neue Session im Projekt-Root) |
+| `z` | Zeitgeist-Timer starten (fragt Projekt) bzw. stoppen (fragt optionale Notiz) |
+| `Z` | Zeitgeist-Timer pausieren / fortsetzen |
 | `t` | Neues Todo (merkt sich das aktuelle Projekt) |
 | `e` | Todo bearbeiten (leer = löschen) |
 | `r` | Agent umbenennen |
@@ -70,8 +73,17 @@ Agent-Pills und alle Aktionen:
 - **⌫ entfernen** — `git worktree remove` (nur sauber + ohne aktive Session)
 - **🚀 deploy** — Claude-Session mit `/deploy`
 - **+ Session / ⑂ Worktree** — neue Claude-Session im Projekt
+- **⌨ Terminal** — neue Session mit reiner Shell statt Claude (auch über
+  ⇧-Klick auf das `+` in der Sidebar und in der Hydra-Leiste)
+
+**Tasten in der App:** `⌘0` Übersicht · `⌘1`–`⌘9` Session aus der Sidebar ·
+`⌘W` zurück zur Übersicht · `⌘⇧W` Session beenden · **`⌘T` Terminal im
+Verzeichnis der gerade offenen Session** (funktioniert auch, wenn der Fokus im
+Terminal liegt — Claude bekommt die Kombo nicht zu sehen).
 - **Todos** — anlegen, bearbeiten, löschen, **▶ Session**: startet eine Session,
   der Todo-Text landet im Eingabefeld (ohne Abschicken)
+- **Zeitgeist** — Widget links unten: Timer starten/pausieren/stoppen,
+  laufende Zeit + Verdienst live, Tagessumme
 
 **Hauptbranch pro Projekt:** ahead/behind, Warnungen und Merge-Ziele beziehen
 sich auf den konfigurierbaren Hauptbranch (✎ neben dem Projektnamen; leer =
@@ -104,6 +116,7 @@ Gesamtstatus. Die Projektzeile zeigt weiterhin den Repo-Gesamtzustand.
 - `●` läuft — Claude arbeitet gerade
 - `◆` wartet — Claude braucht Input (Permission-Dialog, Frage, Trust-Prompt)
 - `○` idle — bereit für den nächsten Prompt
+- `⌨` Terminal — reine Shell-Session, dort läuft kein Claude
 - `▪` beendet — Claude wurde beendet, Shell läuft noch
 - `✗` tot — tmux-Session existiert nicht mehr (mit `x` entfernen)
 
@@ -122,9 +135,23 @@ magentic schickt Desktop-Benachrichtigungen mit Ton (macOS `osascript`, Linux
 fertig ist (Sound „Ping", mit einem Poll Verzögerung bestätigt, um Fehlalarme
 zu vermeiden).
 
+## Zeitgeist
+
+Wenn der [Zeitgeist](../zeitgeist)-Zeittracker installiert ist
+(`~/.zeitgeist/data.json` existiert), lässt sich der Timer direkt aus magentic
+steuern — TUI (`z` / `Z`, Anzeige links unten und im Header) und Desktop-App
+(Widget in der Sidebar). magentic liest und schreibt die Datendatei direkt;
+die Zeitgeist-App und ihr Menüleisten-Timer bekommen Änderungen über ihren
+File-Watcher sofort mit.
+
 ## Wie es funktioniert
 
 - Agents sind tmux-Sessions mit Prefix `mgt-`. Auch von Hand erstellte Sessions (`tmux new -s mgt-foo`) werden beim Start adoptiert und anhand des Verzeichnisses einem Projekt zugeordnet.
+- Terminal-Sessions (`kind: "term"` im State) starten nur die Shell. Sie werden
+  beim Neustart als Shell wiederhergestellt (nicht mit `claude --continue`),
+  bekommen keine Claude-Statuserkennung und keine Benachrichtigungen;
+  `/done` & Co. lehnen sie ab. Git-Änderungen pro Session zählt magentic
+  trotzdem — committen im Terminal wird also mitgezählt.
 - Der Status wird alle 2 Sekunden per `tmux capture-pane` erkannt.
 - Worktrees landen unter `<projekt>-agents/<agentname>` neben dem Projektordner.
 - Konfiguration und Agent-Registry: `~/.config/magentic/state.json`

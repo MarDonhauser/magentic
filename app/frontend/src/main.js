@@ -6,31 +6,33 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import {
   Overview, Todos, Projects, AddTodo, UpdateTodo, DeleteTodo, StartTodoSession,
-  NewSession, DoneAgent, Cleanup, Merge, Deploy, RemoveWorktree, SetMainBranch,
-  OpenTerm, WriteTerm, ResizeTerm, KillSession, SendSkill,
+  NewSession, NewTermSession, NewTermSessionFor, DoneAgent, Cleanup, Merge, Deploy, RemoveWorktree, SetMainBranch,
+  OpenTerm, WriteTerm, ResizeTerm, KillSession, LaterSession, ReopenSession, SendSkill,
   DeployStatus, AzLogin, ArgoLogin, AzAccounts, AzSetSubscription,
-  WorktreeDiff, SessionPreview, SearchTranscripts, SetActiveTerm,
-  PickFolder, AddProject, RemoveProject, SaveImage, Timeline,
+  WorktreeDiff, SessionPreview, SearchTranscripts, SessionLinks, SetActiveTerm,
+  PickFolder, AddProject, RemoveProject, ReorderProjects, SaveImage, Timeline,
+  Zeitgeist, ZeitgeistStart, ZeitgeistPause, ZeitgeistResume, ZeitgeistStop,
 } from '../wailsjs/go/main/App';
 import { EventsOn, EventsOff, BrowserOpenURL, ClipboardSetText } from '../wailsjs/runtime/runtime';
 
 const STATUS = {
-  running: { color: 'var(--good)', icon: '●', label: 'läuft' },
-  agents:  { color: 'var(--info)', icon: '◍', label: 'Agents' },
-  shell:   { color: 'var(--accent)', icon: '⚙', label: 'Shell läuft' },
-  blocked: { color: 'var(--warning)', icon: '◆', label: 'wartet' },
-  idle:    { color: 'var(--muted)', icon: '○', label: 'idle' },
-  exited:  { color: 'var(--ink-2)', icon: '▪', label: 'beendet' },
-  dead:    { color: 'var(--critical)', icon: '✗', label: 'tot' },
-  unknown: { color: 'var(--muted)', icon: '?', label: '?' },
+  running: { color: 'var(--good)', label: 'läuft' },
+  agents:  { color: 'var(--info)', label: 'Agents' },
+  shell:   { color: 'var(--accent)', label: 'Shell läuft' },
+  blocked: { color: 'var(--warning)', label: 'wartet' },
+  idle:    { color: 'var(--muted)', label: 'idle' },
+  term:    { color: 'var(--info)', label: 'Terminal' },
+  exited:  { color: 'var(--ink-2)', label: 'beendet' },
+  dead:    { color: 'var(--critical)', label: 'tot' },
+  unknown: { color: 'var(--muted)', label: '?' },
 };
 
 const PHASE = {
-  deploy:    { color: 'var(--accent)',  icon: '🚀', label: 'deployt' },
-  merge:     { color: 'var(--info)',    icon: '🔀', label: 'merge' },
-  cleanup:   { color: 'var(--info)',    icon: '🧹', label: 'cleanup' },
-  committed: { color: 'var(--good)',    icon: '✓',  label: '' },
-  pipeline:  { color: 'var(--accent)',  icon: '⏳', label: 'Pipeline' },
+  deploy:    { color: 'var(--accent)',  ico: 'rocket', label: 'deployt' },
+  merge:     { color: 'var(--info)',    ico: 'merge', label: 'merge' },
+  cleanup:   { color: 'var(--info)',    ico: 'broom', label: 'cleanup' },
+  committed: { color: 'var(--good)',    ico: 'check', label: '' },
+  pipeline:  { color: 'var(--accent)',  ico: 'hourglass', label: 'Pipeline' },
 };
 
 function normName(s) {
@@ -51,29 +53,28 @@ function pipelineRunningFor(project) {
 function agentVisual(a, project) {
   const proj = project ?? a?.project;
   const st = STATUS[a?.status] || STATUS.unknown;
-  const alive = ['running', 'agents', 'blocked', 'idle'].includes(a?.status);
+  const alive = ['running', 'agents', 'blocked', 'idle', 'term'].includes(a?.status);
   if (alive && (a?.phase === 'deploy' || a?.deployed) && pipelineRunningFor(proj)) {
     const p = PHASE.pipeline;
-    return { color: p.color, icon: p.icon, label: p.label, text: `${p.icon} ${p.label}` };
+    return { color: p.color, ico: p.ico, label: p.label };
   }
   const ph = PHASE[a?.phase];
   if (ph && !['blocked', 'dead', 'exited'].includes(a?.status)) {
     const label = ph.label && a.phaseLabel ? `${ph.label} ${a.phaseLabel}` : (a.phaseLabel || ph.label);
-    return { color: ph.color, icon: ph.icon, label, text: `${ph.icon} ${label}` };
+    return { color: ph.color, ico: ph.ico, label };
   }
   if (a?.status === 'blocked' && a?.detail) {
-    return { color: st.color, icon: '🔒', label: a.detail, text: `🔒 ${a.detail}` };
+    return { color: st.color, ico: 'lock', label: a.detail };
   }
-  if ((a?.status === 'idle' || a?.status === 'exited') && a?.known) {
-    if (a.ownDirty > 0) return { color: 'var(--warning)', icon: '±', label: `${a.ownDirty} uncommitted`, text: `± ${a.ownDirty} uncommitted` };
-    if (a.ownCommits > 0) return { color: 'var(--good)', icon: '✓', label: 'committed', text: '✓ committed' };
+  if (['idle', 'exited', 'term'].includes(a?.status) && a?.known) {
+    if (a.ownDirty > 0) return { color: 'var(--warning)', label: `± ${a.ownDirty} uncommitted` };
+    if (a.ownCommits > 0) return { color: 'var(--good)', ico: 'check', label: 'committed' };
   }
-  const base = a?.detail || st.label;
-  return { color: st.color, icon: st.icon, label: base, text: base };
+  return { color: st.color, label: a?.detail || st.label };
 }
 
 const $ = id => document.getElementById(id);
-const sessionsEl = $('sessions'), sideTodosEl = $('side-todos'), usageBoxEl = $('usage-box');
+const sessionsEl = $('sessions'), sideTodosEl = $('side-todos'), usageBoxEl = $('usage-box'), zgBoxEl = $('zg-box');
 const overviewEl = $('overview'), termsEl = $('terms'), deployBadgeEl = $('deploy-badge');
 
 const TERM_THEME = { background: '#282d35', foreground: '#dbe0e6', cursor: '#5eead4', selectionBackground: 'rgba(55,207,189,0.30)' };
@@ -90,9 +91,40 @@ let confirmRemoveProject = null;
 let editingMain = null;
 let sidebarSessions = [];
 let hydraProject = null;
+let pdrag = null;
+let suppressHeadClick = false;
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+const ICONS = {
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  rocket: '<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>',
+  merge: '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>',
+  hourglass: '<path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/>',
+  lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  broom: '<path d="m16 22-1-4"/><path d="M19 13.99a1 1 0 0 0 1-1V12a2 2 0 0 0-2-2h-3a1 1 0 0 1-1-1V4a2 2 0 0 0-4 0v5a1 1 0 0 1-1 1H6a2 2 0 0 0-2 2v.99a1 1 0 0 0 1 1"/><path d="M5 14h14l1.973 6.767A1 1 0 0 1 20 22H4a1 1 0 0 1-.973-1.233z"/><path d="m8 22 1-4"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  play: '<polygon points="6 3 20 12 6 21 6 3"/>',
+  pencil: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
+  trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  square: '<rect x="3" y="3" width="18" height="18" rx="2"/>',
+  terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/>',
+  gitbranch: '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+  cloud: '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
+  warn: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+};
+
+function icon(name) {
+  return `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+}
+
+function visHtml(v) {
+  return (v.ico ? icon(v.ico) + ' ' : '') + esc(v.label);
 }
 
 function shortSub(s) {
@@ -140,6 +172,9 @@ const terms = new Map();
 function makeTerm(name) {
   const wrap = document.createElement('div');
   wrap.className = 'term-wrap';
+  const inner = document.createElement('div');
+  inner.className = 'term-inner';
+  wrap.appendChild(inner);
   termsEl.appendChild(wrap);
   const term = new Terminal({
     fontSize: 13,
@@ -154,7 +189,7 @@ function makeTerm(name) {
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.loadAddon(new WebLinksAddon((e, uri) => BrowserOpenURL(uri)));
-  term.open(wrap);
+  term.open(inner);
   let wheelBoosting = false;
   term.element?.addEventListener('wheel', ev => {
     if (wheelBoosting || term.buffer.active.type !== 'alternate') return;
@@ -180,6 +215,11 @@ function makeTerm(name) {
     if (s) { lastSel = s; lastSelAt = Date.now(); }
   });
   term.attachCustomKeyEventHandler(e => {
+    if (e.type === 'keydown' && e.key === 'Enter' && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      WriteTerm(name, toB64('\x1b\r'));
+      e.preventDefault();
+      return false;
+    }
     if (e.type === 'keydown' && e.metaKey && !e.ctrlKey && !e.altKey && e.key.toLowerCase() === 'c') {
       const s = term.getSelection() || (Date.now() - lastSelAt < 30000 ? lastSel : '');
       if (s) {
@@ -252,34 +292,42 @@ function updateTermBar() {
   const a = agentInfo(activeTerm);
   const v = agentVisual(a, a?.project);
   const gone = !a || ['exited', 'dead'].includes(a.status);
+  const claudeActions = a?.term ? '' :
+    `<button class="btn tiny" id="tb-done"${gone ? ' disabled' : ''} title="/done in diese Session senden — committen und auf dev bringen">${icon('check')} done</button>` +
+    `<button class="btn tiny" id="tb-deploy"${gone ? ' disabled' : ''} title="/deploy in diese Session senden">${icon('rocket')} deploy</button>` +
+    `<button class="btn tiny" id="tb-dd"${gone ? ' disabled' : ''} title="/done senden und danach automatisch /deploy">${icon('check')}+${icon('rocket')} beides</button>`;
   termBarEl.innerHTML =
     `<button class="btn tiny" id="tb-back" title="Übersicht (⌘0)">‹ Übersicht</button>` +
     `<span class="dot" style="background:${v.color}"></span>` +
+    (a?.term ? `<span class="kind" title="Terminal-Session — hier läuft kein Claude">${icon('terminal')}</span>` : '') +
     `<span class="tb-name">${esc(activeTerm)}</span>` +
-    `<span class="tb-st">${esc(v.text)}</span>` +
+    `<span class="tb-st">${visHtml(v)}</span>` +
     (a?.project && a.project !== '(ohne Projekt)' ? `<span class="tb-proj">${esc(a.project)}</span>` : '') +
-    `<span class="tb-actions">` +
-    `<button class="btn tiny" id="tb-done"${gone ? ' disabled' : ''} title="/done in diese Session senden — committen und auf dev bringen">✓ done</button>` +
-    `<button class="btn tiny" id="tb-deploy"${gone ? ' disabled' : ''} title="/deploy in diese Session senden">🚀 deploy</button>` +
-    `<button class="btn tiny" id="tb-dd"${gone ? ' disabled' : ''} title="/done senden und danach automatisch /deploy">✓+🚀 beides</button>` +
-    `<button class="btn tiny danger" id="tb-kill" title="Session beenden (⌘⇧W)">✗</button></span>`;
+    `<span class="tb-actions">` + claudeActions +
+    `<button class="btn tiny" id="tb-links" title="Links aus dieser Session anzeigen — Klick öffnet im Browser, ⌥-Klick kopiert">${icon('link')} links</button>` +
+    `<button class="btn tiny" id="tb-later" title="Für später schließen — Session wird beendet, bleibt aber in der Seitenleiste unter „Für später" und lässt sich dort wieder öffnen">${icon('clock')}</button>` +
+    `<button class="btn tiny danger" id="tb-kill" title="Session beenden (⌘⇧W)">${icon('x')}</button></span>`;
   $('tb-back').onclick = showOverview;
-  $('tb-done').onclick = () =>
-    act(DoneAgent(activeTerm), `/done an „${activeTerm}" gesendet — Plan in der Session bestätigen`).catch(() => {});
-  $('tb-deploy').onclick = () =>
-    act(SendSkill(activeTerm, '/deploy '), `/deploy an „${activeTerm}" gesendet — Plan in der Session bestätigen`)
-      .then(startDeployWatch).catch(() => {});
-  $('tb-dd').onclick = () =>
-    act(SendSkill(activeTerm, '/done und sobald done komplett abgeschlossen ist, führe direkt /deploy aus '),
-      `/done + /deploy an „${activeTerm}" gesendet — Plan in der Session bestätigen`)
-      .then(startDeployWatch).catch(() => {});
+  if (!a?.term) {
+    $('tb-done').onclick = () =>
+      act(DoneAgent(activeTerm), `/done an „${activeTerm}" gesendet — Plan in der Session bestätigen`).catch(() => {});
+    $('tb-deploy').onclick = () =>
+      act(SendSkill(activeTerm, '/deploy '), `/deploy an „${activeTerm}" gesendet — Plan in der Session bestätigen`)
+        .then(startDeployWatch).catch(() => {});
+    $('tb-dd').onclick = () =>
+      act(SendSkill(activeTerm, '/done und sobald done komplett abgeschlossen ist, führe direkt /deploy aus '),
+        `/done + /deploy an „${activeTerm}" gesendet — Plan in der Session bestätigen`)
+        .then(startDeployWatch).catch(() => {});
+  }
+  $('tb-links').onclick = e => openLinksMenu(e.currentTarget);
+  $('tb-later').onclick = () => parkSession(activeTerm);
   $('tb-kill').onclick = e => {
     const b = e.currentTarget;
     if (b.dataset.confirm) { killSession(activeTerm); return; }
     b.dataset.confirm = '1';
-    b.textContent = '✗ wirklich?';
+    b.innerHTML = icon('x') + ' wirklich?';
     setTimeout(() => {
-      if (b.isConnected) { delete b.dataset.confirm; b.textContent = '✗'; }
+      if (b.isConnected) { delete b.dataset.confirm; b.innerHTML = icon('x'); }
     }, 3000);
   };
 }
@@ -376,10 +424,28 @@ function updateHydraBar() {
     `<span class="tb-name">🐙 Hydra · ${esc(hydraProject)}</span>` +
     `<span class="tb-st">${n} ${n === 1 ? 'Session' : 'Sessions'} parallel</span>` +
     `<span class="tb-actions">` +
-    `<button class="btn tiny" id="tb-add" title="Neue Session in ${esc(hydraProject)} — erscheint direkt im Raster">+ Session</button></span>`;
+    `<button class="btn tiny" id="tb-add" title="Neue Session in ${esc(hydraProject)} — erscheint direkt im Raster">+ Session</button>` +
+    `<button class="btn tiny" id="tb-term" title="Reines Terminal in ${esc(hydraProject)} — Shell statt Claude">${icon('terminal')} Terminal</button></span>`;
   $('tb-back').onclick = showOverview;
-  $('tb-add').onclick = () =>
-    act(NewSession(hydraProject, false, ''), n2 => `Session „${n2}" gestartet`).catch(() => {});
+  $('tb-add').onclick = async () => {
+    try {
+      const n2 = await act(NewSession(hydraProject, false, ''), x => `Session „${x}" gestartet`);
+      if (n2) await focusHydraSession(n2);
+    } catch { /* toast zeigt den Fehler */ }
+  };
+  $('tb-term').onclick = async () => {
+    try {
+      const n2 = await act(NewTermSession(hydraProject, false, ''), x => `Terminal „${x}" geöffnet`);
+      if (n2) await focusHydraSession(n2);
+    } catch { /* toast zeigt den Fehler */ }
+  };
+}
+
+async function focusHydraSession(name) {
+  await syncHydra();
+  const t = terms.get(name);
+  if (t?.wrap.parentElement === hydraGridEl) t.term.focus();
+  else toast(`Raster zeigt max. 6 Sessions — „${name}" läuft, ist aber nicht im Hydra-Raster`, true);
 }
 
 function ensureHydraHead(t) {
@@ -389,9 +455,19 @@ function ensureHydraHead(t) {
   head.innerHTML =
     `<span class="dot"></span><span class="hh-name">${esc(t.name)}</span>` +
     `<span class="hh-status"></span>` +
-    `<button class="hh-max" title="Session groß öffnen">⤢</button>`;
+    `<button class="hh-max" title="Session groß öffnen">⤢</button>` +
+    `<button class="hh-kill" title="Session beenden">✕</button>`;
   head.querySelector('.hh-max').onclick = () => openSession(t.name);
-  head.onclick = e => { if (!e.target.closest('.hh-max')) t.term.focus(); };
+  head.querySelector('.hh-kill').onclick = e => {
+    const b = e.currentTarget;
+    if (b.dataset.confirm) { killSession(t.name); return; }
+    b.dataset.confirm = '1';
+    b.textContent = '✕ wirklich?';
+    setTimeout(() => {
+      if (b.isConnected) { delete b.dataset.confirm; b.textContent = '✕'; }
+    }, 3000);
+  };
+  head.onclick = e => { if (!e.target.closest('.hh-max, .hh-kill')) t.term.focus(); };
   t.wrap.appendChild(head);
   t.head = head;
   t.wrap.addEventListener('focusin', () => {
@@ -401,6 +477,10 @@ function ensureHydraHead(t) {
     for (const w of hydraGridEl.querySelectorAll('.term-wrap')) {
       w.classList.toggle('focused', w === t.wrap);
     }
+  });
+  t.wrap.addEventListener('mouseenter', e => {
+    if (view !== 'hydra' || e.buttons) return;
+    if (activeTerm !== t.name) t.term.focus();
   });
 }
 
@@ -428,7 +508,7 @@ async function syncHydra() {
     if (t.wrap.parentElement !== hydraGridEl) hydraGridEl.appendChild(t.wrap);
     const v = agentVisual(a, hydraProject);
     t.head.querySelector('.dot').style.background = v.color;
-    t.head.querySelector('.hh-status').textContent = `${v.text} · ${a.age}`;
+    t.head.querySelector('.hh-status').innerHTML = `${visHtml(v)} · ${esc(a.age)}`;
   }
   hydraGridEl.classList.toggle('single', agents.length === 1);
   hydraGridEl.classList.toggle('odd', agents.length % 2 === 1 && agents.length > 1);
@@ -445,6 +525,93 @@ async function syncHydra() {
   }
 }
 
+
+function makeProjDraggable(head, name) {
+  head.classList.add('draggable');
+  head.dataset.proj = name;
+  head.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || e.target.closest('.proj-add')) return;
+    pdrag = { name, head, startY: e.clientY, active: false };
+    window.addEventListener('pointermove', onProjPointerMove);
+    window.addEventListener('pointerup', onProjPointerUp, { once: true });
+  });
+}
+
+function onProjPointerMove(e) {
+  if (!pdrag) return;
+  if (!pdrag.active) {
+    if (Math.abs(e.clientY - pdrag.startY) < 4) return;
+    pdrag.active = true;
+    pdrag.head.classList.add('dragging');
+    document.body.classList.add('reordering');
+  }
+  markDropAt(dropIndexAt(e.clientY));
+  autoScrollSidebar(e.clientY);
+}
+
+function onProjPointerUp(e) {
+  window.removeEventListener('pointermove', onProjPointerMove);
+  const d = pdrag;
+  pdrag = null;
+  document.body.classList.remove('reordering');
+  if (!d) return;
+  d.head.classList.remove('dragging');
+  clearDropMarks();
+  if (d.active) {
+    suppressHeadClick = true;
+    setTimeout(() => { suppressHeadClick = false; }, 0);
+    reorderProjects(d.name, dropIndexAt(e.clientY));
+  }
+}
+
+function autoScrollSidebar(clientY) {
+  const r = sessionsEl.getBoundingClientRect();
+  if (clientY < r.top + 24) sessionsEl.scrollTop -= 6;
+  else if (clientY > r.bottom - 24) sessionsEl.scrollTop += 6;
+}
+
+function projHeads() {
+  return [...sessionsEl.querySelectorAll('.proj-head.draggable')];
+}
+
+function dropIndexAt(clientY) {
+  const heads = projHeads();
+  for (let i = 0; i < heads.length; i++) {
+    const r = heads[i].getBoundingClientRect();
+    if (clientY < r.top + r.height / 2) return i;
+  }
+  return heads.length;
+}
+
+function markDropAt(idx) {
+  clearDropMarks();
+  const heads = projHeads();
+  if (!heads.length) return;
+  if (idx < heads.length) heads[idx].classList.add('drop-before');
+  else heads[heads.length - 1].classList.add('drop-after');
+}
+
+function clearDropMarks() {
+  for (const el of sessionsEl.querySelectorAll('.proj-head.drop-before, .proj-head.drop-after')) {
+    el.classList.remove('drop-before', 'drop-after');
+  }
+}
+
+async function reorderProjects(dragged, idx) {
+  if (!dragged) return;
+  const order = (ov?.projects || []).filter(p => p.path).map(p => p.name);
+  const from = order.indexOf(dragged);
+  if (from < 0) return;
+  order.splice(from, 1);
+  if (from < idx) idx -= 1;
+  order.splice(idx, 0, dragged);
+  try {
+    await ReorderProjects(order);
+    await refresh(true);
+  } catch (err) {
+    toast('Fehler: ' + err, true);
+  }
+}
 
 function renderSidebar() {
   sessionsEl.innerHTML = '';
@@ -465,23 +632,30 @@ function renderSidebar() {
     label.textContent = p.name;
     if (p.path) {
       label.className = 'pname';
-      label.title = '🐙 Hydra-Modus: alle Sessions von ' + p.name + ' nebeneinander';
-      label.onclick = () => enterHydra(p.name);
+      label.title = 'Hydra-Modus: alle Sessions von ' + p.name + ' nebeneinander';
+      label.onclick = () => { if (!suppressHeadClick) enterHydra(p.name); };
     }
     head.appendChild(label);
+    if (p.path) {
+      makeProjDraggable(head, p.name);
+    }
     if (p.path) {
       const plus = document.createElement('button');
       plus.className = 'proj-add';
       plus.textContent = '+';
-      plus.title = 'Neue Claude-Session in ' + p.name + ' (⌥-Klick: in frischem Worktree)';
+      plus.title = 'Neue Claude-Session in ' + p.name + ' (⌥-Klick: in frischem Worktree · ⇧-Klick: reines Terminal)';
       plus.onclick = async e => {
         e.stopPropagation();
         plus.disabled = true;
         try {
           const worktree = e.altKey;
-          const name = await act(NewSession(p.name, worktree, ''),
-            n => (worktree ? `Worktree-Session „${n}" gestartet` : `Session „${n}" gestartet`));
-          if (name) openSession(name);
+          const name = e.shiftKey
+            ? await act(NewTermSession(p.name, false, ''), n => `Terminal „${n}" geöffnet`)
+            : await act(NewSession(p.name, worktree, ''),
+                n => (worktree ? `Worktree-Session „${n}" gestartet` : `Session „${n}" gestartet`));
+          if (!name) return;
+          if (view === 'hydra' && hydraProject === p.name) await focusHydraSession(name);
+          else openSession(name);
         } catch { /* toast zeigt den Fehler */ }
       };
       head.appendChild(plus);
@@ -496,8 +670,9 @@ function renderSidebar() {
       const key = idx < 9 ? `<span class="skey">⌘${idx + 1}</span>` : '';
       div.innerHTML =
         `<span class="dot" style="background:${v.color}"></span>` +
+        (a.term ? `<span class="kind">${icon('terminal')}</span>` : '') +
         `<span class="sname">${esc(a.name)}</span>` +
-        `<span class="sstatus">${esc(v.text)}</span>` +
+        `<span class="sstatus">${visHtml(v)}</span>` +
         `<span class="sage">${esc(a.age)}</span>${key}`;
       div.onclick = () => openSession(a.name);
       div.oncontextmenu = e => {
@@ -512,17 +687,38 @@ function renderSidebar() {
     sessionsEl.innerHTML = '<div class="none">Keine aktiven Sessions</div>';
   }
 
+  if (ov?.later?.length) {
+    const head = document.createElement('div');
+    head.className = 'proj-head';
+    head.innerHTML = `<span class="later-label">${icon('clock')} Für später</span>`;
+    sessionsEl.appendChild(head);
+    for (const l of ov.later) {
+      const div = document.createElement('div');
+      div.className = 'session later';
+      div.title = `„${l.name}" wieder öffnen` + (l.project ? ` · ${l.project}` : '');
+      div.innerHTML =
+        (l.term ? `<span class="kind">${icon('terminal')}</span>` : '') +
+        `<span class="sname">${esc(l.name)}</span>` +
+        (l.project ? `<span class="sstatus">${esc(l.project)}</span>` : '') +
+        `<span class="sage">${esc(l.age)}</span>`;
+      div.onclick = () => reopenLater(l.name);
+      div.oncontextmenu = e => {
+        e.preventDefault();
+        showMenu(e.clientX, e.clientY, l.name, 'later');
+      };
+      sessionsEl.appendChild(div);
+    }
+  }
+
   sideTodosEl.innerHTML = '';
+  $('sidebar').classList.toggle('no-todos', !todos.length);
   for (const t of todos.slice(0, 6)) {
     const div = document.createElement('div');
     div.className = 'side-todo';
     div.title = t.text;
-    div.innerHTML = `<span class="tmark">☐</span><span class="ttext">${esc(t.text)}</span>`;
+    div.innerHTML = `<span class="tmark">${icon('square')}</span><span class="ttext">${esc(t.text)}</span>`;
     div.onclick = showOverview;
     sideTodosEl.appendChild(div);
-  }
-  if (!todos.length) {
-    sideTodosEl.innerHTML = '<div class="none">keine</div>';
   }
 
   const u = ov?.usage;
@@ -541,6 +737,94 @@ function usageBar(label, pct, reset) {
     `<span class="upct">${p}%</span></div>`;
 }
 
+let zg = null;
+let zgAt = 0;
+let zgLoading = false;
+
+function zgDur(sec) {
+  const min = Math.round(sec / 60);
+  const h = Math.floor(min / 60), m = min % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+function zgEur(n) {
+  return n.toFixed(2).replace('.', ',') + ' €';
+}
+
+function zgElapsedNow() {
+  if (!zg?.active) return 0;
+  let sec = zg.elapsedSec;
+  if (zg.state === 'running') sec += Math.floor((Date.now() - zgAt) / 1000);
+  return sec;
+}
+
+async function refreshZg() {
+  if (zgLoading) return;
+  zgLoading = true;
+  try {
+    zg = await Zeitgeist();
+    zgAt = Date.now();
+    renderZg();
+  } catch { /* Backend noch nicht bereit */ }
+  zgLoading = false;
+}
+
+function renderZg() {
+  if (!zg || !zg.exists) { zgBoxEl.innerHTML = ''; return; }
+  const ae = document.activeElement;
+  if (ae && zgBoxEl.contains(ae)) return;
+  const today = zg.todaySec > 0 ? `heute ${zgDur(zg.todaySec)} · ${zgEur(zg.todayCash)}` : '';
+  if (!zg.active) {
+    const opts = (zg.projects || []).map(p =>
+      `<option value="${esc(p.id)}"${p.name === zg.lastProject ? ' selected' : ''}>${esc(p.name)}</option>`).join('');
+    zgBoxEl.innerHTML =
+      `<div class="zg-row"><span class="zg-ic dim">${icon('clock')}</span>` +
+      `<select class="inline-input zg-sel" id="zg-proj" title="Zeitgeist-Projekt">${opts}</select>` +
+      `<button class="btn tiny" id="zg-start" title="Zeitgeist-Timer starten">${icon('play')}</button></div>` +
+      (today ? `<div class="zg-sub">${today}</div>` : '');
+    $('zg-start').onclick = async () => {
+      const ref = $('zg-proj').value;
+      if (!ref) return;
+      try {
+        const p = await ZeitgeistStart(ref);
+        toast(`▶ Zeitgeist-Timer läuft: ${p.name}`);
+      } catch (err) { toast('Fehler: ' + err, true); }
+      refreshZg();
+    };
+    return;
+  }
+  const running = zg.state === 'running';
+  const sec = zgElapsedNow();
+  zgBoxEl.innerHTML =
+    `<div class="zg-row active">` +
+    `<span class="zg-ic" style="color:${running ? 'var(--good)' : 'var(--warning)'}">${running ? '▶' : '⏸'}</span>` +
+    `<span class="zg-name" title="Zeitgeist · ${esc(zg.project)} · ${zg.rate} €/h">${esc(zg.project)}</span>` +
+    `<span class="zg-time" id="zg-time">${zgDur(sec)}</span>` +
+    `<button class="btn tiny" id="zg-pause" title="${running ? 'Timer pausieren' : 'Timer fortsetzen'}">${running ? '⏸' : '▶'}</button>` +
+    `<button class="btn tiny danger" id="zg-stop" title="Timer stoppen — Session abschließen">■</button></div>` +
+    `<div class="zg-sub"><span id="zg-cash">${zgEur(Math.round(sec / 3600 * zg.rate * 100) / 100)}</span>${today ? ' · ' + today : ''}</div>`;
+  $('zg-pause').onclick = async () => {
+    try { await (running ? ZeitgeistPause() : ZeitgeistResume()); }
+    catch (err) { toast('Fehler: ' + err, true); }
+    refreshZg();
+  };
+  $('zg-stop').onclick = e => {
+    const b = e.currentTarget;
+    if (b.dataset.confirm) {
+      ZeitgeistStop('')
+        .then(s => toast(`■ ${s.project} abgeschlossen: ${zgDur(s.durationSec)} — ${zgEur(s.earnings)}`))
+        .catch(err => toast('Fehler: ' + err, true))
+        .finally(refreshZg);
+      return;
+    }
+    b.dataset.confirm = '1';
+    b.textContent = 'wirklich?';
+    setTimeout(() => {
+      if (b.isConnected) { delete b.dataset.confirm; b.textContent = '■'; }
+    }, 3000);
+  };
+}
+
 function tile(value, label, dotColor, hollow) {
   const dot = dotColor ? `<span class="dot${hollow ? ' hollow' : ''}" style="background:${dotColor}"></span>` : '';
   return `<div class="tile"><div class="val">${value}</div><div class="lbl">${dot}${esc(label)}</div></div>`;
@@ -549,20 +833,21 @@ function tile(value, label, dotColor, hollow) {
 function agentPill(a, project) {
   const v = agentVisual(a, project);
   const done = (a.status === 'idle' || a.status === 'running') && !a.phase
-    ? `<button class="btn tiny" data-act="done" data-agent="${esc(a.name)}" title="/done — Arbeit committen und auf dev bringen">✓ done</button>`
+    ? `<button class="btn tiny" data-act="done" data-agent="${esc(a.name)}" title="/done — Arbeit committen und auf dev bringen">${icon('check')} done</button>`
     : '';
   const open = a.status !== 'dead'
-    ? `<button class="btn tiny" data-act="open" data-agent="${esc(a.name)}" title="Terminal öffnen">⌨</button>`
+    ? `<button class="btn tiny" data-act="open" data-agent="${esc(a.name)}" title="Terminal öffnen">${icon('terminal')}</button>`
     : '';
-  return `<span class="pill"><span class="dot" style="background:${v.color}"></span>` +
+  const kind = a.term ? `<span class="kind" title="Terminal-Session — hier läuft kein Claude">${icon('terminal')}</span>` : '';
+  return `<span class="pill"><span class="dot" style="background:${v.color}"></span>${kind}` +
     `<span class="name">${esc(a.name)}</span>` +
-    `<span class="st">${esc(v.text)}</span>` +
+    `<span class="st">${visHtml(v)}</span>` +
     `<span class="age">${esc(a.age)}</span>${open}${done}</span>`;
 }
 
 function gitState(wt) {
   if (wt.branch === '(kein git)') return '';
-  if (wt.clean) return `<span class="git-state clean">✓ sauber</span>`;
+  if (wt.clean) return `<span class="git-state clean">${icon('check')} sauber</span>`;
   const parts = [];
   if (wt.staged) parts.push(`${wt.staged} staged`);
   if (wt.modified) parts.push(`${wt.modified} geändert`);
@@ -578,19 +863,19 @@ function worktreeActions(p, wt) {
   let btns = '';
   if (!busy && wt.ahead > 0 && wt.branch !== p.mainBranch) {
     btns += `<button class="btn" data-act="merge" data-project="${esc(p.name)}" data-source="${esc(wt.branch)}" data-target="${esc(p.mainBranch)}" ` +
-      `title="Claude-Session, die diesen Branch merged">🔀 ${esc(wt.branch)} → ${esc(p.mainBranch)}</button>`;
+      `title="Claude-Session, die diesen Branch merged">${icon('merge')} ${esc(wt.branch)} → ${esc(p.mainBranch)}</button>`;
   }
   if (!wt.isMain && !anySession) {
     if (!wt.clean || wt.ahead > 0) {
-      btns += `<button class="btn" data-act="cleanup" data-path="${esc(wt.path)}" data-main="${esc(p.mainBranch)}" title="Claude-Session zum Committen und Mergen">✨ Cleanup</button>`;
+      btns += `<button class="btn" data-act="cleanup" data-path="${esc(wt.path)}" data-main="${esc(p.mainBranch)}" title="Claude-Session zum Committen und Mergen">${icon('broom')} Cleanup</button>`;
     }
     if (wt.clean) {
       const key = p.name + '|' + wt.path;
       btns += confirmRemove === key
         ? `<button class="btn danger confirm" data-act="remove2" data-project="${esc(p.name)}" data-path="${esc(wt.path)}">wirklich entfernen?</button>`
-        : `<button class="btn danger" data-act="remove1" data-project="${esc(p.name)}" data-path="${esc(wt.path)}">⌫ entfernen</button>`;
+        : `<button class="btn danger" data-act="remove1" data-project="${esc(p.name)}" data-path="${esc(wt.path)}">${icon('trash')} entfernen</button>`;
     } else {
-      btns += `<button class="btn danger" disabled title="uncommittete Änderungen — erst aufräumen">⌫ entfernen</button>`;
+      btns += `<button class="btn danger" disabled title="uncommittete Änderungen — erst aufräumen">${icon('trash')} entfernen</button>`;
     }
   }
   return btns ? `<span class="actions">${btns}</span>` : '';
@@ -603,10 +888,10 @@ function worktreeRow(p, wt, idx, total) {
   if (wt.behind) ab.push(`↓${wt.behind}`);
   let abHtml = ab.length ? `<span class="ab" title="gegenüber ${esc(p.mainBranch)}">${ab.join(' ')}</span>` : '';
   if (!wt.ahead && wt.branch !== p.mainBranch && wt.branch !== '(kein git)' && wt.branch !== '—' && p.path) {
-    abHtml += `<span class="git-state" style="color:var(--good)" title="alle Commits sind in ${esc(p.mainBranch)}">✓ in ${esc(p.mainBranch)}</span>`;
+    abHtml += `<span class="git-state" style="color:var(--good)" title="alle Commits sind in ${esc(p.mainBranch)}">${icon('check')} in ${esc(p.mainBranch)}</span>`;
   }
   const agents = (wt.agents || []).map(a => agentPill(a, p.name)).join('');
-  const warns = (wt.warnings || []).map(w => `<span class="warn"><span class="ic">⚠</span>${esc(w)}</span>`).join('');
+  const warns = (wt.warnings || []).map(w => `<span class="warn"><span class="ic">${icon('warn')}</span>${esc(w)}</span>`).join('');
   const pathHtml = wt.isMain ? '' : `<span class="wt-path" title="${esc(wt.path)}">${esc(wt.shortPath)}</span>`;
   const last = wt.lastMsg ? `<span class="lastmsg" title="letzter Commit">„${esc(wt.lastMsg)}“</span>` : '';
   return `<div class="${cls.join(' ')}">` +
@@ -619,17 +904,18 @@ function projectCard(p) {
   if (p.path) {
     mainCfg = editingMain === p.name
       ? `<span class="maincfg"><input class="inline-input" id="main-input" value="${esc(p.mainBranch)}" placeholder="main">` +
-        `<button class="btn tiny" data-act="mainsave" data-project="${esc(p.name)}">✓</button>` +
-        `<button class="btn tiny" data-act="maincancel">✗</button></span>`
+        `<button class="btn tiny" data-act="mainsave" data-project="${esc(p.name)}">${icon('check')}</button>` +
+        `<button class="btn tiny" data-act="maincancel">${icon('x')}</button></span>`
       : `<span class="maincfg">Hauptbranch <b>${esc(p.mainBranch)}</b></span>` +
-        `<button class="btn tiny" data-act="mainedit" data-project="${esc(p.name)}" title="Hauptbranch ändern">✎</button>`;
+        `<button class="btn tiny" data-act="mainedit" data-project="${esc(p.name)}" title="Hauptbranch ändern">${icon('pencil')}</button>`;
     const rmProj = confirmRemoveProject === p.name
       ? `<button class="btn danger confirm" data-act="rmproj2" data-project="${esc(p.name)}">Repo wirklich entfernen?</button>`
-      : `<button class="btn danger" data-act="rmproj1" data-project="${esc(p.name)}" title="Repository aus magentic entfernen — löscht keine Dateien">✕ Repo</button>`;
+      : `<button class="btn danger" data-act="rmproj1" data-project="${esc(p.name)}" title="Repository aus magentic entfernen — löscht keine Dateien">${icon('x')} Repo</button>`;
     mainCfg += `<span class="actions">` +
       `<button class="btn" data-act="newsession" data-project="${esc(p.name)}" title="Neue Claude-Session im Projekt">+ Session</button>` +
-      `<button class="btn" data-act="newworktree" data-project="${esc(p.name)}" title="Neue Session in eigenem Worktree">⑂ Worktree</button>` +
-      `<button class="btn" data-act="deploy" data-project="${esc(p.name)}" title="Neue Claude-Session, die /deploy ausführt">🚀 deploy</button>${rmProj}</span>`;
+      `<button class="btn" data-act="newworktree" data-project="${esc(p.name)}" title="Neue Session in eigenem Worktree">${icon('gitbranch')} Worktree</button>` +
+      `<button class="btn" data-act="newterm" data-project="${esc(p.name)}" title="Reines Terminal im Projekt — Shell statt Claude">${icon('terminal')} Terminal</button>` +
+      `<button class="btn" data-act="deploy" data-project="${esc(p.name)}" title="Neue Claude-Session, die /deploy ausführt">${icon('rocket')} deploy</button>${rmProj}</span>`;
   }
   return `<div class="card"><div class="card-head"><h2>${esc(p.name)}</h2>` +
     `<span class="path">${esc(p.path || '')}</span>${mainCfg}</div><div class="rows">${rows}</div></div>`;
@@ -643,18 +929,18 @@ function todoSection() {
       return `<div class="todo-row editing">` +
         `<input class="inline-input wide" id="todo-edit-text" value="${esc(t.text)}">` +
         `<select class="inline-input" id="todo-edit-proj">${opts}</select>` +
-        `<button class="btn tiny" data-act="todosave" data-idx="${t.index}">✓ speichern</button>` +
-        `<button class="btn tiny" data-act="todocancel">✗</button></div>`;
+        `<button class="btn tiny" data-act="todosave" data-idx="${t.index}">${icon('check')} speichern</button>` +
+        `<button class="btn tiny" data-act="todocancel">${icon('x')}</button></div>`;
     }
     return `<div class="todo-row">` +
-      `<span class="tmark">☐</span>` +
+      `<span class="tmark">${icon('square')}</span>` +
       `<span class="ttext">${esc(t.text)}</span>` +
       (t.project ? `<span class="tproj">[${esc(t.project)}]</span>` : '<span class="tproj dim">ohne Projekt</span>') +
       `<span class="tage">${esc(t.age)}</span>` +
       `<span class="actions">` +
-      `<button class="btn tiny" data-act="todostart" data-idx="${t.index}" title="Session starten — Text landet im Eingabefeld">▶ Session</button>` +
-      `<button class="btn tiny" data-act="todoedit" data-idx="${t.index}">✎</button>` +
-      `<button class="btn tiny danger" data-act="tododelete" data-idx="${t.index}">⌫</button></span></div>`;
+      `<button class="btn tiny" data-act="todostart" data-idx="${t.index}" title="Session starten — Text landet im Eingabefeld">${icon('play')} Session</button>` +
+      `<button class="btn tiny" data-act="todoedit" data-idx="${t.index}">${icon('pencil')}</button>` +
+      `<button class="btn tiny danger" data-act="tododelete" data-idx="${t.index}">${icon('trash')}</button></span></div>`;
   }).join('');
   if (!todos.length) rows = '<div class="none" style="padding:8px 2px">Keine Todos — unten eins anlegen</div>';
   const opts = ['<option value="">— Projekt —</option>'].concat(projects.map(p => `<option value="${esc(p)}">${esc(p)}</option>`)).join('');
@@ -715,7 +1001,7 @@ function renderDeployBadge() {
   const age = s.age ? `<span class="db-age">${esc(s.age)}</span>` : '';
   deployBadgeEl.innerHTML =
     `<div class="db-line"><span class="db-pulse"></span>` +
-    `<span class="db-title">🚀 ${esc(s.title)}</span>${age}</div>` +
+    `<span class="db-title">${icon('rocket')} ${esc(s.title)}</span>${age}</div>` +
     (s.sub ? `<div class="db-sub">${esc(s.sub)}</div>` : '');
 }
 
@@ -767,7 +1053,7 @@ function argoRow(a) {
 function deployCard() {
   const ds = deployStatus;
   if (!ds) {
-    return `<div class="card" id="deploy-card"><div class="card-head"><h2>🚀 Pipelines &amp; Argo</h2>` +
+    return `<div class="card" id="deploy-card"><div class="card-head"><h2>${icon('rocket')} Pipelines &amp; Argo</h2>` +
       `<span class="path">lade…</span></div></div>`;
   }
   const azChip = ds.azOk
@@ -775,7 +1061,7 @@ function deployCard() {
     : `<span class="ds-chip bad" title="${esc(ds.azErr)}">Azure ✗</span>` +
       `<button class="btn tiny" data-act="azlogin">az login</button>`;
   const subChip = ds.azSub
-    ? `<button class="ds-chip sub" data-act="azsub" title="Azure-Subscription wechseln · ${esc(ds.azSub)}\n${esc(ds.azSubId)}">☁ ${esc(shortSub(ds.azSub))} ▾</button>`
+    ? `<button class="ds-chip sub" data-act="azsub" title="Azure-Subscription wechseln · ${esc(ds.azSub)}\n${esc(ds.azSubId)}">${icon('cloud')} ${esc(shortSub(ds.azSub))} ▾</button>`
     : '';
   const argoChip = ds.argoOk
     ? `<span class="ds-chip ok" title="${esc(ds.argoServer)}">Argo ✓</span>`
@@ -795,8 +1081,8 @@ function deployCard() {
   }
   if (!apps.length && !ds.argoOk) argoHtml = `<div class="none">${esc(ds.argoErr)}</div>`;
   const watching = Date.now() < dsWatchUntil
-    ? `<span class="ds-chip watch">⏱ verfolge Deploy (10s-Takt)</span>` : '';
-  return `<div class="card" id="deploy-card"><div class="card-head"><h2>🚀 Pipelines &amp; Argo</h2>` +
+    ? `<span class="ds-chip watch">${icon('clock')} verfolge Deploy (10s-Takt)</span>` : '';
+  return `<div class="card" id="deploy-card"><div class="card-head"><h2>${icon('rocket')} Pipelines &amp; Argo</h2>` +
     `${azChip}${subChip}${argoChip}${watching}` +
     `<span class="actions"><span class="path">${esc(deployStamp)}</span>` +
     `<button class="btn tiny" data-act="dsrefresh" title="Status neu laden">↻</button></span></div>` +
@@ -841,6 +1127,7 @@ function renderOverview() {
     tile(c.agents || 0, 'Agents aktiv', 'var(--info)') +
     tile(c.blocked || 0, 'wartet auf Input', 'var(--warning)') +
     tile(c.idle || 0, 'idle', 'var(--muted)', true) +
+    (c.term ? tile(c.term, 'Terminals', 'var(--info)', true) : '') +
     tile(c.dirty || 0, 'Worktrees mit Änderungen', 'var(--warning)') +
     tile(c.warnings || 0, 'Warnungen', 'var(--serious)') +
     (u ? tile(`${Math.round(u.fiveHour)}%`, `5h-Limit · ↻ ${esc(u.fiveHourReset)}`, usageColor(u.fiveHour)) +
@@ -896,6 +1183,11 @@ overviewEl.addEventListener('click', async e => {
         break;
       case 'newsession': await act(NewSession(d.project, false, ''), n => `Session „${n}" gestartet`); break;
       case 'newworktree': await act(NewSession(d.project, true, ''), n => `Worktree-Session „${n}" gestartet`); break;
+      case 'newterm': {
+        const n = await act(NewTermSession(d.project, false, ''), x => `Terminal „${x}" geöffnet`);
+        if (n) openSession(n);
+        break;
+      }
       case 'addproject': {
         const path = await PickFolder();
         if (path) await act(AddProject(path), n => `Repository „${n}" hinzugefügt`);
@@ -997,7 +1289,7 @@ const modalEl = document.createElement('div');
 modalEl.id = 'modal';
 modalEl.innerHTML =
   '<div id="modal-box"><div id="modal-head"><span id="modal-title"></span>' +
-  '<button class="btn tiny" id="modal-close">schließen ✗</button></div><pre id="modal-pre"></pre></div>';
+  `<button class="btn tiny" id="modal-close">schließen ${icon('x')}</button></div><pre id="modal-pre"></pre></div>`;
 document.body.appendChild(modalEl);
 $('modal-close').onclick = () => { modalEl.style.display = 'none'; };
 modalEl.addEventListener('mousedown', e => { if (e.target === modalEl) modalEl.style.display = 'none'; });
@@ -1178,21 +1470,43 @@ function hideMenu() {
 
 function showMenu(x, y, name, status) {
   menuFor = name;
-  const done = ['idle', 'running'].includes(status)
-    ? `<div class="mi" data-mi="done">✓ /done senden</div>` : '';
-  menuEl.innerHTML =
-    `<div class="mi-head">${esc(name)}</div>` +
-    `<div class="mi" data-mi="open">⌨ Terminal öffnen</div>` + done +
-    `<div class="mi danger" data-mi="kill">✗ Session beenden</div>`;
+  if (status === 'later') {
+    menuEl.innerHTML =
+      `<div class="mi-head">${esc(name)}</div>` +
+      `<div class="mi" data-mi="reopen">${icon('play')} Wieder öffnen</div>` +
+      `<div class="mi danger" data-mi="kill">${icon('x')} Endgültig entfernen</div>`;
+  } else {
+    const done = ['idle', 'running'].includes(status)
+      ? `<div class="mi" data-mi="done">${icon('check')} /done senden</div>` : '';
+    menuEl.innerHTML =
+      `<div class="mi-head">${esc(name)}</div>` +
+      `<div class="mi" data-mi="open">${icon('terminal')} Terminal öffnen</div>` + done +
+      `<div class="mi" data-mi="later">${icon('clock')} Für später schließen</div>` +
+      `<div class="mi danger" data-mi="kill">${icon('x')} Session beenden</div>`;
+  }
   menuEl.style.display = 'block';
   menuEl.style.left = Math.min(x, window.innerWidth - 200) + 'px';
   menuEl.style.top = Math.min(y, window.innerHeight - menuEl.offsetHeight - 10) + 'px';
 }
 
-async function killSession(name) {
+async function openTermInContext() {
+  let name = null;
   try {
-    await act(KillSession(name), `Session „${name}" beendet`);
+    if (activeTerm) {
+      name = await act(NewTermSessionFor(activeTerm), x => `Terminal „${x}" geöffnet`);
+    } else if (hydraProject) {
+      name = await act(NewTermSession(hydraProject, false, ''), x => `Terminal „${x}" geöffnet`);
+    } else {
+      toast('⌘T öffnet ein Terminal im Verzeichnis der offenen Session — hier stattdessen den ⌨-Button der Projektkarte nutzen', true);
+      return;
+    }
   } catch { return; }
+  if (!name) return;
+  if (view === 'hydra') await focusHydraSession(name);
+  else openSession(name);
+}
+
+async function afterSessionGone(name) {
   const t = terms.get(name);
   if (t) {
     EventsOff('term:data:' + name);
@@ -1210,19 +1524,42 @@ async function killSession(name) {
   if (activeTerm === name) showOverview();
 }
 
+async function killSession(name) {
+  try {
+    await act(KillSession(name), `Session „${name}" beendet`);
+  } catch { return; }
+  await afterSessionGone(name);
+}
+
+async function parkSession(name) {
+  try {
+    await act(LaterSession(name), `Session „${name}" für später geparkt`);
+  } catch { return; }
+  await afterSessionGone(name);
+}
+
+async function reopenLater(name) {
+  try {
+    await act(ReopenSession(name), `Session „${name}" wieder geöffnet`);
+  } catch { return; }
+  openSession(name);
+}
+
 menuEl.addEventListener('click', async e => {
   const mi = e.target.closest('.mi');
   if (!mi || !menuFor) return;
   const name = menuFor;
   switch (mi.dataset.mi) {
     case 'open': hideMenu(); openSession(name); break;
+    case 'later': hideMenu(); parkSession(name); break;
+    case 'reopen': hideMenu(); reopenLater(name); break;
     case 'done':
       hideMenu();
       try { await act(DoneAgent(name), `/done an „${name}" gesendet — Plan in der Session bestätigen`); } catch { }
       break;
     case 'kill':
       if (mi.dataset.confirm) { hideMenu(); killSession(name); }
-      else { mi.dataset.confirm = '1'; mi.textContent = '✗ wirklich beenden?'; }
+      else { mi.dataset.confirm = '1'; mi.innerHTML = icon('x') + ' wirklich beenden?'; }
       break;
   }
 });
@@ -1233,6 +1570,33 @@ const subMenuEl = document.createElement('div');
 subMenuEl.id = 'submenu';
 document.body.appendChild(subMenuEl);
 function hideSubMenu() { subMenuEl.style.display = 'none'; }
+
+function shortUrl(u) {
+  u = u.replace(/^https?:\/\//, '');
+  return u.length > 64 ? u.slice(0, 61) + '…' : u;
+}
+
+async function openLinksMenu(anchor) {
+  const name = activeTerm;
+  const r = anchor.getBoundingClientRect();
+  subMenuEl.innerHTML = `<div class="mi-head">Links</div><div class="mi muted">lade…</div>`;
+  subMenuEl.style.display = 'block';
+  subMenuEl.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 380)) + 'px';
+  subMenuEl.style.top = (r.bottom + 6) + 'px';
+  let links = [];
+  try { links = (await SessionLinks(name)) || []; } catch { links = []; }
+  if (subMenuEl.style.display === 'none' || activeTerm !== name) return;
+  if (!links.length) {
+    subMenuEl.innerHTML = `<div class="mi-head">Links</div><div class="mi muted">keine Links in dieser Session gefunden</div>`;
+    return;
+  }
+  subMenuEl.innerHTML = `<div class="mi-head">Links — Klick öffnet · ⌥-Klick kopiert</div>` +
+    links.map(l =>
+      `<div class="mi" data-url="${esc(l.url)}" title="${esc(l.url)}">` +
+      `<span class="linkurl">${esc(shortUrl(l.url))}</span>` +
+      (l.time ? `<span class="linktime">${esc(l.time)}</span>` : '') +
+      `</div>`).join('');
+}
 
 async function openSubPicker(anchor) {
   const r = anchor.getBoundingClientRect();
@@ -1258,6 +1622,18 @@ async function openSubPicker(anchor) {
     }).join('');
 }
 
+subMenuEl.addEventListener('click', e => {
+  const link = e.target.closest('.mi[data-url]');
+  if (!link) return;
+  hideSubMenu();
+  if (e.altKey) {
+    ClipboardSetText(link.dataset.url);
+    toast('Link kopiert');
+  } else {
+    BrowserOpenURL(link.dataset.url);
+  }
+});
+
 subMenuEl.addEventListener('click', async e => {
   const mi = e.target.closest('.mi[data-sub]');
   if (!mi) return;
@@ -1269,7 +1645,7 @@ subMenuEl.addEventListener('click', async e => {
   } catch { /* toast zeigt den Fehler */ }
 });
 document.addEventListener('mousedown', e => {
-  if (!subMenuEl.contains(e.target) && !e.target.closest('[data-act="azsub"]')) hideSubMenu();
+  if (!subMenuEl.contains(e.target) && !e.target.closest('[data-act="azsub"]') && !e.target.closest('#tb-links')) hideSubMenu();
 });
 window.addEventListener('blur', hideSubMenu);
 
@@ -1291,11 +1667,23 @@ window.addEventListener('keydown', e => {
     } else if (view === 'term' || view === 'hydra') {
       showOverview();
     }
+  } else if (e.key.toLowerCase() === 't') {
+    e.preventDefault();
+    openTermInContext();
   }
 }, true);
 
 refresh(true);
 setInterval(() => { if (!document.hidden) refresh(false); }, 3000);
+refreshZg();
+setInterval(() => { if (!document.hidden) refreshZg(); }, 5000);
+setInterval(() => {
+  if (!zg?.active || document.hidden) return;
+  const t = $('zg-time'), c = $('zg-cash');
+  const sec = zgElapsedNow();
+  if (t) t.textContent = zgDur(sec);
+  if (c) c.textContent = zgEur(Math.round(sec / 3600 * zg.rate * 100) / 100);
+}, 1000);
 refreshDeployStatus();
 let dsTick = 0;
 setInterval(() => {
@@ -1306,6 +1694,7 @@ setInterval(() => {
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) {
     refresh(false);
+    refreshZg();
     refreshDeployStatus();
   }
 });

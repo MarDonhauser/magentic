@@ -15,6 +15,7 @@ type OvAgent struct {
 	Detail     string `json:"detail"`
 	Age        string `json:"age"`
 	Worktree   bool   `json:"worktree"`
+	Term       bool   `json:"term"`
 	Phase      string `json:"phase,omitempty"`
 	PhaseLabel string `json:"phaseLabel,omitempty"`
 	Deployed   bool   `json:"deployed"`
@@ -55,11 +56,19 @@ type OvUsage struct {
 	SevenDayReset string  `json:"sevenDayReset"`
 }
 
+type OvLater struct {
+	Name    string `json:"name"`
+	Project string `json:"project"`
+	Age     string `json:"age"`
+	Term    bool   `json:"term"`
+}
+
 type Overview struct {
 	GeneratedAt string         `json:"generatedAt"`
 	Counts      map[string]int `json:"counts"`
 	Usage       *OvUsage       `json:"usage"`
 	Projects    []OvProject    `json:"projects"`
+	Later       []OvLater      `json:"later"`
 }
 
 func statusKey(s AgentStatus) string {
@@ -78,12 +87,14 @@ func statusKey(s AgentStatus) string {
 		return "exited"
 	case StatusDead:
 		return "dead"
+	case StatusTerm:
+		return "term"
 	}
 	return "unknown"
 }
 
 func agentAlive(s AgentStatus) bool {
-	return s == StatusRunning || s == StatusAgents || s == StatusShell || s == StatusBlocked || s == StatusIdle
+	return s == StatusRunning || s == StatusAgents || s == StatusShell || s == StatusBlocked || s == StatusIdle || s == StatusTerm
 }
 
 func BuildOverview(s *State) Overview {
@@ -123,10 +134,24 @@ func BuildOverviewFrom(s *State, statuses map[string]AgentStatus, contents map[s
 			SevenDayReset: ShortWeekday(u.SevenDayReset),
 		}
 	}
-	for _, st := range statuses {
+	later := map[string]bool{}
+	for _, a := range s.Agents {
+		if a.LaterAt.IsZero() {
+			continue
+		}
+		later[a.Name] = true
+		ov.Later = append(ov.Later, OvLater{Name: a.Name, Project: a.Project, Age: FormatAge(a.LaterAt), Term: a.IsTerm()})
+	}
+	for name, st := range statuses {
+		if later[name] {
+			continue
+		}
 		ov.Counts[statusKey(st)]++
 	}
 	assigned := map[string]bool{}
+	for name := range later {
+		assigned[name] = true
+	}
 
 	for _, p := range s.Projects {
 		proj := OvProject{Name: p.Name, Path: p.Path}
@@ -256,6 +281,7 @@ func toOvAgent(a Agent, statuses map[string]AgentStatus, activity map[string]tim
 		Detail:     detail,
 		Age:        FormatAge(lastActive),
 		Worktree:   a.Worktree,
+		Term:       a.IsTerm(),
 		Phase:      phase,
 		PhaseLabel: phaseLabel,
 		Deployed:   agentAlive(st) && !a.DeployAt.IsZero() && time.Since(a.DeployAt) < 45*time.Minute,
@@ -313,7 +339,7 @@ func finishWarnings(proj *OvProject, statuses map[string]AgentStatus, s *State) 
 		wt := &proj.Worktrees[i]
 		alive := false
 		for _, a := range wt.Agents {
-			if a.Status == "running" || a.Status == "agents" || a.Status == "blocked" || a.Status == "idle" {
+			if a.Status == "running" || a.Status == "agents" || a.Status == "blocked" || a.Status == "idle" || a.Status == "term" {
 				alive = true
 			}
 		}

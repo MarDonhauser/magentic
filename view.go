@@ -15,6 +15,7 @@ var (
 	colAgents  = lipgloss.Color("44")
 	colBlocked = lipgloss.Color("214")
 	colIdle    = lipgloss.Color("245")
+	colTerm    = lipgloss.Color("111")
 	colDead    = lipgloss.Color("196")
 	colDim     = lipgloss.Color("240")
 	colText    = lipgloss.Color("252")
@@ -43,6 +44,8 @@ func statusStyle(s AgentStatus) lipgloss.Style {
 		return lipgloss.NewStyle().Foreground(colBlocked).Bold(true)
 	case StatusDead:
 		return lipgloss.NewStyle().Foreground(colDead)
+	case StatusTerm:
+		return lipgloss.NewStyle().Foreground(colTerm)
 	default:
 		return lipgloss.NewStyle().Foreground(colIdle)
 	}
@@ -122,6 +125,13 @@ func (m model) renderHeader() string {
 		styleWarn.Render("◆"), counts[StatusBlocked],
 		styleDim.Render("○"), counts[StatusIdle],
 		styleErr.Render("✗"), counts[StatusExited]+counts[StatusDead])
+	if zg := m.poll.zeitgeist; zg.Active {
+		sym, sty := "▶", styleOK
+		if zg.State == "paused" {
+			sym, sty = "⏸", styleWarn
+		}
+		stats = sty.Render("⏱ "+sym+" "+zg.Project+" "+formatDurShort(zg.ElapsedSec)) + styleDim.Render("   ·   ") + stats
+	}
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(stats) - 1
 	if gap < 1 {
 		gap = 1
@@ -210,14 +220,39 @@ func (m model) renderTree(w, h int) string {
 		}
 		lines = append(lines, trunc(line, w))
 	}
-	usage := m.usageLines(w)
-	if len(usage) > 0 && len(lines)+len(usage) < h {
-		for len(lines) < h-len(usage) {
+	extra := append(m.zeitgeistLines(w), m.usageLines(w)...)
+	if len(extra) > 0 && len(lines)+len(extra) < h {
+		for len(lines) < h-len(extra) {
 			lines = append(lines, "")
 		}
-		lines = append(lines, usage...)
+		lines = append(lines, extra...)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m model) zeitgeistLines(w int) []string {
+	zg := m.poll.zeitgeist
+	if !zg.Exists {
+		return nil
+	}
+	lines := []string{
+		styleDim.Render(strings.Repeat("─", max(0, w))),
+		styleSection.Render("Zeitgeist"),
+	}
+	if zg.Active {
+		sym, sty := "▶", styleOK
+		if zg.State == "paused" {
+			sym, sty = "⏸", styleWarn
+		}
+		lines = append(lines, trunc(sty.Render(sym+" "+zg.Project)+" "+
+			styleText.Render(formatDurShort(zg.ElapsedSec))+styleDim.Render(" · "+formatEuro(zg.Earnings)), w))
+	} else {
+		lines = append(lines, trunc(styleDim.Render("○ kein Timer · z startet"), w))
+	}
+	if zg.TodaySec > 0 {
+		lines = append(lines, trunc(styleDim.Render("heute "+formatDurShort(zg.TodaySec)+" · "+formatEuro(zg.TodayCash)), w))
+	}
+	return lines
 }
 
 func (m model) todoDetail(idx, w int) []string {
@@ -485,7 +520,7 @@ func (m model) renderFooter() string {
 		keys := []string{"⏎/klick session daraus starten", "e bearbeiten", "x löschen", "t neues todo", "q ende"}
 		return " " + styleDim.Render(strings.Join(keys, " · "))
 	}
-	keys := []string{"n neu", "w worktree", "⏎ attach", "t todo", "d done", "D deploy", "r name", "x kill", "p projekt", "q ende"}
+	keys := []string{"n neu", "w worktree", "T terminal", "⏎ attach", "t todo", "d done", "D deploy", "z timer", "r name", "x kill", "p projekt", "q ende"}
 	return " " + styleDim.Render(strings.Join(keys, " · "))
 }
 

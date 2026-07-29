@@ -38,9 +38,16 @@ func TmuxHasSession(session string) bool {
 	return err == nil
 }
 
-func TmuxNewClaudeSession(session, dir string, extraArgs string) error {
+func TmuxNewShellSession(session, dir string) error {
 	if _, err := Tmux("new-session", "-d", "-s", session, "-c", dir, "-x", "220", "-y", "50"); err != nil {
 		return fmt.Errorf("tmux new-session: %w", err)
+	}
+	return nil
+}
+
+func TmuxNewClaudeSession(session, dir string, extraArgs string) error {
+	if err := TmuxNewShellSession(session, dir); err != nil {
+		return err
 	}
 	cmd := "claude"
 	if extraArgs != "" {
@@ -56,6 +63,18 @@ func TmuxNewClaudeSession(session, dir string, extraArgs string) error {
 func TmuxKillSession(session string) error {
 	_, err := Tmux("kill-session", "-t", TargetSession(session))
 	return err
+}
+
+func TmuxCapturePaneJoined(session string, scrollback int) string {
+	args := []string{"capture-pane", "-p", "-J", "-t", TargetPane(session)}
+	if scrollback > 0 {
+		args = append(args, "-S", fmt.Sprintf("-%d", scrollback))
+	}
+	out, err := Tmux(args...)
+	if err != nil {
+		return ""
+	}
+	return out
 }
 
 func TmuxCapturePane(session string, scrollback int) string {

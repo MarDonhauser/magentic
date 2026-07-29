@@ -14,6 +14,7 @@ type (
 	PaneInfo       = core.PaneInfo
 	UsageInfo      = core.UsageInfo
 	Overview       = core.Overview
+	ZgInfo         = core.ZgInfo
 )
 
 const (
@@ -25,6 +26,9 @@ const (
 	StatusIdle    = core.StatusIdle
 	StatusExited  = core.StatusExited
 	StatusDead    = core.StatusDead
+	StatusTerm    = core.StatusTerm
+
+	KindTerm = core.KindTerm
 )
 
 var (
@@ -36,6 +40,7 @@ var (
 	targetPane           = core.TargetPane
 	TmuxHasSession       = core.TmuxHasSession
 	TmuxNewClaudeSession = core.TmuxNewClaudeSession
+	TmuxNewShellSession  = core.TmuxNewShellSession
 	TmuxKillSession      = core.TmuxKillSession
 	TmuxCapturePane      = core.TmuxCapturePane
 	TmuxPaneInfos        = core.TmuxPaneInfos
@@ -65,10 +70,19 @@ var (
 	PickAgentName = core.PickAgentName
 	BuildOverview = core.BuildOverview
 
-	discoverNew         = core.DiscoverNew
-	startSkillAgent     = core.StartSkillAgent
-	sendPromptWhenReady = core.SendPromptWhenReady
-	sendSlashCommand    = core.SendSlashCommand
+	zeitgeistInfo   = core.ZeitgeistInfo
+	zeitgeistStart  = core.ZeitgeistStart
+	zeitgeistPause  = core.ZeitgeistPause
+	zeitgeistResume = core.ZeitgeistResume
+	zeitgeistStop   = core.ZeitgeistStop
+	formatEuro      = core.FormatEuro
+	formatDurShort  = core.FormatDurShort
+
+	discoverNew          = core.DiscoverNew
+	createTermSessionFor = core.CreateTermSessionFor
+	startSkillAgent      = core.StartSkillAgent
+	sendPromptWhenReady  = core.SendPromptWhenReady
+	sendSlashCommand     = core.SendSlashCommand
 
 	shortPath     = core.ShortPath
 	formatAge     = core.FormatAge

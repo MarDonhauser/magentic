@@ -57,15 +57,25 @@ func RestoreSessions(st *State) int {
 			kept = append(kept, a)
 			continue
 		}
+		if !a.LaterAt.IsZero() {
+			kept = append(kept, a)
+			continue
+		}
 		if info, err := os.Stat(a.Dir); err != nil || !info.IsDir() {
 			changed = true
 			continue
 		}
-		extraArgs := "--continue"
-		if a.SessionID != "" {
-			extraArgs = "--resume " + a.SessionID
+		var err error
+		if a.IsTerm() {
+			err = TmuxNewShellSession(sn, a.Dir)
+		} else {
+			extraArgs := "--continue"
+			if a.SessionID != "" {
+				extraArgs = "--resume " + a.SessionID
+			}
+			err = TmuxNewClaudeSession(sn, a.Dir, extraArgs)
 		}
-		if err := TmuxNewClaudeSession(sn, a.Dir, extraArgs); err != nil {
+		if err != nil {
 			kept = append(kept, a)
 			continue
 		}
@@ -77,6 +87,34 @@ func RestoreSessions(st *State) int {
 		st.Save()
 	}
 	return restored
+}
+
+func ReopenLater(st *State, name string) error {
+	a := st.AgentByName(name)
+	if a == nil {
+		return fmt.Errorf("unbekannte Session: %s", name)
+	}
+	if info, err := os.Stat(a.Dir); err != nil || !info.IsDir() {
+		return fmt.Errorf("Verzeichnis existiert nicht mehr: %s", a.Dir)
+	}
+	sn := SessionName(a.Name)
+	if !TmuxHasSession(sn) {
+		var err error
+		if a.IsTerm() {
+			err = TmuxNewShellSession(sn, a.Dir)
+		} else {
+			extraArgs := "--continue"
+			if a.SessionID != "" {
+				extraArgs = "--resume " + a.SessionID
+			}
+			err = TmuxNewClaudeSession(sn, a.Dir, extraArgs)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	a.LaterAt = time.Time{}
+	return st.Save()
 }
 
 func SendPromptWhenReady(session, prompt string, submit bool) {
@@ -138,6 +176,11 @@ func SendSkill(name, cmd string) error {
 	sn := SessionName(name)
 	if name == "" || !TmuxHasSession(sn) {
 		return fmt.Errorf("Session läuft nicht mehr")
+	}
+	if st, err := LoadState(); err == nil {
+		if a := st.AgentByName(name); a != nil && a.IsTerm() {
+			return fmt.Errorf("%s ist eine Terminal-Session — dort läuft kein Claude", name)
+		}
 	}
 	infos := TmuxPaneInfos()
 	status := DetectClaudeStatus(true, infos[sn].Command, LastLines(TmuxCapturePane(sn, 0), 25))
@@ -249,17 +292,52 @@ func StartTodoSession(st *State, idx int) (string, error) {
 }
 
 func CreateAgentSession(st *State, projName string, worktree bool, name string) (string, error) {
-	proj := st.ProjectByName(projName)
-	if proj == nil {
-		return "", fmt.Errorf("Projekt nicht gefunden")
+	return createSession(st, projName, worktree, name, "")
+}
+
+func CreateTermSession(st *State, projName string, worktree bool, name string) (string, error) {
+	return createSession(st, projName, worktree, name, KindTerm)
+}
+
+func CreateTermSessionFor(st *State, agentName, name string) (string, error) {
+	a := st.AgentByName(agentName)
+	if a == nil {
+		return "", fmt.Errorf("Session %q nicht gefunden", agentName)
 	}
+	hint := a.Project
+	if hint == "" {
+		hint = filepath.Base(a.Dir)
+	}
+	name, err := pickSessionName(st, name, hint, KindTerm)
+	if err != nil {
+		return "", err
+	}
+	return startSession(st, name, a.Dir, a.Project, a.Worktree, KindTerm)
+}
+
+func pickSessionName(st *State, name, hint, kind string) (string, error) {
 	if name == "" {
-		name = PickAgentName(st, projName)
+		if kind == KindTerm {
+			hint = "term " + hint
+		}
+		name = PickAgentName(st, hint)
 	} else {
 		name = SanitizeName(name)
 	}
 	if name == "" || st.HasAgent(name) || TmuxHasSession(SessionName(name)) {
 		return "", fmt.Errorf("Name %q ist ungültig oder schon vergeben", name)
+	}
+	return name, nil
+}
+
+func createSession(st *State, projName string, worktree bool, name, kind string) (string, error) {
+	proj := st.ProjectByName(projName)
+	if proj == nil {
+		return "", fmt.Errorf("Projekt nicht gefunden")
+	}
+	name, err := pickSessionName(st, name, projName, kind)
+	if err != nil {
+		return "", err
 	}
 	dir := proj.Path
 	if worktree {
@@ -269,12 +347,23 @@ func CreateAgentSession(st *State, projName string, worktree bool, name string) 
 		}
 		dir = wt
 	}
-	sid := NewUUID()
-	if err := TmuxNewClaudeSession(SessionName(name), dir, "--session-id "+sid); err != nil {
-		return "", fmt.Errorf("tmux: %w", err)
+	return startSession(st, name, dir, proj.Name, worktree, kind)
+}
+
+func startSession(st *State, name, dir, project string, worktree bool, kind string) (string, error) {
+	sid := ""
+	if kind == KindTerm {
+		if err := TmuxNewShellSession(SessionName(name), dir); err != nil {
+			return "", fmt.Errorf("tmux: %w", err)
+		}
+	} else {
+		sid = NewUUID()
+		if err := TmuxNewClaudeSession(SessionName(name), dir, "--session-id "+sid); err != nil {
+			return "", fmt.Errorf("tmux: %w", err)
+		}
 	}
 	baseCommit, baseDirty := CaptureBaseline(dir)
-	st.AddAgent(Agent{Name: name, Project: proj.Name, Dir: dir, Worktree: worktree, CreatedAt: time.Now(), BaseCommit: baseCommit, BaseDirty: baseDirty, SessionID: sid})
+	st.AddAgent(Agent{Name: name, Project: project, Dir: dir, Worktree: worktree, Kind: kind, CreatedAt: time.Now(), BaseCommit: baseCommit, BaseDirty: baseDirty, SessionID: sid})
 	if err := st.Save(); err != nil {
 		return "", err
 	}

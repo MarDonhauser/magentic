@@ -54,12 +54,24 @@ export function KillSession(arg1) {
   return window['go']['main']['App']['KillSession'](arg1);
 }
 
+export function LaterSession(arg1) {
+  return window['go']['main']['App']['LaterSession'](arg1);
+}
+
 export function Merge(arg1, arg2, arg3) {
   return window['go']['main']['App']['Merge'](arg1, arg2, arg3);
 }
 
 export function NewSession(arg1, arg2, arg3) {
   return window['go']['main']['App']['NewSession'](arg1, arg2, arg3);
+}
+
+export function NewTermSession(arg1, arg2, arg3) {
+  return window['go']['main']['App']['NewTermSession'](arg1, arg2, arg3);
+}
+
+export function NewTermSessionFor(arg1) {
+  return window['go']['main']['App']['NewTermSessionFor'](arg1);
 }
 
 export function OpenTerm(arg1, arg2, arg3) {
@@ -86,6 +98,14 @@ export function RemoveWorktree(arg1, arg2) {
   return window['go']['main']['App']['RemoveWorktree'](arg1, arg2);
 }
 
+export function ReopenSession(arg1) {
+  return window['go']['main']['App']['ReopenSession'](arg1);
+}
+
+export function ReorderProjects(arg1) {
+  return window['go']['main']['App']['ReorderProjects'](arg1);
+}
+
 export function ResizeTerm(arg1, arg2, arg3) {
   return window['go']['main']['App']['ResizeTerm'](arg1, arg2, arg3);
 }
@@ -100,6 +120,10 @@ export function SearchTranscripts(arg1) {
 
 export function SendSkill(arg1, arg2) {
   return window['go']['main']['App']['SendSkill'](arg1, arg2);
+}
+
+export function SessionLinks(arg1) {
+  return window['go']['main']['App']['SessionLinks'](arg1);
 }
 
 export function SessionPreview(arg1) {
@@ -136,4 +160,24 @@ export function WorktreeDiff(arg1) {
 
 export function WriteTerm(arg1, arg2) {
   return window['go']['main']['App']['WriteTerm'](arg1, arg2);
+}
+
+export function Zeitgeist() {
+  return window['go']['main']['App']['Zeitgeist']();
+}
+
+export function ZeitgeistPause() {
+  return window['go']['main']['App']['ZeitgeistPause']();
+}
+
+export function ZeitgeistResume() {
+  return window['go']['main']['App']['ZeitgeistResume']();
+}
+
+export function ZeitgeistStart(arg1) {
+  return window['go']['main']['App']['ZeitgeistStart'](arg1);
+}
+
+export function ZeitgeistStop(arg1) {
+  return window['go']['main']['App']['ZeitgeistStop'](arg1);
 }

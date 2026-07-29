@@ -29,9 +29,15 @@ export function DoneAgent(arg1:string):Promise<void>;
 
 export function KillSession(arg1:string):Promise<void>;
 
+export function LaterSession(arg1:string):Promise<void>;
+
 export function Merge(arg1:string,arg2:string,arg3:string):Promise<string>;
 
 export function NewSession(arg1:string,arg2:boolean,arg3:string):Promise<string>;
+
+export function NewTermSession(arg1:string,arg2:boolean,arg3:string):Promise<string>;
+
+export function NewTermSessionFor(arg1:string):Promise<string>;
 
 export function OpenTerm(arg1:string,arg2:number,arg3:number):Promise<void>;
 
@@ -45,6 +51,10 @@ export function RemoveProject(arg1:string):Promise<void>;
 
 export function RemoveWorktree(arg1:string,arg2:string):Promise<void>;
 
+export function ReopenSession(arg1:string):Promise<void>;
+
+export function ReorderProjects(arg1:Array<string>):Promise<void>;
+
 export function ResizeTerm(arg1:string,arg2:number,arg3:number):Promise<void>;
 
 export function SaveImage(arg1:string):Promise<string>;
@@ -52,6 +62,8 @@ export function SaveImage(arg1:string):Promise<string>;
 export function SearchTranscripts(arg1:string):Promise<Array<main.SearchHit>>;
 
 export function SendSkill(arg1:string,arg2:string):Promise<void>;
+
+export function SessionLinks(arg1:string):Promise<Array<main.LinkInfo>>;
 
 export function SessionPreview(arg1:string):Promise<string>;
 
@@ -70,3 +82,13 @@ export function UpdateTodo(arg1:number,arg2:string,arg3:string):Promise<void>;
 export function WorktreeDiff(arg1:string):Promise<string>;
 
 export function WriteTerm(arg1:string,arg2:string):Promise<void>;
+
+export function Zeitgeist():Promise<core.ZgInfo>;
+
+export function ZeitgeistPause():Promise<void>;
+
+export function ZeitgeistResume():Promise<void>;
+
+export function ZeitgeistStart(arg1:string):Promise<core.ZgProject>;
+
+export function ZeitgeistStop(arg1:string):Promise<core.ZgStopped>;

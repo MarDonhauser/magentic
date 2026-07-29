@@ -13,6 +13,8 @@ type Project struct {
 	MainBranch string `json:"main_branch,omitempty"`
 }
 
+const KindTerm = "term"
+
 type Agent struct {
 	Name       string    `json:"name"`
 	Project    string    `json:"project"`
@@ -24,6 +26,7 @@ type Agent struct {
 	BaseDirty  []string  `json:"base_dirty,omitempty"`
 	SessionID  string    `json:"session_id,omitempty"`
 	DeployAt   time.Time `json:"deploy_at,omitzero"`
+	LaterAt    time.Time `json:"later_at,omitzero"`
 }
 
 type Todo struct {
@@ -77,6 +80,19 @@ func (s *State) Save() error {
 	return os.Rename(tmp, p)
 }
 
+func (a Agent) IsTerm() bool {
+	return a.Kind == KindTerm
+}
+
+func (s *State) AgentByName(name string) *Agent {
+	for i := range s.Agents {
+		if s.Agents[i].Name == name {
+			return &s.Agents[i]
+		}
+	}
+	return nil
+}
+
 func (s *State) ProjectByName(name string) *Project {
 	for i := range s.Projects {
 		if s.Projects[i].Name == name {
@@ -114,6 +130,14 @@ func (s *State) MarkDeploy(name string) {
 	for i := range s.Agents {
 		if s.Agents[i].Name == name {
 			s.Agents[i].DeployAt = time.Now()
+		}
+	}
+}
+
+func (s *State) MarkLater(name string) {
+	for i := range s.Agents {
+		if s.Agents[i].Name == name {
+			s.Agents[i].LaterAt = time.Now()
 		}
 	}
 }

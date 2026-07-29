@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -72,6 +73,103 @@ func (a *App) SessionPreview(name string) string {
 		return ""
 	}
 	return core.LastLines(strings.TrimRight(core.TmuxCapturePane(sn, 0), "\n"), 16)
+}
+
+type LinkInfo struct {
+	URL  string `json:"url"`
+	Time string `json:"time"`
+}
+
+var urlRe = regexp.MustCompile(`https?://[^\s<>"'\x60)\]}]+`)
+
+func extractURLs(text string) []string {
+	var out []string
+	for _, m := range urlRe.FindAllString(text, -1) {
+		m = strings.TrimRight(m, ".,;:!?*…")
+		if u := strings.TrimPrefix(strings.TrimPrefix(m, "https://"), "http://"); len(u) < 3 {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+func (a *App) SessionLinks(name string) ([]LinkInfo, error) {
+	st, err := core.LoadState()
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var out []LinkInfo
+	add := func(l LinkInfo) {
+		if seen[l.URL] {
+			return
+		}
+		seen[l.URL] = true
+		out = append(out, l)
+	}
+	if ag := st.AgentByName(name); ag != nil && ag.SessionID != "" {
+		for _, l := range assistantLinks(ag.SessionID) {
+			add(l)
+		}
+	}
+	sn := core.SessionName(name)
+	if core.TmuxHasSession(sn) {
+		for _, u := range extractURLs(core.TmuxCapturePaneJoined(sn, 3000)) {
+			add(LinkInfo{URL: u})
+		}
+	}
+	if len(out) > 40 {
+		out = out[:40]
+	}
+	return out, nil
+}
+
+func assistantLinks(sessionID string) []LinkInfo {
+	home, _ := os.UserHomeDir()
+	matches, _ := filepath.Glob(filepath.Join(home, ".claude", "projects", "*", sessionID+".jsonl"))
+	if len(matches) == 0 {
+		return nil
+	}
+	f, err := os.Open(matches[0])
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	assistantMark := []byte(`"type":"assistant"`)
+	httpMark := []byte("http")
+	var chron []LinkInfo
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1024*1024), 32*1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if !bytes.Contains(line, assistantMark) || !bytes.Contains(line, httpMark) {
+			continue
+		}
+		var entry struct {
+			Type      string `json:"type"`
+			Timestamp string `json:"timestamp"`
+			Message   struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(line, &entry) != nil || entry.Type != "assistant" {
+			continue
+		}
+		for _, u := range extractURLs(extractText(entry.Message.Content)) {
+			chron = append(chron, LinkInfo{URL: u, Time: formatTranscriptTime(entry.Timestamp)})
+		}
+	}
+	seen := map[string]bool{}
+	var out []LinkInfo
+	for i := len(chron) - 1; i >= 0; i-- {
+		if seen[chron[i].URL] {
+			continue
+		}
+		seen[chron[i].URL] = true
+		out = append(out, chron[i])
+	}
+	return out
 }
 
 type SearchHit struct {

@@ -19,6 +19,7 @@ const (
 	StatusIdle
 	StatusExited
 	StatusDead
+	StatusTerm
 )
 
 func (s AgentStatus) Label() string {
@@ -37,6 +38,8 @@ func (s AgentStatus) Label() string {
 		return "beendet"
 	case StatusDead:
 		return "tot"
+	case StatusTerm:
+		return "Terminal"
 	}
 	return "?"
 }
@@ -57,6 +60,8 @@ func (s AgentStatus) Icon() string {
 		return "▪"
 	case StatusDead:
 		return "✗"
+	case StatusTerm:
+		return "⌨"
 	}
 	return "?"
 }
@@ -185,9 +190,20 @@ func CollectStatuses(agents []Agent) (map[string]AgentStatus, map[string]string,
 			}
 		}
 		contents[a.Name] = content
+		if a.IsTerm() {
+			statuses[a.Name] = DetectTermStatus(exists)
+			continue
+		}
 		statuses[a.Name] = DetectClaudeStatus(exists, info.Command, LastLines(content, 25))
 	}
 	return statuses, contents, activity
+}
+
+func DetectTermStatus(sessionExists bool) AgentStatus {
+	if !sessionExists {
+		return StatusDead
+	}
+	return StatusTerm
 }
 
 func DetectClaudeStatus(sessionExists bool, paneCommand, paneContent string) AgentStatus {
