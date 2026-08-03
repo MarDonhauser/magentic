@@ -7,11 +7,16 @@ const COLUMNS = [
   { key: 'done', label: 'Erledigt' },
 ];
 
-const KIND_LABEL = { openspec: 'openspec', speckit: 'spec-kit' };
+const KIND_LABEL = { openspec: 'openspec', speckit: 'spec-kit', kiro: 'kiro', 'agent-os': 'agent-os' };
 const MAX_VISIBLE_TASKS = 40;
 
 const expanded = new Set();
+const hiddenKinds = new Set();
 const bound = new WeakMap();
+
+function kindLabel(kind) {
+  return KIND_LABEL[kind] || kind || '—';
+}
 
 const ICONS = {
   spec: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v5h5"/>',
@@ -101,8 +106,11 @@ function agentsHtml(item, opts) {
   return `<div class="bd-agents"><span class="bd-live-dot" aria-hidden="true"></span>${chips}</div>`;
 }
 
-function badgesHtml(item) {
+function badgesHtml(item, multi) {
   const out = [];
+  if (multi && item.kind) {
+    out.push(`<span class="bd-badge bd-badge-kind" title="Quelle: ${esc(item.kind)}">${esc(kindLabel(item.kind))}</span>`);
+  }
   const specs = Number(item.specs) || 0;
   if (specs > 0) out.push(`<span class="bd-badge" title="${specs} Spec-Datei(en) in diesem Change">${icon('spec')}${specs}</span>`);
   if (item.hasPlan) out.push(`<span class="bd-badge" title="${item.kind === 'speckit' ? 'plan.md vorhanden' : 'design.md vorhanden'}">${icon('plan')}Plan</span>`);
@@ -167,15 +175,16 @@ function tasksHtml(item) {
   return body + more;
 }
 
-function cardHtml(item, opts) {
+function cardHtml(item, opts, multi) {
   const id = String(item.id ?? '');
-  const open = expanded.has(id);
+  const key = String(item.key ?? id);
+  const open = expanded.has(key);
   const live = list(item.agents).filter(Boolean).length > 0;
   const title = item.title || humanize(id) || id;
   const summary = item.summary
     ? `<p class="bd-card-sum">${esc(item.summary)}</p>`
     : '';
-  return `<article class="bd-card${live ? ' is-live' : ''}${open ? ' is-open' : ''}" data-id="${esc(id)}" tabindex="0" role="button" aria-expanded="${open}">
+  return `<article class="bd-card${live ? ' is-live' : ''}${open ? ' is-open' : ''}" data-key="${esc(key)}" tabindex="0" role="button" aria-expanded="${open}">
     <div class="bd-card-head">
       <span class="bd-caret" aria-hidden="true">${icon('chevron')}</span>
       <div class="bd-card-titles">
@@ -186,14 +195,14 @@ function cardHtml(item, opts) {
     ${summary}
     ${agentsHtml(item, opts)}
     ${progressHtml(item)}
-    <div class="bd-card-foot">${badgesHtml(item)}${actionsHtml(item, opts)}</div>
+    <div class="bd-card-foot">${badgesHtml(item, multi)}${actionsHtml(item, opts)}</div>
     <div class="bd-tasks"${open ? '' : ' hidden'}>${tasksHtml(item)}</div>
   </article>`;
 }
 
-function columnHtml(col, items, opts) {
+function columnHtml(col, items, opts, multi) {
   const cards = items.length
-    ? items.map(it => cardHtml(it, opts)).join('')
+    ? items.map(it => cardHtml(it, opts, multi)).join('')
     : `<div class="bd-col-empty">nichts hier</div>`;
   return `<section class="bd-col" data-col="${col.key}">
     <header class="bd-col-head">
@@ -205,11 +214,25 @@ function columnHtml(col, items, opts) {
   </section>`;
 }
 
-function headHtml(board, items) {
+function sourcesHtml(sources) {
+  if (sources.length < 2) {
+    const one = sources[0];
+    return `<span class="bd-kind">${esc(kindLabel(one?.kind))}</span>` +
+      (one?.root ? `<span class="bd-root" title="${esc(one.root)}">${esc(one.root)}</span>` : '');
+  }
+  const chips = sources.map(s => {
+    const off = hiddenKinds.has(s.kind);
+    return `<button type="button" class="bd-kind bd-kind-btn${off ? ' is-off' : ''}" data-act="kind" data-kind="${esc(s.kind)}"` +
+      ` title="${esc(s.root)}\n\nKlick blendet diese Quelle ${off ? 'wieder ein' : 'aus'}">` +
+      `${esc(kindLabel(s.kind))}<span class="bd-kind-n">${Number(s.items) || 0}</span></button>`;
+  }).join('');
+  return `<div class="bd-kinds">${chips}</div>`;
+}
+
+function headHtml(board, items, sources) {
   const total = items.reduce((n, it) => n + (Number(it.total) || 0), 0);
   const done = items.reduce((n, it) => n + Math.min(Number(it.done) || 0, Number(it.total) || 0), 0);
   const p = pct(done, total);
-  const kind = KIND_LABEL[board.kind] || board.kind || '—';
   const running = items.filter(it => list(it.agents).filter(Boolean).length).length;
   const liveStat = running
     ? `<div class="bd-stat bd-stat-live"><div class="bd-stat-val">${running}</div><div class="bd-stat-lbl">mit Agent</div></div>`
@@ -217,8 +240,7 @@ function headHtml(board, items) {
   return `<header class="bd-head">
     <div class="bd-head-top">
       <h1 class="bd-project">${esc(board.project)}</h1>
-      <span class="bd-kind">${esc(kind)}</span>
-      ${board.root ? `<span class="bd-root" title="${esc(board.root)}">${esc(board.root)}</span>` : ''}
+      ${sourcesHtml(sources)}
     </div>
     <div class="bd-stats">
       <div class="bd-stat bd-stat-wide">
@@ -239,21 +261,21 @@ function noneHtml(board) {
     <div class="bd-none-box">
       <span class="bd-none-ico">${icon('empty')}</span>
       <h2>Keine Spec-Ordner in ${esc(board.project)}</h2>
-      <p>Weder <code>openspec/changes/</code> noch <code>specs/</code> gefunden — deshalb gibt es hier nichts zu zeigen.</p>
-      <p class="bd-none-hint">Lege einen der beiden Ordner an, dann erscheinen die Changes automatisch als Karten.</p>
-      <div class="bd-none-paths"><code>openspec/changes/&lt;name&gt;/proposal.md</code><code>specs/&lt;NNN-name&gt;/spec.md</code></div>
+      <p>Keines der bekannten Spec-Layouts gefunden — deshalb gibt es hier nichts zu zeigen.</p>
+      <p class="bd-none-hint">Lege einen dieser Ordner an, dann erscheinen die Changes automatisch als Karten. Mehrere Systeme nebeneinander sind kein Problem — das Board liest alle.</p>
+      <div class="bd-none-paths"><code>openspec/changes/&lt;name&gt;/</code><code>specs/&lt;NNN-name&gt;/</code><code>.kiro/specs/&lt;name&gt;/</code><code>.agent-os/specs/&lt;name&gt;/</code></div>
     </div>
   </div>`;
 }
 
-function findItem(board, id) {
-  return list(board?.items).find(it => String(it.id ?? '') === id) || null;
+function findItem(board, key) {
+  return list(board?.items).find(it => String(it.key ?? it.id ?? '') === key) || null;
 }
 
 function toggle(card) {
-  const id = card.dataset.id;
-  const open = !expanded.has(id);
-  if (open) expanded.add(id); else expanded.delete(id);
+  const key = card.dataset.key;
+  const open = !expanded.has(key);
+  if (open) expanded.add(key); else expanded.delete(key);
   card.classList.toggle('is-open', open);
   card.setAttribute('aria-expanded', String(open));
   const panel = card.querySelector('.bd-tasks');
@@ -269,8 +291,14 @@ function bind(el) {
     const act = ev.target.closest('[data-act]');
     if (act && el.contains(act)) {
       ev.stopPropagation();
+      if (act.dataset.act === 'kind') {
+        const kind = act.dataset.kind;
+        if (hiddenKinds.has(kind)) hiddenKinds.delete(kind); else hiddenKinds.add(kind);
+        renderBoard(el, ctx.board, opts);
+        return;
+      }
       const card = act.closest('.bd-card');
-      const item = findItem(ctx.board, card?.dataset.id);
+      const item = findItem(ctx.board, card?.dataset.key);
       if (act.dataset.act === 'agent') opts.onOpenSession?.(act.dataset.agent);
       else if (act.dataset.act === 'start' && item) opts.onStart?.(item);
       else if (act.dataset.act === 'reveal' && item) opts.onReveal?.(item.path);
@@ -299,9 +327,18 @@ export function renderBoard(el, board, opts = {}) {
     return;
   }
 
-  const items = list(data.items);
-  const known = new Set(items.map(it => String(it.id ?? '')));
-  for (const id of [...expanded]) if (!known.has(id)) expanded.delete(id);
+  const all = list(data.items);
+  const known = new Set(all.map(it => String(it.key ?? it.id ?? '')));
+  for (const key of [...expanded]) if (!known.has(key)) expanded.delete(key);
+
+  const sources = list(data.sources).length
+    ? list(data.sources)
+    : [{ kind: data.kind, root: data.root, items: all.length }];
+  const kinds = new Set(sources.map(s => s.kind));
+  for (const k of [...hiddenKinds]) if (!kinds.has(k)) hiddenKinds.delete(k);
+
+  const multi = sources.length > 1;
+  const items = multi ? all.filter(it => !hiddenKinds.has(it.kind)) : all;
 
   const err = data.err
     ? `<div class="bd-err">${icon('warn')}<span>${esc(data.err)}</span></div>`
@@ -309,8 +346,8 @@ export function renderBoard(el, board, opts = {}) {
 
   const cols = COLUMNS.map(col => {
     const inCol = sortItems(items.filter(it => (it.column || 'backlog') === col.key));
-    return columnHtml(col, inCol, opts);
+    return columnHtml(col, inCol, opts, multi);
   }).join('');
 
-  el.innerHTML = `<div class="bd">${headHtml(data, items)}${err}<div class="bd-cols">${cols}</div></div>`;
+  el.innerHTML = `<div class="bd">${headHtml(data, items, sources)}${err}<div class="bd-cols">${cols}</div></div>`;
 }

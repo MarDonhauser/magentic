@@ -17,6 +17,7 @@ export namespace core {
 	    }
 	}
 	export class BoardItem {
+	    key: string;
 	    id: string;
 	    title: string;
 	    summary?: string;
@@ -38,6 +39,7 @@ export namespace core {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
 	        this.id = source["id"];
 	        this.title = source["title"];
 	        this.summary = source["summary"];
@@ -72,10 +74,31 @@ export namespace core {
 		    return a;
 		}
 	}
+	export class BoardSource {
+	    kind: string;
+	    root: string;
+	    items: number;
+	    archived: number;
+	    specs: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new BoardSource(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.root = source["root"];
+	        this.items = source["items"];
+	        this.archived = source["archived"];
+	        this.specs = source["specs"];
+	    }
+	}
 	export class Board {
 	    project: string;
 	    kind: string;
 	    root?: string;
+	    sources?: BoardSource[];
 	    items: BoardItem[];
 	    archived: number;
 	    specs: number;
@@ -90,6 +113,7 @@ export namespace core {
 	        this.project = source["project"];
 	        this.kind = source["kind"];
 	        this.root = source["root"];
+	        this.sources = this.convertValues(source["sources"], BoardSource);
 	        this.items = this.convertValues(source["items"], BoardItem);
 	        this.archived = source["archived"];
 	        this.specs = source["specs"];
@@ -114,6 +138,7 @@ export namespace core {
 		    return a;
 		}
 	}
+	
 	
 	
 	export class BreakAdvice {

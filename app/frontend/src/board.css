@@ -46,6 +46,35 @@
   letter-spacing: 0.03em;
 }
 
+.bd-kinds { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.bd-kind-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-family: inherit;
+}
+.bd-kind-btn:hover { border-color: var(--accent); }
+.bd-kind-btn.is-off {
+  background: var(--raise);
+  color: var(--muted);
+  text-decoration: line-through;
+}
+.bd-kind-n {
+  font-size: 10px;
+  font-weight: 700;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+
+.bd-badge-kind {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .bd-root {
   color: var(--muted);
   font-size: 11.5px;

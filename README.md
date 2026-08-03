@@ -102,12 +102,15 @@ es keins — das zeigt der Punkt an der Session selbst schon deutlich genug.
   über alle Branches eines Projekts. Zeigt, wo Worktrees abzweigen und wo sie
   wieder zusammenlaufen, mit ahead/behind zum Hauptbranch, „merged"-Badges und
   den Avataren der Sessions, die gerade auf einem Commit sitzen.
-- **Board** (`⌘B`) — Kanban-Ansicht aus den Spec-Ordnern des Projekts.
-  Erkennt `openspec/changes/*` und `specs/<NNN-name>/*`, liest die Checkboxen
-  aus `tasks.md` und verteilt die Changes auf Geplant / In Arbeit / Zur
-  Abnahme / Erledigt. Karten, an denen gerade eine Session arbeitet, sind
-  hervorgehoben; „hieran arbeiten" startet eine Claude-Session mit dem
-  passenden Auftrag.
+- **Board** (`⌘B`) — Kanban-Ansicht aus den Spec-Ordnern des Projekts. Erkennt
+  OpenSpec (`openspec/changes/*`), Spec-Kit (`specs/<NNN-name>/*`), Kiro
+  (`.kiro/specs/*`) und Agent OS (`.agent-os/specs/*`) — **alle gleichzeitig**,
+  nicht nur das erste gefundene. Liegen mehrere nebeneinander, landen sie in
+  einem Board; die Chips im Kopf zeigen je Quelle die Anzahl und blenden sie per
+  Klick aus. Liest die Checkboxen aus `tasks.md` und verteilt die Changes auf
+  Geplant / In Arbeit / Zur Abnahme / Erledigt. Karten, an denen gerade eine
+  Session arbeitet, sind hervorgehoben; „hieran arbeiten" startet eine
+  Claude-Session mit dem passenden Auftrag.
 - **Statistik** (`⌘⇧S`) — Aktivität, Tokens, geschätzte Kosten, Cache-Quote,
   Commits, Projekte, Modelle und eine Heatmap Wochentag × Stunde. Speist sich
   aus den Claude-Transkripten (`~/.claude/projects`), aus git und aus dem
@@ -288,10 +291,11 @@ File-Watcher sofort mit.
   steht — außer der Branch ist ein Integrationsbranch (`main`, `dev`,
   `master`, `develop`), dann greift der Projektname. Präfixe wie `agent/`
   oder `feature/` fallen weg.
-- Das **Board** liest `openspec/changes/*` bzw. `specs/<NNN-name>/*` direkt vom
-  Dateisystem — es gibt keine eigene Datenhaltung. Eine Session wird einem
-  Change zugeordnet, wenn Branch, Worktree-Ordner oder Session-Name zu dessen
-  Ordnernamen passen.
+- Das **Board** liest die Spec-Ordner direkt vom Dateisystem — es gibt keine
+  eigene Datenhaltung. Jedes bekannte Layout wird geprüft, Quellen ohne Inhalt
+  fallen raus. Eine Session wird einem Change zugeordnet, wenn Branch,
+  Worktree-Ordner oder Session-Name zu dessen Ordnernamen passen. Neue Layouts
+  kommen über `specLayouts` in `core/board.go` dazu.
 - Die **Statistik** parst `~/.claude/projects/**/*.jsonl` (auch die
   `subagents/`-Dateien, deren Tokens mitzählen, deren Zeilen aber nicht als
   Prompt). Ergebnisse werden pro Datei über ModTime und Größe in

@@ -16,6 +16,7 @@ type BoardTask struct {
 }
 
 type BoardItem struct {
+	Key      string      `json:"key"`
 	ID       string      `json:"id"`
 	Title    string      `json:"title"`
 	Summary  string      `json:"summary,omitempty"`
@@ -32,14 +33,23 @@ type BoardItem struct {
 	Branches []string    `json:"branches,omitempty"`
 }
 
+type BoardSource struct {
+	Kind     string `json:"kind"`
+	Root     string `json:"root"`
+	Items    int    `json:"items"`
+	Archived int    `json:"archived"`
+	Specs    int    `json:"specs"`
+}
+
 type Board struct {
-	Project  string      `json:"project"`
-	Kind     string      `json:"kind"`
-	Root     string      `json:"root,omitempty"`
-	Items    []BoardItem `json:"items"`
-	Archived int         `json:"archived"`
-	Specs    int         `json:"specs"`
-	Err      string      `json:"err,omitempty"`
+	Project  string        `json:"project"`
+	Kind     string        `json:"kind"`
+	Root     string        `json:"root,omitempty"`
+	Sources  []BoardSource `json:"sources,omitempty"`
+	Items    []BoardItem   `json:"items"`
+	Archived int           `json:"archived"`
+	Specs    int           `json:"specs"`
+	Err      string        `json:"err,omitempty"`
 }
 
 const (
@@ -52,6 +62,20 @@ const (
 var taskLineRe = regexp.MustCompile(`^\s*[-*]\s+\[([ xX~/-])\]\s+(.*)$`)
 var sectionRe = regexp.MustCompile(`^#{2,3}\s+(.*)$`)
 
+type specLayout struct {
+	kind    string
+	dir     []string
+	specs   []string
+	archive string
+}
+
+var specLayouts = []specLayout{
+	{kind: "openspec", dir: []string{"openspec", "changes"}, specs: []string{"openspec", "specs"}, archive: "archive"},
+	{kind: "speckit", dir: []string{"specs"}},
+	{kind: "kiro", dir: []string{".kiro", "specs"}},
+	{kind: "agent-os", dir: []string{".agent-os", "specs"}},
+}
+
 func BuildBoard(s *State, projName string) Board {
 	b := Board{Project: projName}
 	proj := s.ProjectByName(projName)
@@ -61,21 +85,35 @@ func BuildBoard(s *State, projName string) Board {
 	}
 	agents := liveAgentContext(s, projName)
 
-	if root := filepath.Join(proj.Path, "openspec", "changes"); isDir(root) {
-		b.Kind = "openspec"
-		b.Root = root
-		b.Items = collectBoardItems(root, "openspec", agents)
-		b.Archived = countDirs(filepath.Join(root, "archive"))
-		b.Specs = countDirs(filepath.Join(proj.Path, "openspec", "specs"))
+	for _, l := range specLayouts {
+		root := filepath.Join(append([]string{proj.Path}, l.dir...)...)
+		if !isDir(root) {
+			continue
+		}
+		items := collectBoardItems(root, l.kind, agents)
+		if len(items) == 0 {
+			continue
+		}
+		src := BoardSource{Kind: l.kind, Root: root, Items: len(items)}
+		if l.archive != "" {
+			src.Archived = countDirs(filepath.Join(root, l.archive))
+		}
+		if len(l.specs) > 0 {
+			src.Specs = countDirs(filepath.Join(append([]string{proj.Path}, l.specs...)...))
+		}
+		b.Sources = append(b.Sources, src)
+		b.Items = append(b.Items, items...)
+		b.Archived += src.Archived
+		b.Specs += src.Specs
+	}
+
+	if len(b.Sources) == 0 {
+		b.Kind = "none"
 		return b
 	}
-	if root := filepath.Join(proj.Path, "specs"); isDir(root) {
-		b.Kind = "speckit"
-		b.Root = root
-		b.Items = collectBoardItems(root, "speckit", agents)
-		return b
-	}
-	b.Kind = "none"
+	b.Kind = b.Sources[0].Kind
+	b.Root = b.Sources[0].Root
+	sortBoardItems(b.Items)
 	return b
 }
 
@@ -112,18 +150,22 @@ func collectBoardItems(root, kind string, agents []agentCtx) []BoardItem {
 		}
 		items = append(items, readBoardItem(filepath.Join(root, e.Name()), e.Name(), kind, agents))
 	}
+	sortBoardItems(items)
+	return items
+}
+
+func sortBoardItems(items []BoardItem) {
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Updated != items[j].Updated {
 			return items[i].Updated > items[j].Updated
 		}
-		return items[i].ID < items[j].ID
+		return items[i].Key < items[j].Key
 	})
-	return items
 }
 
 func readBoardItem(dir, id, kind string, agents []agentCtx) BoardItem {
-	it := BoardItem{ID: id, Title: humanizeID(id), Path: dir, Kind: kind}
-	docs := []string{"proposal.md", "spec.md", "design.md", "plan.md", "README.md"}
+	it := BoardItem{Key: kind + "/" + id, ID: id, Title: humanizeID(id), Path: dir, Kind: kind}
+	docs := []string{"proposal.md", "spec.md", "requirements.md", "design.md", "plan.md", "README.md"}
 	for _, d := range docs {
 		p := filepath.Join(dir, d)
 		if !fileExists(p) {
@@ -148,6 +190,9 @@ func readBoardItem(dir, id, kind string, agents []agentCtx) BoardItem {
 		}
 	}
 	it.Specs = countFilesRec(filepath.Join(dir, "specs"), ".md")
+	if it.Specs == 0 {
+		it.Specs = countSpecDocs(dir)
+	}
 	if info, err := newestMTime(dir); err == nil {
 		it.Updated = info.Format(time.RFC3339)
 	}
@@ -310,6 +355,21 @@ func countDirs(p string) int {
 		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
 			n++
 		}
+	}
+	return n
+}
+
+func countSpecDocs(dir string) int {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") || e.Name() == "tasks.md" {
+			continue
+		}
+		n++
 	}
 	return n
 }

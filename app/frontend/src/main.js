@@ -1110,7 +1110,7 @@ function projectCard(p) {
       : `<button class="btn danger" data-act="rmproj1" data-project="${esc(p.name)}" title="Repository aus magentic entfernen — löscht keine Dateien">${icon('x')} Repo</button>`;
     mainCfg += `<span class="actions">` +
       `<button class="btn" data-act="showgraph" data-project="${esc(p.name)}" title="Git-Graph dieses Projekts — wo Worktrees abzweigen und zusammenlaufen">${icon('gitbranch')} Graph</button>` +
-      `<button class="btn" data-act="showboard" data-project="${esc(p.name)}" title="Board aus openspec/specs — Plan, Tasks und was gerade läuft">${icon('square')} Board</button>` +
+      `<button class="btn" data-act="showboard" data-project="${esc(p.name)}" title="Board aus allen Spec-Ordnern — Plan, Tasks und was gerade läuft">${icon('square')} Board</button>` +
       `<button class="btn" data-act="newsession" data-project="${esc(p.name)}" title="Neue Claude-Session im Projekt">+ Session</button>` +
       `<button class="btn" data-act="newworktree" data-project="${esc(p.name)}" title="Neue Session in eigenem Worktree">${icon('gitbranch')} Worktree</button>` +
       `<button class="btn" data-act="newterm" data-project="${esc(p.name)}" title="Reines Terminal im Projekt — Shell statt Claude">${icon('terminal')} Terminal</button>` +
