@@ -5,7 +5,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import {
-  Overview, Todos, Projects, AddTodo, UpdateTodo, DeleteTodo, StartTodoSession,
+  Overview, Projects,
   NewSession, NewTermSession, NewTermSessionFor, DoneAgent, Cleanup, Merge, Deploy, RemoveWorktree, SetMainBranch,
   OpenTerm, WriteTerm, ResizeTerm, CloseTerm, KillSession, LaterSession, ReopenSession, SendSkill,
   DeployStatus, AzLogin, ArgoLogin, AzAccounts, AzSetSubscription,
@@ -82,7 +82,7 @@ function agentVisual(a, project) {
 }
 
 const $ = id => document.getElementById(id);
-const sessionsEl = $('sessions'), sideTodosEl = $('side-todos'), usageBoxEl = $('usage-box'), zgBoxEl = $('zg-box');
+const sessionsEl = $('sessions'), usageBoxEl = $('usage-box'), zgBoxEl = $('zg-box');
 const overviewEl = $('overview'), termsEl = $('terms'), deployBadgeEl = $('deploy-badge');
 
 const TERM_THEME = { background: '#282d35', foreground: '#dbe0e6', cursor: '#5eead4', selectionBackground: 'rgba(55,207,189,0.30)' };
@@ -91,9 +91,7 @@ const SCROLL_MULT = 4;
 let view = 'overview';
 let activeTerm = null;
 let ov = null;
-let todos = [];
 let projects = [];
-let editingTodo = -1;
 let confirmRemove = null;
 let confirmRemoveProject = null;
 let editingMain = null;
@@ -921,17 +919,6 @@ function renderSidebar() {
     }
   }
 
-  sideTodosEl.innerHTML = '';
-  $('sidebar').classList.toggle('no-todos', !todos.length);
-  for (const t of todos.slice(0, 6)) {
-    const div = document.createElement('div');
-    div.className = 'side-todo';
-    div.title = t.text;
-    div.innerHTML = `<span class="tmark">${icon('square')}</span><span class="ttext">${esc(t.text)}</span>`;
-    div.onclick = showOverview;
-    sideTodosEl.appendChild(div);
-  }
-
   const u = ov?.usage;
   usageBoxEl.innerHTML = u ? usageBar('5h', u.fiveHour, '↻ ' + u.fiveHourReset) + usageBar('7d', u.sevenDay, '↻ ' + u.sevenDayReset) : '';
   attentionBar();
@@ -1038,11 +1025,6 @@ function renderZg() {
   };
 }
 
-function tile(value, label, dotColor, hollow) {
-  const dot = dotColor ? `<span class="dot${hollow ? ' hollow' : ''}" style="background:${dotColor}"></span>` : '';
-  return `<div class="tile"><div class="val">${value}</div><div class="lbl">${dot}${esc(label)}</div></div>`;
-}
-
 function agentPill(a, project) {
   const v = agentVisual(a, project);
   const done = (a.status === 'idle' || a.status === 'running') && !a.phase
@@ -1136,35 +1118,6 @@ function projectCard(p) {
   }
   return `<div class="card"><div class="card-head"><h2>${esc(p.name)}</h2>` +
     `<span class="path">${esc(p.path || '')}</span>${mainCfg}</div><div class="rows">${rows}</div></div>`;
-}
-
-function todoSection() {
-  let rows = todos.map(t => {
-    if (editingTodo === t.index) {
-      const opts = ['<option value="">— Projekt —</option>']
-        .concat(projects.map(p => `<option value="${esc(p)}"${p === t.project ? ' selected' : ''}>${esc(p)}</option>`)).join('');
-      return `<div class="todo-row editing">` +
-        `<input class="inline-input wide" id="todo-edit-text" value="${esc(t.text)}">` +
-        `<select class="inline-input" id="todo-edit-proj">${opts}</select>` +
-        `<button class="btn tiny" data-act="todosave" data-idx="${t.index}">${icon('check')} speichern</button>` +
-        `<button class="btn tiny" data-act="todocancel">${icon('x')}</button></div>`;
-    }
-    return `<div class="todo-row">` +
-      `<span class="tmark">${icon('square')}</span>` +
-      `<span class="ttext">${esc(t.text)}</span>` +
-      (t.project ? `<span class="tproj">[${esc(t.project)}]</span>` : '<span class="tproj dim">ohne Projekt</span>') +
-      `<span class="tage">${esc(t.age)}</span>` +
-      `<span class="actions">` +
-      `<button class="btn tiny" data-act="todostart" data-idx="${t.index}" title="Session starten — Text landet im Eingabefeld">${icon('play')} Session</button>` +
-      `<button class="btn tiny" data-act="todoedit" data-idx="${t.index}">${icon('pencil')}</button>` +
-      `<button class="btn tiny danger" data-act="tododelete" data-idx="${t.index}">${icon('trash')}</button></span></div>`;
-  }).join('');
-  if (!todos.length) rows = '<div class="none" style="padding:8px 2px">Keine Todos — unten eins anlegen</div>';
-  const opts = ['<option value="">— Projekt —</option>'].concat(projects.map(p => `<option value="${esc(p)}">${esc(p)}</option>`)).join('');
-  return `<div class="card"><div class="card-head"><h2>Todos</h2></div>${rows}` +
-    `<div class="todo-add"><input class="inline-input wide" id="todo-new" placeholder="Neues Todo…">` +
-    `<select class="inline-input" id="todo-new-proj">${opts}</select>` +
-    `<button class="btn" data-act="todoadd">+ hinzufügen</button></div></div>`;
 }
 
 let deployStatus = null;
@@ -1335,26 +1288,10 @@ function renderOverview() {
   if (ae && overviewEl.contains(ae) && ['INPUT', 'SELECT', 'TEXTAREA'].includes(ae.tagName)) {
     return;
   }
-  const savedText = $('todo-new')?.value ?? '';
-  const savedProj = $('todo-new-proj')?.value ?? '';
-  const c = ov.counts || {};
-  const u = ov.usage;
-  const tiles =
-    tile(c.running || 0, 'läuft', 'var(--good)') +
-    tile(c.agents || 0, 'Agents aktiv', 'var(--info)') +
-    tile(c.blocked || 0, 'wartet auf Input', 'var(--warning)') +
-    tile(c.idle || 0, 'idle', 'var(--muted)', true) +
-    (c.term ? tile(c.term, 'Terminals', 'var(--info)', true) : '') +
-    tile(c.dirty || 0, 'Worktrees mit Änderungen', 'var(--warning)') +
-    tile(c.warnings || 0, 'Warnungen', 'var(--serious)') +
-    (u ? tile(`${Math.round(u.fiveHour)}%`, `5h-Limit · ↻ ${esc(u.fiveHourReset)}`, usageColor(u.fiveHour)) +
-         tile(`${Math.round(u.sevenDay)}%`, `Wochenlimit · ↻ ${esc(u.sevenDayReset)}`, usageColor(u.sevenDay)) : '');
   const cards = (ov.projects || []).map(projectCard).join('');
-  overviewEl.innerHTML = `<div class="tiles">${tiles}</div>${deployCard()}${todoSection()}${cards}` +
+  overviewEl.innerHTML = `${deployCard()}${cards}` +
     `<div class="add-repo"><button class="btn" data-act="addproject" title="Git-Repository als Projekt hinzufügen">+ Repository hinzufügen…</button></div>` +
     `<div class="stamp">Stand ${esc(ov.generatedAt || '')}</div>`;
-  if (savedText) $('todo-new').value = savedText;
-  if (savedProj) $('todo-new-proj').value = savedProj;
 }
 
 function renderAll() {
@@ -1430,43 +1367,13 @@ overviewEl.addEventListener('click', async e => {
         await act(SetMainBranch(d.project, v), v ? `Hauptbranch: ${v}` : 'Hauptbranch: automatisch');
         break;
       }
-      case 'todoadd': {
-        const text = $('todo-new').value.trim();
-        const proj = $('todo-new-proj').value;
-        if (!text) break;
-        $('todo-new').value = '';
-        $('todo-new-proj').value = '';
-        await act(AddTodo(text, proj), 'Todo angelegt');
-        break;
-      }
-      case 'todoedit': editingTodo = parseInt(d.idx); renderOverview(); $('todo-edit-text')?.focus(); break;
-      case 'todocancel': editingTodo = -1; renderOverview(); break;
-      case 'todosave': {
-        const text = $('todo-edit-text').value.trim();
-        const proj = $('todo-edit-proj').value;
-        editingTodo = -1;
-        await act(UpdateTodo(parseInt(d.idx), text, proj), 'Todo gespeichert');
-        break;
-      }
-      case 'tododelete': await act(DeleteTodo(parseInt(d.idx)), 'Todo gelöscht'); break;
       case 'dsrefresh': refreshDeployStatus(); break;
       case 'azsub': await openSubPicker(b); break;
       case 'azlogin': AzLogin(); toast('Browser öffnet sich für den Azure-Login…'); break;
       case 'argologin': ArgoLogin(); toast('Browser öffnet sich für den Argo-SSO-Login…'); break;
-      case 'todostart': {
-        const name = await act(StartTodoSession(parseInt(d.idx)), n => `Todo → Session „${n}" — Text steht im Eingabefeld, Enter schickt ihn ab`);
-        if (name) setTimeout(() => openSession(name), 400);
-        break;
-      }
     }
   } catch { /* toast zeigt den Fehler */ }
   b.disabled = false;
-});
-
-overviewEl.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && e.target.id === 'todo-new') {
-    overviewEl.querySelector('button[data-act="todoadd"]')?.click();
-  }
 });
 
 let refreshing = false;
@@ -1475,15 +1382,15 @@ async function refresh(force) {
   if (refreshing && !force) return;
   refreshing = true;
   try {
-    const [o, t, p] = await Promise.all([Overview(!!force), Todos(), Projects()]);
-    ov = o; todos = t || []; projects = p || [];
-    const key = JSON.stringify([{ ...o, generatedAt: '' }, todos, projects]);
+    const [o, p] = await Promise.all([Overview(!!force), Projects()]);
+    ov = o; projects = p || [];
+    const key = JSON.stringify([{ ...o, generatedAt: '' }, projects]);
     if (key === lastDataKey && !force) {
       const stamp = document.querySelector('.stamp');
       if (stamp) stamp.textContent = 'Stand ' + (o.generatedAt || '');
     } else {
       lastDataKey = key;
-      if (editingTodo < 0 && editingMain === null || force) renderAll();
+      if (editingMain === null || force) renderAll();
       else renderSidebar();
     }
   } catch (e) { /* Backend noch nicht bereit */ }

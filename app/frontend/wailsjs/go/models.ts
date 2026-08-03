@@ -946,24 +946,6 @@ export namespace main {
 	        this.text = source["text"];
 	    }
 	}
-	export class TodoInfo {
-	    index: number;
-	    text: string;
-	    project: string;
-	    age: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new TodoInfo(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.index = source["index"];
-	        this.text = source["text"];
-	        this.project = source["project"];
-	        this.age = source["age"];
-	    }
-	}
 
 }
 

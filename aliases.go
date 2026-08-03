@@ -6,7 +6,6 @@ type (
 	State          = core.State
 	Project        = core.Project
 	Agent          = core.Agent
-	Todo           = core.Todo
 	AgentStatus    = core.AgentStatus
 	GitInfo        = core.GitInfo
 	WorktreeInfo   = core.WorktreeInfo

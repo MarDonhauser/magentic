@@ -38,16 +38,9 @@ type Agent struct {
 	SeenAt     time.Time `json:"seen_at,omitzero"`
 }
 
-type Todo struct {
-	Text      string    `json:"text"`
-	Project   string    `json:"project,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
 type State struct {
 	Projects []Project `json:"projects"`
 	Agents   []Agent   `json:"agents"`
-	Todos    []Todo    `json:"todos,omitempty"`
 }
 
 func StatePath() string {

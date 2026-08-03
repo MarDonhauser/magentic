@@ -114,9 +114,7 @@ html, body {
   100% { box-shadow: 0 0 0 0 rgba(55,207,189,0); border-color: var(--border); }
 }
 
-#sessions { overflow-y: auto; padding: 0 8px; max-height: 45%; }
-#sidebar.no-todos #sessions { max-height: none; flex: 1; }
-#sidebar.no-todos #side-todos, #sidebar.no-todos #side-todos-label { display: none; }
+#sessions { overflow-y: auto; padding: 0 8px; flex: 1; }
 
 .proj-head {
   display: flex;
@@ -231,16 +229,6 @@ body.reordering .pname { pointer-events: none; }
 .session.later .kind { color: var(--muted); }
 .session.later .sname { color: var(--ink-2); font-weight: 500; }
 .session.later .sstatus { margin-left: 4px; }
-
-#side-todos { overflow-y: auto; padding: 0 8px; flex: 1; }
-.side-todo {
-  display: flex; gap: 7px; align-items: baseline;
-  padding: 4px 10px; border-radius: 6px; cursor: pointer;
-  color: var(--ink-2);
-}
-.side-todo:hover { background: var(--raise); }
-.side-todo .ttext { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tmark { color: var(--muted); flex: none; }
 
 .none { color: var(--muted); padding: 6px 10px; font-size: 12px; }
 
@@ -359,13 +347,7 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
 .scroll-bottom.show { display: block; }
 .scroll-bottom:hover { color: var(--accent); border-color: var(--accent); }
 
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 20px; }
-.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px 8px; }
-.tile .val { font-size: 24px; font-weight: 600; }
-.tile .lbl { font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; margin-top: 2px; }
-
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; }
-.dot.hollow { background: transparent !important; border: 2px solid var(--muted); width: 6px; height: 6px; }
 
 .card {
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
@@ -437,18 +419,6 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
 }
 .inline-input:focus { border-color: var(--accent); }
 .inline-input.wide { flex: 1; min-width: 160px; }
-
-.todo-row {
-  display: flex; align-items: baseline; gap: 8px;
-  padding: 6px 8px; border-radius: 8px;
-}
-.todo-row:hover { background: var(--raise); }
-.todo-row.editing { align-items: center; }
-.todo-row .ttext { flex-shrink: 1; }
-.tproj { color: var(--muted); font-size: 11.5px; }
-.tproj.dim { font-style: italic; }
-.tage { color: var(--muted); font-size: 11px; }
-.todo-add { display: flex; gap: 8px; align-items: center; padding: 10px 8px 6px; border-top: 1px solid var(--border); margin-top: 6px; }
 
 .stamp { color: var(--muted); font-size: 11.5px; text-align: right; padding-top: 4px; }
 

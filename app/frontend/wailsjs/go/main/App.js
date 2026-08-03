@@ -6,10 +6,6 @@ export function AddProject(arg1) {
   return window['go']['main']['App']['AddProject'](arg1);
 }
 
-export function AddTodo(arg1, arg2) {
-  return window['go']['main']['App']['AddTodo'](arg1, arg2);
-}
-
 export function ArgoLogin() {
   return window['go']['main']['App']['ArgoLogin']();
 }
@@ -56,10 +52,6 @@ export function Cleanup(arg1, arg2) {
 
 export function CloseTerm(arg1) {
   return window['go']['main']['App']['CloseTerm'](arg1);
-}
-
-export function DeleteTodo(arg1) {
-  return window['go']['main']['App']['DeleteTodo'](arg1);
 }
 
 export function Deploy(arg1) {
@@ -194,10 +186,6 @@ export function StartBoardItem(arg1, arg2, arg3) {
   return window['go']['main']['App']['StartBoardItem'](arg1, arg2, arg3);
 }
 
-export function StartTodoSession(arg1) {
-  return window['go']['main']['App']['StartTodoSession'](arg1);
-}
-
 export function Stats(arg1) {
   return window['go']['main']['App']['Stats'](arg1);
 }
@@ -208,14 +196,6 @@ export function TakeBreak() {
 
 export function Timeline() {
   return window['go']['main']['App']['Timeline']();
-}
-
-export function Todos() {
-  return window['go']['main']['App']['Todos']();
-}
-
-export function UpdateTodo(arg1, arg2, arg3) {
-  return window['go']['main']['App']['UpdateTodo'](arg1, arg2, arg3);
 }
 
 export function WorktreeDiff(arg1) {

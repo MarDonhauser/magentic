@@ -273,31 +273,6 @@ func RemoveWorktree(st *State, proj *Project, path string) error {
 	return nil
 }
 
-func StartTodoSession(st *State, idx int) (string, error) {
-	if idx < 0 || idx >= len(st.Todos) {
-		return "", fmt.Errorf("Todo nicht gefunden")
-	}
-	todo := st.Todos[idx]
-	proj := st.ProjectByName(todo.Project)
-	if proj == nil {
-		return "", fmt.Errorf("Todo hat kein Projekt — erst ein Projekt zuweisen")
-	}
-	name := PickAgentName(st, todo.Text)
-	session := SessionName(name)
-	sid := NewUUID()
-	if err := TmuxNewClaudeSession(session, proj.Path, "--session-id "+sid); err != nil {
-		return "", fmt.Errorf("tmux: %w", err)
-	}
-	baseCommit, baseDirty := CaptureBaseline(proj.Path)
-	st.AddAgent(Agent{Name: name, Project: proj.Name, Dir: proj.Path, CreatedAt: time.Now(), BaseCommit: baseCommit, BaseDirty: baseDirty, SessionID: sid})
-	st.Todos = append(st.Todos[:idx], st.Todos[idx+1:]...)
-	if err := st.Save(); err != nil {
-		return "", err
-	}
-	go SendPromptWhenReady(session, todo.Text, false)
-	return name, nil
-}
-
 func CreateAgentSession(st *State, projName string, worktree bool, name string) (string, error) {
 	return createSession(st, projName, worktree, name, "")
 }

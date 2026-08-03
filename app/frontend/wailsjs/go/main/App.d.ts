@@ -5,8 +5,6 @@ import {core} from '../models';
 
 export function AddProject(arg1:string):Promise<string>;
 
-export function AddTodo(arg1:string,arg2:string):Promise<void>;
-
 export function ArgoLogin():Promise<void>;
 
 export function AzAccounts():Promise<Array<main.AzAccount>>;
@@ -30,8 +28,6 @@ export function BuildInfo():Promise<string>;
 export function Cleanup(arg1:string,arg2:string):Promise<string>;
 
 export function CloseTerm(arg1:string):Promise<void>;
-
-export function DeleteTodo(arg1:number):Promise<void>;
 
 export function Deploy(arg1:string):Promise<string>;
 
@@ -99,17 +95,11 @@ export function SnoozeBreak():Promise<void>;
 
 export function StartBoardItem(arg1:string,arg2:string,arg3:string):Promise<string>;
 
-export function StartTodoSession(arg1:number):Promise<string>;
-
 export function Stats(arg1:number):Promise<core.Stats>;
 
 export function TakeBreak():Promise<void>;
 
 export function Timeline():Promise<Array<main.TimelineEntry>>;
-
-export function Todos():Promise<Array<main.TodoInfo>>;
-
-export function UpdateTodo(arg1:number,arg2:string,arg3:string):Promise<void>;
 
 export function WorktreeDiff(arg1:string):Promise<string>;
 

@@ -121,25 +121,6 @@ func (a *App) Overview(fresh bool) (core.Overview, error) {
 	return core.BuildOverviewFrom(st, statuses, contents, activity), nil
 }
 
-type TodoInfo struct {
-	Index   int    `json:"index"`
-	Text    string `json:"text"`
-	Project string `json:"project"`
-	Age     string `json:"age"`
-}
-
-func (a *App) Todos() ([]TodoInfo, error) {
-	st, err := core.LoadState()
-	if err != nil {
-		return nil, err
-	}
-	out := []TodoInfo{}
-	for i, t := range st.Todos {
-		out = append(out, TodoInfo{Index: i, Text: t.Text, Project: t.Project, Age: core.FormatAgeWord(t.CreatedAt)})
-	}
-	return out, nil
-}
-
 func (a *App) Projects() ([]string, error) {
 	st, err := core.LoadState()
 	if err != nil {
@@ -260,44 +241,6 @@ func (a *App) SaveImage(dataB64 string) (string, error) {
 		return "", err
 	}
 	return p, nil
-}
-
-func (a *App) AddTodo(text, project string) error {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return fmt.Errorf("leeres Todo")
-	}
-	st, err := core.LoadState()
-	if err != nil {
-		return err
-	}
-	st.Todos = append(st.Todos, core.Todo{Text: text, Project: project, CreatedAt: time.Now()})
-	return st.Save()
-}
-
-func (a *App) UpdateTodo(idx int, text, project string) error {
-	st, err := core.LoadState()
-	if err != nil {
-		return err
-	}
-	if idx < 0 || idx >= len(st.Todos) {
-		return fmt.Errorf("Todo nicht gefunden")
-	}
-	st.Todos[idx].Text = strings.TrimSpace(text)
-	st.Todos[idx].Project = project
-	return st.Save()
-}
-
-func (a *App) DeleteTodo(idx int) error {
-	st, err := core.LoadState()
-	if err != nil {
-		return err
-	}
-	if idx < 0 || idx >= len(st.Todos) {
-		return fmt.Errorf("Todo nicht gefunden")
-	}
-	st.Todos = append(st.Todos[:idx], st.Todos[idx+1:]...)
-	return st.Save()
 }
 
 func (a *App) MarkSeen(name string) error {
@@ -439,14 +382,6 @@ func (a *App) ZeitgeistResume() error {
 
 func (a *App) ZeitgeistStop(note string) (core.ZgStopped, error) {
 	return core.ZeitgeistStop(note)
-}
-
-func (a *App) StartTodoSession(idx int) (string, error) {
-	st, err := core.LoadState()
-	if err != nil {
-		return "", err
-	}
-	return core.StartTodoSession(st, idx)
 }
 
 func (a *App) NewSession(project string, worktree bool, name string) (string, error) {

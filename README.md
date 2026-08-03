@@ -5,7 +5,7 @@ Verwaltung von Claude-Code-Sessions über mehrere Projekte hinweg. Jeder Agent l
 Zwei Oberflächen, eine gemeinsame Logik (`core/`):
 
 - **TUI** (`magentic`) — schnelle Übersicht und Verwaltung im Terminal.
-- **Desktop-App** (`app/`, Wails) — Übersicht mit Token-Limits, Todos, Aktionen
+- **Desktop-App** (`app/`, Wails) — Übersicht mit Token-Limits, Aktionen
   und **echtem eingebetteten Terminal** (xterm.js): natives Markieren, klickbare
   Links, natives Scrollen. Dazu Git-Graph, Spec-Board, Statistik und ein
   Terminal-Dock mit Tabs.
@@ -47,8 +47,6 @@ open app/build/bin/magentic.app   # Desktop-App
 | `D` | `/deploy` senden (ohne Agent: neue Session im Projekt-Root) |
 | `z` | Zeitgeist-Timer starten (fragt Projekt) bzw. stoppen (fragt optionale Notiz) |
 | `Z` | Zeitgeist-Timer pausieren / fortsetzen |
-| `t` | Neues Todo (merkt sich das aktuelle Projekt) |
-| `e` | Todo bearbeiten (leer = löschen) |
 | `r` | Agent umbenennen |
 | `x` | Agent beenden (Worktree bleibt bestehen) / Projekt entfernen |
 | `p` | Projekt hinzufügen |
@@ -61,10 +59,10 @@ einen Agent attacht, Scrollrad navigiert.
 
 ## Desktop-App
 
-Die App (Wails, Go + xterm.js) zeigt links Sessions **nach Projekt gruppiert**
-und Todos, unten die Claude-Limits (5h/7d). Die Übersicht enthält Tiles,
-Projekt-Karten mit Worktree-Zeilen (ahead/behind, Git-Status, Warnungen),
-Agent-Pills und alle Aktionen:
+Die App (Wails, Go + xterm.js) zeigt links Sessions **nach Projekt gruppiert**,
+unten die Claude-Limits (5h/7d). Die Übersicht enthält Projekt-Karten mit
+Worktree-Zeilen (ahead/behind, Git-Status, Warnungen), Agent-Pills und alle
+Aktionen:
 
 - **⌨** — Terminal zur Session öffnen (echtes PTY-Attach, natives
   Markieren/Kopieren, klickbare Links, Scrollback)
@@ -219,8 +217,6 @@ Wert) wird zugleich die neue Voreinstellung. Alles liegt in
 `⌘W` zurück zur Übersicht · `⌘⇧W` Session beenden · **`⌘T` Terminal im
 Verzeichnis der gerade offenen Session** (funktioniert auch, wenn der Fokus im
 Terminal liegt — Claude bekommt die Kombo nicht zu sehen).
-- **Todos** — anlegen, bearbeiten, löschen, **▶ Session**: startet eine Session,
-  der Todo-Text landet im Eingabefeld (ohne Abschicken)
 - **Zeitgeist** — Widget links unten: Timer starten/pausieren/stoppen,
   laufende Zeit + Verdienst live, Tagessumme
 
@@ -233,14 +229,6 @@ App bauen:
 ```sh
 cd app && wails build          # → app/build/bin/magentic.app
 ```
-
-## Todos (TUI)
-
-`t` legt ein Todo an (links unten über der Usage-Anzeige, mit Projekt-Tag aus
-dem aktuellen Kontext). `e` bearbeitet, `x` löscht. `⏎` auf einem Todo startet
-eine neue Claude-Session im zugehörigen Projekt und tippt den Todo-Text ins
-Eingabefeld — **ohne ihn abzuschicken**. Das Todo wird dabei aus der Liste
-entfernt.
 
 ## Git pro Session
 
