@@ -22,6 +22,9 @@ type OvAgent struct {
 	Known      bool   `json:"known"`
 	OwnDirty   int    `json:"ownDirty"`
 	OwnCommits int    `json:"ownCommits"`
+	Branch     string `json:"branch,omitempty"`
+	Unread     bool   `json:"unread"`
+	Dock       bool   `json:"dock"`
 }
 
 type OvWorktree struct {
@@ -142,8 +145,16 @@ func BuildOverviewFrom(s *State, statuses map[string]AgentStatus, contents map[s
 		later[a.Name] = true
 		ov.Later = append(ov.Later, OvLater{Name: a.Name, Project: a.Project, Age: FormatAge(a.LaterAt), Term: a.IsTerm()})
 	}
+	// Dock-Terminals bleiben aus den Zählern: sie sind Werkzeug, keine Sitzung,
+	// und tauchen deshalb auch in der Sitzungsliste nicht auf.
+	dock := map[string]bool{}
+	for _, a := range s.Agents {
+		if a.IsDock() {
+			dock[a.Name] = true
+		}
+	}
 	for name, st := range statuses {
-		if later[name] {
+		if later[name] || dock[name] {
 			continue
 		}
 		ov.Counts[statusKey(st)]++
@@ -206,6 +217,11 @@ func BuildOverviewFrom(s *State, statuses map[string]AgentStatus, contents map[s
 			}
 			if len(wt.Warnings) > 0 {
 				ov.Counts["warnings"]++
+			}
+			for _, a := range wt.Agents {
+				if a.Unread && !a.Dock {
+					ov.Counts["unread"]++
+				}
 			}
 		}
 	}
@@ -271,8 +287,10 @@ func toOvAgent(a Agent, statuses map[string]AgentStatus, activity map[string]tim
 	}
 	phase, phaseLabel := agentPhase(a, mainBranch, agentAlive(st))
 	var sc SessionChanges
+	branch := ""
 	if gi := cachedGit(gitCache, a.Dir); gi.IsRepo {
 		sc = CollectSessionChangesCached(a, gi)
+		branch = gi.Branch
 	}
 	return OvAgent{
 		Name:       a.Name,
@@ -288,7 +306,18 @@ func toOvAgent(a Agent, statuses map[string]AgentStatus, activity map[string]tim
 		Known:      sc.Known,
 		OwnDirty:   len(sc.Files),
 		OwnCommits: sc.Commits,
+		Branch:     branch,
+		Unread:     unread(st, a.SeenAt, lastActive),
+		Dock:       a.IsDock(),
 	}
+}
+
+func unread(st AgentStatus, seenAt, lastActive time.Time) bool {
+	switch st {
+	case StatusIdle, StatusBlocked, StatusExited:
+		return lastActive.After(seenAt)
+	}
+	return false
 }
 
 var integrationBranches = map[string]bool{"dev": true, "main": true, "master": true, "develop": true}

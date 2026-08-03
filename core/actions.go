@@ -215,6 +215,13 @@ func StartMerge(st *State, projPath, source, target string) (string, error) {
 	return StartSkillAgent(st, projPath, prompt, "merge", "merge "+source)
 }
 
+func StartBoardSession(st *State, projPath, id, itemPath string) (string, error) {
+	prompt := fmt.Sprintf("Arbeite am Change %q. Die Spezifikation liegt unter %s — lies proposal bzw. spec, den Plan und tasks.md, "+
+		"und arbeite die offenen Tasks ab. Hake erledigte Tasks in tasks.md ab. "+
+		"Zeige mir zuerst deinen Plan, bevor du etwas ausführst.", id, itemPath)
+	return StartSkillAgent(st, projPath, prompt, "", id)
+}
+
 func StartDeploy(st *State, projPath string) (string, error) {
 	return StartSkillAgent(st, projPath, "/deploy ", "deploy", "deploy "+filepath.Base(projPath))
 }
@@ -299,16 +306,20 @@ func CreateTermSession(st *State, projName string, worktree bool, name string) (
 	return createSession(st, projName, worktree, name, KindTerm)
 }
 
+func CreateDockSession(st *State, projName string) (string, error) {
+	return createSession(st, projName, false, "", KindDock)
+}
+
 func CreateTermSessionFor(st *State, agentName, name string) (string, error) {
 	a := st.AgentByName(agentName)
 	if a == nil {
 		return "", fmt.Errorf("Session %q nicht gefunden", agentName)
 	}
 	hint := a.Project
-	if hint == "" {
+	if hint == "" || a.Worktree {
 		hint = filepath.Base(a.Dir)
 	}
-	name, err := pickSessionName(st, name, hint, KindTerm)
+	name, err := pickSessionName(st, name, SessionNameHint(a.Dir, hint), KindTerm)
 	if err != nil {
 		return "", err
 	}
@@ -317,7 +328,7 @@ func CreateTermSessionFor(st *State, agentName, name string) (string, error) {
 
 func pickSessionName(st *State, name, hint, kind string) (string, error) {
 	if name == "" {
-		if kind == KindTerm {
+		if kind == KindTerm || kind == KindDock {
 			hint = "term " + hint
 		}
 		name = PickAgentName(st, hint)
@@ -335,7 +346,11 @@ func createSession(st *State, projName string, worktree bool, name, kind string)
 	if proj == nil {
 		return "", fmt.Errorf("Projekt nicht gefunden")
 	}
-	name, err := pickSessionName(st, name, projName, kind)
+	hint := projName
+	if !worktree {
+		hint = SessionNameHint(proj.Path, projName)
+	}
+	name, err := pickSessionName(st, name, hint, kind)
 	if err != nil {
 		return "", err
 	}
@@ -352,7 +367,7 @@ func createSession(st *State, projName string, worktree bool, name, kind string)
 
 func startSession(st *State, name, dir, project string, worktree bool, kind string) (string, error) {
 	sid := ""
-	if kind == KindTerm {
+	if kind == KindTerm || kind == KindDock {
 		if err := TmuxNewShellSession(SessionName(name), dir); err != nil {
 			return "", fmt.Errorf("tmux: %w", err)
 		}

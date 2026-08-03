@@ -1,0 +1,233 @@
+body.dk-open #layout { height: calc(100% - 28px - var(--dk-h, 280px)); }
+
+.dk-dock {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--dk-h, 280px);
+  display: none;
+  flex-direction: column;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -6px 22px var(--shadow);
+  font-size: 13px;
+  z-index: 9;
+}
+
+body.dk-open .dk-dock { display: flex; }
+
+.dk-resize {
+  position: absolute;
+  top: -4px;
+  left: 0;
+  right: 0;
+  height: 7px;
+  cursor: ns-resize;
+  z-index: 2;
+}
+
+.dk-resize::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 3px;
+  height: 2px;
+  background: transparent;
+  transition: background .12s ease;
+}
+
+.dk-resize:hover::after,
+body.dk-dragging .dk-resize::after { background: var(--accent); }
+
+.dk-bar {
+  display: flex;
+  align-items: stretch;
+  flex: none;
+  height: 30px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.dk-tabs {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.dk-tabs::-webkit-scrollbar { height: 0; }
+
+.dk-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  max-width: 210px;
+  padding: 0 6px 0 11px;
+  color: var(--ink-2);
+  border-right: 1px solid var(--border);
+  cursor: default;
+  user-select: none;
+}
+
+.dk-tab:hover { background: var(--raise); color: var(--ink); }
+
+.dk-tab.dk-active {
+  background: var(--term-bg);
+  color: var(--ink);
+}
+
+.dk-tab.dk-active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  background: var(--accent);
+}
+
+.dk-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--muted);
+}
+
+.dk-name {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dk-x {
+  flex: none;
+  width: 17px;
+  height: 17px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.dk-tab:hover .dk-x,
+.dk-tab.dk-active .dk-x { opacity: .75; }
+
+.dk-x:hover {
+  opacity: 1;
+  background: var(--raise-2);
+  color: var(--critical);
+}
+
+.dk-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  padding: 0 7px;
+  border-left: 1px solid var(--border);
+}
+
+.dk-btn {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.dk-btn:hover {
+  background: var(--raise-2);
+  border-color: var(--border);
+  color: var(--accent);
+}
+
+.dk-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--term-bg);
+}
+
+body.dk-dragging .dk-body { pointer-events: none; }
+
+.dk-pane {
+  position: absolute;
+  inset: 0;
+  display: none;
+  padding: 4px 4px 4px 9px;
+}
+
+.dk-pane.dk-on { display: block; }
+
+.dk-term { position: absolute; inset: 4px 4px 4px 9px; }
+
+.dk-pane .xterm { height: 100%; }
+
+.dk-pane .xterm,
+.dk-pane .xterm-viewport,
+.dk-pane .xterm-screen { background-color: var(--term-bg) !important; }
+
+.dk-pane .xterm-viewport::-webkit-scrollbar { width: 10px; }
+.dk-pane .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
+.dk-pane .xterm-viewport::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.18);
+  border-radius: 5px;
+  border: 2px solid var(--term-bg);
+}
+.dk-pane .xterm-viewport::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.34); }
+
+.dk-empty {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 11px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.dk-dock.dk-blank .dk-empty { display: flex; }
+
+.dk-empty-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.dk-empty-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+.dk-hint { font-size: 11px; color: var(--muted); opacity: .75; }
+
+body.dk-dragging {
+  cursor: ns-resize;
+  user-select: none;
+}

@@ -57,6 +57,28 @@ func Slugify(text string) string {
 	return slug
 }
 
+var nameStripPrefixes = []string{"agent/", "feature/", "feat/", "fix/", "bugfix/", "chore/", "hotfix/"}
+
+// SessionNameHint liefert den Branch-Namen des Verzeichnisses, solange der
+// aussagekräftiger ist als der übergebene Fallback (Worktree- oder Projektname).
+func SessionNameHint(dir, fallback string) string {
+	if dir == "" {
+		return fallback
+	}
+	out, err := GitCmdCached(dir, "rev-parse", "--abbrev-ref", "HEAD")
+	branch := strings.TrimSpace(out)
+	if err != nil || branch == "" || branch == "HEAD" || integrationBranches[branch] {
+		return fallback
+	}
+	for _, p := range nameStripPrefixes {
+		branch = strings.TrimPrefix(branch, p)
+	}
+	if branch == "" {
+		return fallback
+	}
+	return branch
+}
+
 func PickAgentName(s *State, hint string) string {
 	base := Slugify(hint)
 	if base == "" {

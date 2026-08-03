@@ -1,9 +1,12 @@
 package core
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -14,6 +17,11 @@ type Project struct {
 }
 
 const KindTerm = "term"
+
+// Terminals aus dem Dock unten in der App. Sie verhalten sich wie
+// Terminal-Sessions, tauchen aber bewusst nicht in der Sitzungsliste auf —
+// sie gehören zum Dock und werden dort auch wieder geschlossen.
+const KindDock = "dock"
 
 type Agent struct {
 	Name       string    `json:"name"`
@@ -27,6 +35,7 @@ type Agent struct {
 	SessionID  string    `json:"session_id,omitempty"`
 	DeployAt   time.Time `json:"deploy_at,omitzero"`
 	LaterAt    time.Time `json:"later_at,omitzero"`
+	SeenAt     time.Time `json:"seen_at,omitzero"`
 }
 
 type Todo struct {
@@ -58,13 +67,25 @@ func LoadState() (*State, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal(data, s); err != nil {
-		return nil, err
+	if err := json.Unmarshal(data, s); err == nil {
+		return s, nil
 	}
-	return s, nil
+	// Wurde die Datei von zwei Prozessen überlappend geschrieben, steht am
+	// Anfang noch ein vollständiges Objekt — das ist der letzte heile Stand.
+	rescued := &State{}
+	if derr := json.NewDecoder(bytes.NewReader(data)).Decode(rescued); derr != nil {
+		return nil, fmt.Errorf("state.json ist beschädigt: %w", derr)
+	}
+	rescued.Save()
+	return rescued, nil
 }
 
+var saveMu sync.Mutex
+
 func (s *State) Save() error {
+	saveMu.Lock()
+	defer saveMu.Unlock()
+
 	p := StatePath()
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
@@ -73,15 +94,25 @@ func (s *State) Save() error {
 	if err != nil {
 		return err
 	}
-	tmp := p + ".tmp"
+	// Eindeutiger Name pro Prozess: TUI und App schreiben sonst in dieselbe
+	// Zwischendatei und verschränken ihre Bytes zu ungültigem JSON.
+	tmp := fmt.Sprintf("%s.tmp.%d", p, os.Getpid())
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, p)
+	if err := os.Rename(tmp, p); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func (a Agent) IsTerm() bool {
-	return a.Kind == KindTerm
+	return a.Kind == KindTerm || a.Kind == KindDock
+}
+
+func (a Agent) IsDock() bool {
+	return a.Kind == KindDock
 }
 
 func (s *State) AgentByName(name string) *Agent {
@@ -132,6 +163,23 @@ func (s *State) MarkDeploy(name string) {
 			s.Agents[i].DeployAt = time.Now()
 		}
 	}
+}
+
+// MarkSeen liefert nur dann true, wenn sich der Wert lohnt zu speichern —
+// sonst schreibt jeder Ansichtswechsel den State neu.
+func (s *State) MarkSeen(name string) bool {
+	for i := range s.Agents {
+		if s.Agents[i].Name != name {
+			continue
+		}
+		now := time.Now()
+		if now.Sub(s.Agents[i].SeenAt) < 5*time.Second {
+			return false
+		}
+		s.Agents[i].SeenAt = now
+		return true
+	}
+	return false
 }
 
 func (s *State) MarkLater(name string) {

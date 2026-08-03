@@ -15,6 +15,18 @@ export function AzLogin():Promise<void>;
 
 export function AzSetSubscription(arg1:string):Promise<void>;
 
+export function Board(arg1:string):Promise<core.Board>;
+
+export function BreakConfig():Promise<core.BreakConfig>;
+
+export function BreakHeartbeat(arg1:boolean):Promise<core.BreakAdvice>;
+
+export function BreakOver():Promise<void>;
+
+export function Breaks():Promise<core.BreakAdvice>;
+
+export function BuildInfo():Promise<string>;
+
 export function Cleanup(arg1:string,arg2:string):Promise<string>;
 
 export function CloseTerm(arg1:string):Promise<void>;
@@ -27,11 +39,19 @@ export function DeployStatus():Promise<main.DeployStatus>;
 
 export function DoneAgent(arg1:string):Promise<void>;
 
+export function EndBreak():Promise<void>;
+
+export function GitGraph(arg1:string,arg2:number):Promise<core.GitGraph>;
+
 export function KillSession(arg1:string):Promise<void>;
 
 export function LaterSession(arg1:string):Promise<void>;
 
+export function MarkSeen(arg1:string):Promise<void>;
+
 export function Merge(arg1:string,arg2:string,arg3:string):Promise<string>;
+
+export function NewDockSession(arg1:string):Promise<string>;
 
 export function NewSession(arg1:string,arg2:boolean,arg3:string):Promise<string>;
 
@@ -57,6 +77,8 @@ export function ReorderProjects(arg1:Array<string>):Promise<void>;
 
 export function ResizeTerm(arg1:string,arg2:number,arg3:number):Promise<void>;
 
+export function RevealPath(arg1:string):Promise<void>;
+
 export function SaveImage(arg1:string):Promise<string>;
 
 export function SearchTranscripts(arg1:string):Promise<Array<main.SearchHit>>;
@@ -69,9 +91,19 @@ export function SessionPreview(arg1:string):Promise<string>;
 
 export function SetActiveTerm(arg1:string):Promise<void>;
 
+export function SetBreakConfig(arg1:core.BreakConfig):Promise<void>;
+
 export function SetMainBranch(arg1:string,arg2:string):Promise<void>;
 
+export function SnoozeBreak():Promise<void>;
+
+export function StartBoardItem(arg1:string,arg2:string,arg3:string):Promise<string>;
+
 export function StartTodoSession(arg1:number):Promise<string>;
+
+export function Stats(arg1:number):Promise<core.Stats>;
+
+export function TakeBreak():Promise<void>;
 
 export function Timeline():Promise<Array<main.TimelineEntry>>;
 

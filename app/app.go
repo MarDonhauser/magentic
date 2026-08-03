@@ -19,17 +19,20 @@ import (
 )
 
 type App struct {
-	ctx           context.Context
-	mu            sync.Mutex
-	terms         map[string]*ptyTerm
-	activeTerm    string
-	dsMu          sync.Mutex
-	dsPrev        *DeployStatus
-	statusMu      sync.Mutex
-	statusCache   map[string]core.AgentStatus
-	contentCache  map[string]string
-	activityCache map[string]time.Time
-	statusAt      time.Time
+	ctx             context.Context
+	mu              sync.Mutex
+	terms           map[string]*ptyTerm
+	activeTerm      string
+	dsMu            sync.Mutex
+	dsPrev          *DeployStatus
+	statusMu        sync.Mutex
+	statusCache     map[string]core.AgentStatus
+	contentCache    map[string]string
+	activityCache   map[string]time.Time
+	statusAt        time.Time
+	breakNotified   string
+	breakReminders  int
+	breakRemindedAt time.Time
 }
 
 type ptyTerm struct {
@@ -297,6 +300,127 @@ func (a *App) DeleteTodo(idx int) error {
 	return st.Save()
 }
 
+func (a *App) MarkSeen(name string) error {
+	st, err := core.LoadState()
+	if err != nil {
+		return err
+	}
+	if !st.MarkSeen(name) {
+		return nil
+	}
+	return st.Save()
+}
+
+func (a *App) GitGraph(project string, limit int) (core.GitGraph, error) {
+	st, err := core.LoadState()
+	if err != nil {
+		return core.GitGraph{}, err
+	}
+	return core.BuildGitGraph(st, project, limit), nil
+}
+
+func (a *App) Board(project string) (core.Board, error) {
+	st, err := core.LoadState()
+	if err != nil {
+		return core.Board{}, err
+	}
+	return core.BuildBoard(st, project), nil
+}
+
+func (a *App) Stats(days int) (core.Stats, error) {
+	st, err := core.LoadState()
+	if err != nil {
+		return core.Stats{}, err
+	}
+	return core.BuildStats(st, days), nil
+}
+
+func (a *App) RevealPath(path string) error {
+	if path == "" {
+		return fmt.Errorf("kein Pfad")
+	}
+	return exec.Command("open", "-R", path).Start()
+}
+
+func (a *App) StartBoardItem(project, id, path string) (string, error) {
+	st, err := core.LoadState()
+	if err != nil {
+		return "", err
+	}
+	proj := st.ProjectByName(project)
+	if proj == nil {
+		return "", fmt.Errorf("unbekanntes Projekt: %s", project)
+	}
+	name, err := core.StartBoardSession(st, proj.Path, id, path)
+	if err != nil {
+		return "", err
+	}
+	st.Save()
+	return name, nil
+}
+
+func (a *App) Breaks() (core.BreakAdvice, error) {
+	st, err := core.LoadState()
+	if err != nil {
+		return core.BreakAdvice{}, err
+	}
+	statuses, _, activity := a.statusesFor(st.Agents)
+	return core.BreakStatus(st, statuses, activity), nil
+}
+
+func (a *App) BreakHeartbeat(active bool) core.BreakAdvice {
+	return core.BreakHeartbeat(active)
+}
+
+func (a *App) TakeBreak() error {
+	a.breakNotified = ""
+	a.breakReminders = 0
+	cancelAttention()
+	return core.TakeBreak()
+}
+
+func (a *App) EndBreak() error {
+	a.breakNotified = ""
+	a.breakReminders = 0
+	cancelAttention()
+	return core.EndBreak()
+}
+
+func (a *App) SnoozeBreak() error {
+	a.breakNotified = ""
+	a.breakReminders = 0
+	cancelAttention()
+	return core.SnoozeBreak()
+}
+
+func (a *App) BreakConfig() core.BreakConfig {
+	return core.GetBreakConfig()
+}
+
+func (a *App) SetBreakConfig(c core.BreakConfig) error {
+	return core.SetBreakConfig(c)
+}
+
+// Damit er während der Pause wirklich wegschauen kann, statt auf den Countdown
+// zu starren.
+func (a *App) BreakOver() {
+	core.NotifyDesktop("magentic", "Pause vorbei — nichts drängt.", "Purr")
+}
+
+// BuildInfo liefert den Zeitpunkt, zu dem die laufende Binary gebaut wurde —
+// damit erkennbar ist, ob die App noch aus einem älteren Build stammt.
+func (a *App) BuildInfo() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	info, err := os.Stat(exe)
+	if err != nil {
+		return ""
+	}
+	return info.ModTime().Format("02.01.2006, 15:04")
+}
+
 func (a *App) Zeitgeist() core.ZgInfo {
 	return core.ZeitgeistInfo()
 }
@@ -339,6 +463,14 @@ func (a *App) NewTermSession(project string, worktree bool, name string) (string
 		return "", err
 	}
 	return core.CreateTermSession(st, project, worktree, name)
+}
+
+func (a *App) NewDockSession(project string) (string, error) {
+	st, err := core.LoadState()
+	if err != nil {
+		return "", err
+	}
+	return core.CreateDockSession(st, project)
 }
 
 func (a *App) NewTermSessionFor(agent string) (string, error) {

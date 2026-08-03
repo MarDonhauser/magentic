@@ -1,5 +1,316 @@
 export namespace core {
 	
+	export class BoardTask {
+	    text: string;
+	    done: boolean;
+	    section?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BoardTask(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.text = source["text"];
+	        this.done = source["done"];
+	        this.section = source["section"];
+	    }
+	}
+	export class BoardItem {
+	    id: string;
+	    title: string;
+	    summary?: string;
+	    path: string;
+	    kind: string;
+	    column: string;
+	    total: number;
+	    done: number;
+	    specs: number;
+	    hasPlan: boolean;
+	    updated?: string;
+	    tasks?: BoardTask[];
+	    agents?: string[];
+	    branches?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new BoardItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.summary = source["summary"];
+	        this.path = source["path"];
+	        this.kind = source["kind"];
+	        this.column = source["column"];
+	        this.total = source["total"];
+	        this.done = source["done"];
+	        this.specs = source["specs"];
+	        this.hasPlan = source["hasPlan"];
+	        this.updated = source["updated"];
+	        this.tasks = this.convertValues(source["tasks"], BoardTask);
+	        this.agents = source["agents"];
+	        this.branches = source["branches"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Board {
+	    project: string;
+	    kind: string;
+	    root?: string;
+	    items: BoardItem[];
+	    archived: number;
+	    specs: number;
+	    err?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Board(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.project = source["project"];
+	        this.kind = source["kind"];
+	        this.root = source["root"];
+	        this.items = this.convertValues(source["items"], BoardItem);
+	        this.archived = source["archived"];
+	        this.specs = source["specs"];
+	        this.err = source["err"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	export class BreakAdvice {
+	    enabled: boolean;
+	    level: string;
+	    workedSecs: number;
+	    restingSecs: number;
+	    goodMoment: boolean;
+	    waiting: number;
+	    busy: number;
+	    message: string;
+	    snoozed: boolean;
+	    nextDueSecs: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new BreakAdvice(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.level = source["level"];
+	        this.workedSecs = source["workedSecs"];
+	        this.restingSecs = source["restingSecs"];
+	        this.goodMoment = source["goodMoment"];
+	        this.waiting = source["waiting"];
+	        this.busy = source["busy"];
+	        this.message = source["message"];
+	        this.snoozed = source["snoozed"];
+	        this.nextDueSecs = source["nextDueSecs"];
+	    }
+	}
+	export class BreakConfig {
+	    enabled: boolean;
+	    hintAfter: number;
+	    dueAfter: number;
+	    overdueAfter: number;
+	    minBreak: number;
+	    idleResets: number;
+	    snoozeMins: number;
+	    breakMins: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new BreakConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.hintAfter = source["hintAfter"];
+	        this.dueAfter = source["dueAfter"];
+	        this.overdueAfter = source["overdueAfter"];
+	        this.minBreak = source["minBreak"];
+	        this.idleResets = source["idleResets"];
+	        this.snoozeMins = source["snoozeMins"];
+	        this.breakMins = source["breakMins"];
+	    }
+	}
+	export class GraphBranch {
+	    name: string;
+	    lane: number;
+	    isMain: boolean;
+	    worktree?: string;
+	    ahead: number;
+	    behind: number;
+	    merged: boolean;
+	    agents?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new GraphBranch(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.lane = source["lane"];
+	        this.isMain = source["isMain"];
+	        this.worktree = source["worktree"];
+	        this.ahead = source["ahead"];
+	        this.behind = source["behind"];
+	        this.merged = source["merged"];
+	        this.agents = source["agents"];
+	    }
+	}
+	export class GraphRef {
+	    name: string;
+	    kind: string;
+	    worktree?: string;
+	    current?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new GraphRef(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.kind = source["kind"];
+	        this.worktree = source["worktree"];
+	        this.current = source["current"];
+	    }
+	}
+	export class GraphCommit {
+	    hash: string;
+	    short: string;
+	    parents: string[];
+	    subject: string;
+	    author: string;
+	    age: string;
+	    time: number;
+	    lane: number;
+	    merge: boolean;
+	    refs: GraphRef[];
+	    agents?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new GraphCommit(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.hash = source["hash"];
+	        this.short = source["short"];
+	        this.parents = source["parents"];
+	        this.subject = source["subject"];
+	        this.author = source["author"];
+	        this.age = source["age"];
+	        this.time = source["time"];
+	        this.lane = source["lane"];
+	        this.merge = source["merge"];
+	        this.refs = this.convertValues(source["refs"], GraphRef);
+	        this.agents = source["agents"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class GitGraph {
+	    project: string;
+	    main: string;
+	    lanes: number;
+	    commits: GraphCommit[];
+	    branches: GraphBranch[];
+	    truncated: boolean;
+	    err?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GitGraph(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.project = source["project"];
+	        this.main = source["main"];
+	        this.lanes = source["lanes"];
+	        this.commits = this.convertValues(source["commits"], GraphCommit);
+	        this.branches = this.convertValues(source["branches"], GraphBranch);
+	        this.truncated = source["truncated"];
+	        this.err = source["err"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	
 	export class OvAgent {
 	    name: string;
 	    status: string;
@@ -14,6 +325,9 @@ export namespace core {
 	    known: boolean;
 	    ownDirty: number;
 	    ownCommits: number;
+	    branch?: string;
+	    unread: boolean;
+	    dock: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new OvAgent(source);
@@ -34,6 +348,9 @@ export namespace core {
 	        this.known = source["known"];
 	        this.ownDirty = source["ownDirty"];
 	        this.ownCommits = source["ownCommits"];
+	        this.branch = source["branch"];
+	        this.unread = source["unread"];
+	        this.dock = source["dock"];
 	    }
 	}
 	export class OvLater {
@@ -205,6 +522,172 @@ export namespace core {
 		    return a;
 		}
 	}
+	export class StatsTotals {
+	    days: number;
+	    prompts: number;
+	    turns: number;
+	    sessions: number;
+	    tokens: number;
+	    input: number;
+	    output: number;
+	    cacheRead: number;
+	    cacheWrite: number;
+	    cost: number;
+	    commits: number;
+	    cacheHit: number;
+	    busiestDay: string;
+	    streak: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new StatsTotals(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.days = source["days"];
+	        this.prompts = source["prompts"];
+	        this.turns = source["turns"];
+	        this.sessions = source["sessions"];
+	        this.tokens = source["tokens"];
+	        this.input = source["input"];
+	        this.output = source["output"];
+	        this.cacheRead = source["cacheRead"];
+	        this.cacheWrite = source["cacheWrite"];
+	        this.cost = source["cost"];
+	        this.commits = source["commits"];
+	        this.cacheHit = source["cacheHit"];
+	        this.busiestDay = source["busiestDay"];
+	        this.streak = source["streak"];
+	    }
+	}
+	export class StatsModel {
+	    model: string;
+	    turns: number;
+	    input: number;
+	    output: number;
+	    cacheRead: number;
+	    cacheWrite: number;
+	    cost: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new StatsModel(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.model = source["model"];
+	        this.turns = source["turns"];
+	        this.input = source["input"];
+	        this.output = source["output"];
+	        this.cacheRead = source["cacheRead"];
+	        this.cacheWrite = source["cacheWrite"];
+	        this.cost = source["cost"];
+	    }
+	}
+	export class StatsProject {
+	    name: string;
+	    tokens: number;
+	    cost: number;
+	    prompts: number;
+	    sessions: number;
+	    commits: number;
+	    active: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new StatsProject(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.tokens = source["tokens"];
+	        this.cost = source["cost"];
+	        this.prompts = source["prompts"];
+	        this.sessions = source["sessions"];
+	        this.commits = source["commits"];
+	        this.active = source["active"];
+	    }
+	}
+	export class StatsDay {
+	    date: string;
+	    weekday: string;
+	    prompts: number;
+	    turns: number;
+	    input: number;
+	    output: number;
+	    cacheRead: number;
+	    cacheWrite: number;
+	    cost: number;
+	    sessions: number;
+	    commits: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new StatsDay(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.date = source["date"];
+	        this.weekday = source["weekday"];
+	        this.prompts = source["prompts"];
+	        this.turns = source["turns"];
+	        this.input = source["input"];
+	        this.output = source["output"];
+	        this.cacheRead = source["cacheRead"];
+	        this.cacheWrite = source["cacheWrite"];
+	        this.cost = source["cost"];
+	        this.sessions = source["sessions"];
+	        this.commits = source["commits"];
+	    }
+	}
+	export class Stats {
+	    range: number;
+	    days: StatsDay[];
+	    projects: StatsProject[];
+	    models: StatsModel[];
+	    heatmap: number[][];
+	    hours: number[];
+	    totals: StatsTotals;
+	    err?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Stats(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.range = source["range"];
+	        this.days = this.convertValues(source["days"], StatsDay);
+	        this.projects = this.convertValues(source["projects"], StatsProject);
+	        this.models = this.convertValues(source["models"], StatsModel);
+	        this.heatmap = source["heatmap"];
+	        this.hours = source["hours"];
+	        this.totals = this.convertValues(source["totals"], StatsTotals);
+	        this.err = source["err"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	
+	
 	export class ZgProject {
 	    id: string;
 	    name: string;

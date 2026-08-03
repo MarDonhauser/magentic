@@ -71,6 +71,59 @@ func (a *App) statusesFor(agents []core.Agent) (map[string]core.AgentStatus, map
 	return outS, outC, outA
 }
 
+// Eine einmalige Benachrichtigung reicht nicht — sie ist nach ein paar
+// Sekunden weg und die Pause damit vergessen. Deshalb wiederholt sich die
+// Erinnerung und wird lauter, je länger sie ignoriert wird.
+const (
+	breakRemindEvery   = 8 * time.Minute
+	breakInsistAfter   = 2
+	breakAttentionText = "Steh mal auf — ein paar Schritte reichen."
+)
+
+func (a *App) checkBreak(st *core.State, statuses map[string]core.AgentStatus, activity map[string]time.Time) {
+	adv := core.BreakStatus(st, statuses, activity)
+	if !adv.Enabled {
+		return
+	}
+	switch adv.Level {
+	case core.BreakLevelNone, core.BreakLevelHint, core.BreakLevelResting:
+		if a.breakNotified != "" {
+			cancelAttention()
+		}
+		a.breakNotified = ""
+		a.breakReminders = 0
+		return
+	}
+	if adv.Snoozed {
+		return
+	}
+	// Bei "due" erst stören, wenn er ohnehin auf die Agents wartet; bei
+	// "overdue" auch mittendrin.
+	if adv.Level == core.BreakLevelDue && !adv.GoodMoment {
+		return
+	}
+	first := adv.Level != a.breakNotified
+	if !first && time.Since(a.breakRemindedAt) < breakRemindEvery {
+		return
+	}
+	if first {
+		a.breakReminders = 0
+	}
+	a.breakReminders++
+	a.breakNotified = adv.Level
+	a.breakRemindedAt = time.Now()
+
+	core.NotifyDesktop("magentic · Zeit für eine Pause", breakAttentionText, "Purr")
+
+	insist := adv.Level == core.BreakLevelOverdue || a.breakReminders >= breakInsistAfter
+	requestAttention(insist)
+	// Nur wenn er ohnehin auf die Agents wartet, sich nach vorne drängen —
+	// mitten im Tippen wäre das eine Zumutung.
+	if insist && adv.GoodMoment && a.breakReminders >= breakInsistAfter+1 {
+		bringToFront()
+	}
+}
+
 func (a *App) watchLoop() {
 	prev := map[string]core.AgentStatus{}
 	pending := map[string]core.AgentStatus{}
@@ -93,6 +146,8 @@ func (a *App) watchLoop() {
 			label = strconv.Itoa(blocked)
 		}
 		setDockBadge(label)
+
+		a.checkBreak(st, statuses, activity)
 
 		active := a.getActiveTerm()
 		for name, s := range statuses {

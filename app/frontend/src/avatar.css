@@ -1,0 +1,14 @@
+.rbt {
+  display: block;
+  flex: none;
+  border-radius: 5px;
+}
+
+.rbt.dim {
+  opacity: .55;
+  filter: saturate(.5);
+}
+
+.rbt.ring {
+  box-shadow: 0 0 0 2px var(--accent);
+}

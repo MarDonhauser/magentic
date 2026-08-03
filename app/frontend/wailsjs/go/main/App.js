@@ -26,6 +26,30 @@ export function AzSetSubscription(arg1) {
   return window['go']['main']['App']['AzSetSubscription'](arg1);
 }
 
+export function Board(arg1) {
+  return window['go']['main']['App']['Board'](arg1);
+}
+
+export function BreakConfig() {
+  return window['go']['main']['App']['BreakConfig']();
+}
+
+export function BreakHeartbeat(arg1) {
+  return window['go']['main']['App']['BreakHeartbeat'](arg1);
+}
+
+export function BreakOver() {
+  return window['go']['main']['App']['BreakOver']();
+}
+
+export function Breaks() {
+  return window['go']['main']['App']['Breaks']();
+}
+
+export function BuildInfo() {
+  return window['go']['main']['App']['BuildInfo']();
+}
+
 export function Cleanup(arg1, arg2) {
   return window['go']['main']['App']['Cleanup'](arg1, arg2);
 }
@@ -50,6 +74,14 @@ export function DoneAgent(arg1) {
   return window['go']['main']['App']['DoneAgent'](arg1);
 }
 
+export function EndBreak() {
+  return window['go']['main']['App']['EndBreak']();
+}
+
+export function GitGraph(arg1, arg2) {
+  return window['go']['main']['App']['GitGraph'](arg1, arg2);
+}
+
 export function KillSession(arg1) {
   return window['go']['main']['App']['KillSession'](arg1);
 }
@@ -58,8 +90,16 @@ export function LaterSession(arg1) {
   return window['go']['main']['App']['LaterSession'](arg1);
 }
 
+export function MarkSeen(arg1) {
+  return window['go']['main']['App']['MarkSeen'](arg1);
+}
+
 export function Merge(arg1, arg2, arg3) {
   return window['go']['main']['App']['Merge'](arg1, arg2, arg3);
+}
+
+export function NewDockSession(arg1) {
+  return window['go']['main']['App']['NewDockSession'](arg1);
 }
 
 export function NewSession(arg1, arg2, arg3) {
@@ -110,6 +150,10 @@ export function ResizeTerm(arg1, arg2, arg3) {
   return window['go']['main']['App']['ResizeTerm'](arg1, arg2, arg3);
 }
 
+export function RevealPath(arg1) {
+  return window['go']['main']['App']['RevealPath'](arg1);
+}
+
 export function SaveImage(arg1) {
   return window['go']['main']['App']['SaveImage'](arg1);
 }
@@ -134,12 +178,32 @@ export function SetActiveTerm(arg1) {
   return window['go']['main']['App']['SetActiveTerm'](arg1);
 }
 
+export function SetBreakConfig(arg1) {
+  return window['go']['main']['App']['SetBreakConfig'](arg1);
+}
+
 export function SetMainBranch(arg1, arg2) {
   return window['go']['main']['App']['SetMainBranch'](arg1, arg2);
 }
 
+export function SnoozeBreak() {
+  return window['go']['main']['App']['SnoozeBreak']();
+}
+
+export function StartBoardItem(arg1, arg2, arg3) {
+  return window['go']['main']['App']['StartBoardItem'](arg1, arg2, arg3);
+}
+
 export function StartTodoSession(arg1) {
   return window['go']['main']['App']['StartTodoSession'](arg1);
+}
+
+export function Stats(arg1) {
+  return window['go']['main']['App']['Stats'](arg1);
+}
+
+export function TakeBreak() {
+  return window['go']['main']['App']['TakeBreak']();
 }
 
 export function Timeline() {

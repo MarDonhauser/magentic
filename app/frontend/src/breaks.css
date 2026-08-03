@@ -1,0 +1,498 @@
+.br-ind {
+  position: fixed;
+  right: 16px;
+  bottom: var(--br-bottom, 44px);
+  z-index: 24;
+  display: none;
+  align-items: center;
+  gap: 1px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: 0 6px 20px var(--shadow);
+  font-size: 12px;
+  color: var(--ink-2);
+  user-select: none;
+}
+
+.br-ind.br-on { display: inline-flex; }
+
+.br-ind-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 5px 4px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.br-ind-main:hover { background: var(--raise); }
+.br-ind-main:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+
+.br-ind-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.br-ind-txt {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.br-ind-cta {
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--raise-2);
+  color: var(--ink);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.br-ind-good {
+  color: var(--accent);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.br-ind-good::before {
+  content: '·';
+  margin-right: 7px;
+  color: var(--muted);
+}
+
+.br-ind-good[hidden], .br-ind-cta[hidden], .br-ind-x[hidden] { display: none; }
+
+.br-ind-x {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.br-ind-x:hover { background: var(--raise-2); color: var(--ink-2); }
+
+.br-ind.br-l-hint .br-ind-dot { background: var(--ink-2); }
+
+.br-ind.br-l-due { border-color: rgba(224,178,94,0.42); }
+.br-ind.br-l-due .br-ind-dot { background: var(--warning); }
+.br-ind.br-l-due .br-ind-cta { background: rgba(224,178,94,0.18); color: var(--warning); }
+
+.br-ind.br-l-overdue {
+  border-color: rgba(226,145,95,0.55);
+  animation: br-ind-pulse 4.2s ease-in-out infinite;
+}
+.br-ind.br-l-overdue .br-ind-dot { background: var(--serious); }
+.br-ind.br-l-overdue .br-ind-txt { color: var(--ink); }
+.br-ind.br-l-overdue .br-ind-cta { background: rgba(226,145,95,0.20); color: var(--serious); }
+
+.br-ind.br-l-resting { border-color: rgba(152,195,121,0.38); }
+.br-ind.br-l-resting .br-ind-dot { background: var(--good); }
+.br-ind.br-l-resting .br-ind-cta { background: var(--raise); color: var(--ink-2); }
+
+.br-ind.br-snoozed {
+  opacity: .55;
+  animation: none;
+}
+.br-ind.br-snoozed .br-ind-dot { background: var(--muted); }
+
+@keyframes br-ind-pulse {
+  0%, 100% { box-shadow: 0 6px 20px var(--shadow), 0 0 0 0 rgba(226,145,95,0); }
+  50% { box-shadow: 0 6px 20px var(--shadow), 0 0 0 5px rgba(226,145,95,0.09); }
+}
+
+.br-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+
+.br-overlay.br-on { display: flex; }
+
+.br-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(18, 21, 26, 0.92);
+  backdrop-filter: blur(2px);
+  animation: br-fade .4s ease both;
+}
+
+.br-sheet {
+  position: relative;
+  width: min(560px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 30px 24px 26px;
+  text-align: center;
+  outline: none;
+  animation: br-rise .5s cubic-bezier(.22, .8, .3, 1) both;
+  scrollbar-width: none;
+}
+
+.br-sheet::-webkit-scrollbar { width: 0; }
+
+.br-top {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
+.br-kicker {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+
+.br-gear {
+  position: absolute;
+  top: 22px;
+  right: 18px;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: .6;
+}
+
+.br-gear svg { width: 15px; height: 15px; }
+.br-gear:hover { opacity: 1; color: var(--ink-2); background: var(--raise); }
+
+
+.br-breath {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.br-orb {
+  position: relative;
+  width: 212px;
+  height: 212px;
+  display: grid;
+  place-items: center;
+  margin: 26px 0 6px;
+}
+
+.br-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.br-core {
+  position: absolute;
+  inset: 12px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 46%, rgba(55, 207, 189, 0.26), rgba(55, 207, 189, 0.10) 58%, rgba(55, 207, 189, 0) 76%);
+  box-shadow: 0 0 70px rgba(55, 207, 189, 0.09);
+  transform: scale(.86);
+  opacity: .9;
+}
+
+.br-orb.br-anim .br-core { animation: br-breathe 14s infinite; }
+
+@keyframes br-breathe {
+  0% { transform: scale(.58); opacity: .62; animation-timing-function: cubic-bezier(.42, 0, .3, 1); }
+  28.57% { transform: scale(1); opacity: 1; animation-timing-function: linear; }
+  57.14% { transform: scale(1); opacity: 1; animation-timing-function: cubic-bezier(.4, 0, .25, 1); }
+  100% { transform: scale(.58); opacity: .62; }
+}
+
+.br-phase {
+  position: relative;
+  z-index: 1;
+  color: var(--ink);
+  font-size: 21px;
+  font-weight: 300;
+  letter-spacing: .05em;
+  font-variant-numeric: tabular-nums;
+}
+
+
+/* Der Aufsteh-Impuls ist das Wichtigste an der Pause und muss aus zwei Metern
+   Abstand noch lesbar sein — er wird ja im Aufstehen gelesen. */
+.br-impulse {
+  margin: 30px 0 0;
+  max-width: 22em;
+  color: var(--ink);
+  font-size: 21px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.br-timer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 11px;
+  margin-top: 30px;
+}
+
+
+.br-bar {
+  width: 190px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--raise);
+  overflow: hidden;
+}
+
+.br-bar-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: .45;
+  transition: width .5s linear;
+}
+
+.br-lens { display: flex; gap: 6px; }
+
+.br-len {
+  padding: 4px 11px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.br-len:hover { color: var(--ink-2); background: var(--raise); }
+
+.br-len.br-len-on {
+  border-color: var(--border);
+  background: var(--raise);
+  color: var(--ink-2);
+}
+
+.br-done-line {
+  display: none;
+  margin-top: 20px;
+  color: var(--ink);
+  font-size: 14.5px;
+  animation: br-fade .8s ease both;
+}
+
+.br-sheet.br-done .br-done-line { display: block; }
+.br-sheet.br-done .br-bar-fill { opacity: .7; }
+
+.br-sheet.br-done .br-primary {
+  border-color: rgba(55, 207, 189, 0.45);
+  color: var(--accent);
+}
+
+.br-agents {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 26px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.br-agents.br-waiting { color: var(--warning); }
+
+.br-agents-btn {
+  padding: 4px 11px;
+  border: 1px solid rgba(224, 178, 94, 0.45);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--warning);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.br-agents-btn:hover { background: rgba(224, 178, 94, 0.13); }
+
+.br-actions { margin-top: 22px; }
+
+.br-primary {
+  padding: 10px 24px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--raise);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: color .18s ease, border-color .18s ease, background .18s ease;
+}
+
+.br-primary:hover {
+  background: var(--raise-2);
+  color: var(--ink);
+  border-color: var(--raise-2);
+}
+
+.br-primary:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+
+
+.br-settings {
+  width: 100%;
+  max-width: 340px;
+  margin-top: 22px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  text-align: left;
+}
+
+.br-settings[hidden] { display: none; }
+
+.br-srow {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.br-slabel { flex: 1; min-width: 0; }
+
+.br-scheck { color: var(--ink); margin-bottom: 3px; cursor: pointer; }
+.br-scheck input { accent-color: var(--accent); }
+.br-scheck .br-slabel { flex: none; }
+
+.br-snum {
+  width: 58px;
+  flex: none;
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.br-snum:focus { outline: none; border-color: var(--accent); }
+
+.br-sunit {
+  width: 26px;
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+@keyframes br-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes br-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (max-width: 620px) {
+  .br-sheet { padding: 26px 18px 22px; }
+}
+
+@media (max-width: 620px), (max-height: 760px) {
+  .br-orb { width: 168px; height: 168px; margin: 18px 0 4px; }
+  .br-phase { font-size: 19px; }
+  .br-impulse { margin-top: 20px; }
+  .br-timer { margin-top: 22px; }
+  .br-agents { margin-top: 20px; }
+  .br-actions { margin-top: 18px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .br-ind.br-l-overdue { animation: none; }
+  .br-orb.br-anim .br-core {
+    animation: none;
+    transform: scale(.9);
+    opacity: .8;
+  }
+  .br-scrim, .br-sheet, .br-done-line { animation: none; }
+  .br-bar-fill { transition: none; }
+  .br-phase { font-size: 24px; }
+}
+
+/* Nach den ersten Sekunden bleibt nur der Atem — nichts mehr zu lesen. */
+.br-overlay.br-quiet .br-impulse,
+.br-overlay.br-quiet .br-kicker,
+.br-overlay.br-quiet .br-lens,
+.br-overlay.br-quiet .br-gear {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 2.4s ease;
+}
+.br-overlay.br-quiet .br-bar { opacity: .35; transition: opacity 2.4s ease; }
+.br-overlay.br-quiet .br-primary { opacity: .45; transition: opacity 2.4s ease; }
+.br-overlay.br-quiet .br-primary:hover,
+.br-overlay.br-quiet .br-primary:focus-visible { opacity: 1; }
+.br-overlay.br-quiet .br-sheet:hover .br-kicker,
+.br-overlay.br-quiet .br-sheet:hover .br-lens,
+.br-overlay.br-quiet .br-sheet:hover .br-gear { opacity: .8; pointer-events: auto; }
+.br-overlay.br-quiet .br-sheet.br-done .br-primary { opacity: 1; }
+
+/* Nur-Einstellungen: die Pause läuft dabei nicht, also hat auch nichts von
+   ihr etwas verloren. */
+.br-overlay.br-cfg-only .br-breath,
+.br-overlay.br-cfg-only .br-impulse,
+.br-overlay.br-cfg-only .br-timer,
+.br-overlay.br-cfg-only .br-done-line { display: none; }
+.br-overlay.br-cfg-only .br-kicker::after { content: '-Einstellungen'; }
+.br-overlay.br-cfg-only .br-primary { margin-top: 18px; }
+.br-overlay.br-cfg-only .br-settings { margin-top: 4px; }
+
+.br-sgroup { margin-top: 18px; }
+.br-sgroup:first-of-type { margin-top: 6px; }
+.br-shead {
+  display: flex; align-items: baseline; gap: 8px;
+  margin-bottom: 6px;
+  font-size: 11px; font-weight: 700;
+  letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted);
+}
+.br-shint { font-size: 10.5px; font-weight: 400; letter-spacing: 0; text-transform: none; opacity: .8; }
+
+/* Ohne laufende Pause fällt der Atemkreis weg — dann stünde der Knopf über
+   den Feldern. */
+.br-overlay.br-cfg-only .br-settings { order: 1; }
+.br-overlay.br-cfg-only .br-actions { order: 2; margin-top: 20px; }

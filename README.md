@@ -7,7 +7,8 @@ Zwei Oberflächen, eine gemeinsame Logik (`core/`):
 - **TUI** (`magentic`) — schnelle Übersicht und Verwaltung im Terminal.
 - **Desktop-App** (`app/`, Wails) — Übersicht mit Token-Limits, Todos, Aktionen
   und **echtem eingebetteten Terminal** (xterm.js): natives Markieren, klickbare
-  Links, natives Scrollen.
+  Links, natives Scrollen. Dazu Git-Graph, Spec-Board, Statistik und ein
+  Terminal-Dock mit Tabs.
 
 ```
  ⚡ magentic                                  ● 1 läuft   ◆ 1 wartet   ○ 2 idle
@@ -76,7 +77,145 @@ Agent-Pills und alle Aktionen:
 - **⌨ Terminal** — neue Session mit reiner Shell statt Claude (auch über
   ⇧-Klick auf das `+` in der Sidebar und in der Hydra-Leiste)
 
+### Sidebar
+
+Jede Session bekommt einen aus ihrem Namen erzeugten **Roboter-Avatar** — immer
+derselbe Roboter für denselben Namen, damit Sessions auf einen Blick
+auseinanderzuhalten sind. Daneben steht der **Branch** (bzw. der Worktree, in
+dem die Session läuft).
+
+Zwei Marker zeigen, wo du gebraucht wirst:
+
+- **`!` mit gelbem Rand** — die Session wartet auf deine Eingabe
+  (Permission-Dialog, Rückfrage). Solche Sessions stehen innerhalb ihres
+  Projekts oben.
+- **blauer Punkt** — die Session ist durchgelaufen, seit du zuletzt
+  hingeschaut hast. Der Punkt verschwindet, sobald du die Session öffnest;
+  magentic merkt sich pro Session, wann du sie zuletzt gesehen hast
+  (`seen_at` im State).
+
+Wartet mindestens eine Session, erscheint oben ein Banner („2 Sessions warten
+auf dich"), das per Klick zur ersten davon springt. Für bloß Ungelesenes gibt
+es keins — das zeigt der Punkt an der Session selbst schon deutlich genug.
+
+### Weitere Ansichten
+
+- **Git-Graph** (`⌘G`, oder Button auf der Projektkarte) — echter Lane-Graph
+  über alle Branches eines Projekts. Zeigt, wo Worktrees abzweigen und wo sie
+  wieder zusammenlaufen, mit ahead/behind zum Hauptbranch, „merged"-Badges und
+  den Avataren der Sessions, die gerade auf einem Commit sitzen.
+- **Board** (`⌘B`) — Kanban-Ansicht aus den Spec-Ordnern des Projekts.
+  Erkennt `openspec/changes/*` und `specs/<NNN-name>/*`, liest die Checkboxen
+  aus `tasks.md` und verteilt die Changes auf Geplant / In Arbeit / Zur
+  Abnahme / Erledigt. Karten, an denen gerade eine Session arbeitet, sind
+  hervorgehoben; „hieran arbeiten" startet eine Claude-Session mit dem
+  passenden Auftrag.
+- **Statistik** (`⌘⇧S`) — Aktivität, Tokens, geschätzte Kosten, Cache-Quote,
+  Commits, Projekte, Modelle und eine Heatmap Wochentag × Stunde. Speist sich
+  aus den Claude-Transkripten (`~/.claude/projects`), aus git und aus dem
+  State. Der erste Lauf parst alle Transkripte, danach greift ein Cache
+  (`~/.config/magentic/stats-cache.json`).
+
+  Alle Zahlen beziehen sich ausschließlich auf die eigene Arbeit:
+  - **Prompts, Turns, Sessions, Tokens, Kosten** stammen aus den lokalen
+    Transkripten unter `~/.claude/projects` — dort landen nur eigene Sessions.
+    Nicht gezählt werden Tool-Ergebnisse (`toolUseResult`), Subagent-Eingaben
+    (`isSidechain`), Meta-Zeilen und die user-Zeilen, mit denen Claude Code
+    ausgeführte Slash-Kommandos und deren Ausgabe protokolliert
+    (`<command-name>`, `<local-command-stdout>`, …).
+  - **Commits** zählt nur, was unter der git-Identität des jeweiligen
+    Repositories (`user.email` / `user.name`) steht. In geteilten Repos stammt
+    sonst der Großteil der Commits von Kolleginnen und Kollegen.
+
+  Zwei Zahlen brauchen zusätzlich Einordnung — in der App steht sie als
+  Tooltip an der jeweiligen Kachel:
+  - **Tokens** enthält Cache-Read, und bei jedem Turn wird der komplette
+    bisherige Kontext erneut gelesen. Deshalb stehen dort schnell Milliarden;
+    das ist kein zusätzlicher Verbrauch. Die Unterzeile „ohne Cache" zeigt die
+    tatsächlich neu verarbeiteten Tokens.
+  - **Kosten** sind auf API-Listenpreise hochgerechnet. Mit einem Max-Abo
+    zahlst du diesen Betrag nicht — die Zahl zeigt, was die Arbeit über die
+    API gekostet hätte.
+- **Terminal-Dock** (`⌃\``) — Panel über die volle Fensterbreite unterhalb von
+  Sidebar und Hauptbereich, mit mehreren Tabs, per Drag in der Höhe
+  verstellbar. Offene Tabs und Höhe überleben den Neustart.
+
+  Dock-Terminals sind Werkzeug, keine Sitzung: sie laufen unter `kind: "dock"`,
+  erscheinen **nicht** in der Sitzungsliste, den Projektkarten oder den
+  Zählern der Übersicht, und werden beim Schließen des Tabs auch wirklich
+  beendet — sonst liefe die tmux-Session unsichtbar weiter. Wer ein Terminal
+  will, das in der Liste bleibt, nimmt weiterhin `⌘T` oder den
+  Terminal-Knopf auf der Projektkarte.
+
+### Pausen
+
+Kein Timer zum Starten und Stoppen — magentic erkennt selbst, wie lange du
+schon durcharbeitest, und schlägt eine Pause im richtigen Moment vor.
+
+Als Aktivität zählt, wenn du in magentic arbeitest oder in einer Session tippst.
+Dass die Agents rechnen, zählt ausdrücklich **nicht** — sonst liefe die Uhr
+weiter, während du längst weg bist. Bleibst du einige Minuten still, gilt das
+rückwirkend als Pause; du musst also nichts drücken, wenn du einfach aufstehst.
+
+Der Vorschlag kommt bevorzugt dann, wenn **alle Sessions gerade rechnen** und
+keine auf dich wartet — genau der Moment, in dem eine Pause nichts blockiert.
+Wartet dagegen eine Session auf deine Eingabe, hält magentic sich zurück, bis
+das erledigt ist. Wird es deutlich überfällig, meldet sich die App auch per
+Desktop-Benachrichtigung; die erreicht dich auch dann, wenn du gerade
+woanders bist.
+
+**Die Erinnerung gibt nicht nach.** Eine Benachrichtigung ist nach fünf
+Sekunden weg und die Pause damit wieder vergessen — deshalb meldet sich
+magentic alle 8 Minuten erneut und wird dabei hartnäckiger:
+
+1. Beim ersten Mal eine Benachrichtigung, das Dock-Icon hüpft einmal.
+2. Beim zweiten Mal hüpft es **so lange, bis du reagierst**
+   (`NSCriticalRequest`) — das überlebt auch einen Blick in den Browser.
+3. Ab dem dritten Mal holt sich das Fenster den Vordergrund — aber nur, wenn
+   ohnehin alle Agents rechnen. Mitten im Tippen drängelt es nicht.
+
+Sobald du die Pause nimmst oder vertagst, hört es sofort auf.
+
+Die Pause selbst gibt bewusst **fast nichts zu lesen**. Reddit ist keine
+Erholung, weil der Kopf sofort weiterliest — eine Pausenansicht voller Text
+wäre dasselbe in kleiner. Groß und deutlich steht deshalb nur eins da:
+**steh auf**. Alle Impulse zielen darauf — ein paar Schritte gehen, strecken,
+Wasser holen, ans Fenster stellen. Nach wenigen Sekunden blendet auch dieser
+Text weg; übrig bleibt ein atmender Kreis mit einem einzigen Wort (4 s ein,
+4 s halten, 6 s aus), falls du sitzen bleibst. Kein Ziffern-Countdown, keine
+Statistik, keine Bilanz.
+
+Am Ende der Pause kommt eine Benachrichtigung. Du kannst also wegschauen,
+die Augen zumachen oder aus dem Fenster sehen, ohne auf die Uhr zu achten.
+`Esc` beendet jederzeit; wartet eine Session auf dich, steht das drin.
+
+**Wann die nächste Pause fällig ist**, steht am Sidebar-Eintrag „Pause":
+`54 min` bis dahin, `fällig` sobald es so weit ist (gelb bzw. orange, wenn es
+überfällig wird), `läuft` während einer Pause. Der Indikator unten rechts
+zeigt dieselbe Restzeit, taucht aber erst auf, wenn der erste Hinweis fällig
+wird — die Sidebar-Zeile ist immer da.
+
+**Einstellen** lässt sich das über das Zahnrad am Sidebar-Eintrag „Pause"
+(oder über das Zahnrad in der Pausenansicht selbst), gruppiert nach den zwei
+Fragen, um die es geht:
+
+| | Standard | |
+|---|---|---|
+| **Wie lange** — eine Pause dauert | 5 min | ist auch die Vorauswahl in der Pausenansicht |
+| **Wie oft** — leiser Hinweis nach | 40 min | ununterbrochener Arbeit |
+| **Wie oft** — Pause fällig nach | 55 min | ab hier kommt die Benachrichtigung |
+| **Wie oft** — hartnäckig ab | 80 min | ab hier auch mitten in der Arbeit |
+| „Später" verschiebt um | 10 min | |
+| Zählt als Pause ab | 4 min | Ruhe, die als Pause durchgeht |
+| Abwesenheit erkannt nach | 6 min | ohne Aktivität endet der Arbeitsblock |
+
+Die in der Pausenansicht gewählte Länge (2 / 5 / 10 Minuten oder der eigene
+Wert) wird zugleich die neue Voreinstellung. Alles liegt in
+`~/.config/magentic/breaks.json`, getrennt von der übrigen Konfiguration.
+
 **Tasten in der App:** `⌘0` Übersicht · `⌘1`–`⌘9` Session aus der Sidebar ·
+`⌘G` Git-Graph · `⌘B` Board · `⌘⇧S` Statistik · `⌃\`` Terminal-Dock ·
+`Esc` beendet die Pausenansicht ·
 `⌘W` zurück zur Übersicht · `⌘⇧W` Session beenden · **`⌘T` Terminal im
 Verzeichnis der gerade offenen Session** (funktioniert auch, wenn der Fokus im
 Terminal liegt — Claude bekommt die Kombo nicht zu sehen).
@@ -156,9 +295,23 @@ File-Watcher sofort mit.
 - Worktrees landen unter `<projekt>-agents/<agentname>` neben dem Projektordner.
 - Konfiguration und Agent-Registry: `~/.config/magentic/state.json`
 - Gemeinsame Logik von TUI und App liegt in `core/` (State, tmux, Status,
-  Git, Overview, Usage, Aktionen).
+  Git, Overview, Usage, Aktionen, Git-Graph, Board, Statistik).
+- Neue Sessions werden nach dem **Branch** benannt, auf dem das Verzeichnis
+  steht — außer der Branch ist ein Integrationsbranch (`main`, `dev`,
+  `master`, `develop`), dann greift der Projektname. Präfixe wie `agent/`
+  oder `feature/` fallen weg.
+- Das **Board** liest `openspec/changes/*` bzw. `specs/<NNN-name>/*` direkt vom
+  Dateisystem — es gibt keine eigene Datenhaltung. Eine Session wird einem
+  Change zugeordnet, wenn Branch, Worktree-Ordner oder Session-Name zu dessen
+  Ordnernamen passen.
+- Die **Statistik** parst `~/.claude/projects/**/*.jsonl` (auch die
+  `subagents/`-Dateien, deren Tokens mitzählen, deren Zeilen aber nicht als
+  Prompt). Ergebnisse werden pro Datei über ModTime und Größe in
+  `~/.config/magentic/stats-cache.json` zwischengespeichert.
 
 ## Build
+
+**TUI:**
 
 ```sh
 go build -o ~/.local/bin/magentic .
@@ -167,3 +320,39 @@ go build -o ~/.local/bin/magentic .
 Nicht per `cp` über die bestehende Binary kopieren — macOS invalidiert dabei
 die Code-Signatur und killt das Programm beim Start (`zsh: killed`). Entweder
 direkt ins Ziel bauen (oben) oder vorher `rm ~/.local/bin/magentic`.
+
+**Desktop-App:**
+
+```sh
+./scripts/build-app.sh
+```
+
+`build-app.sh` startet eine bereits laufende App am Ende automatisch neu —
+sonst arbeitet man weiter mit der alten Version. Welcher Build gerade läuft,
+steht im Tooltip des „magentic"-Schriftzugs oben links in der App.
+
+**Autostart bei der Anmeldung:**
+
+```sh
+./scripts/autostart.sh       # einrichten
+./scripts/autostart.sh off   # wieder entfernen
+```
+
+Legt einen LaunchAgent unter `~/Library/LaunchAgents/de.donhauser.magentic.plist`
+an, der die gebaute App startet. Der Pfad zeigt in den Projektordner — ein
+späterer `build-app.sh` ersetzt die App an Ort und Stelle, der Autostart bleibt
+gültig. Nach einem Rechnerneustart ist also nichts zu tun; es startet immer
+der zuletzt gebaute Stand.
+
+Das Skript baut mit `wails build` und signiert die App danach mit einer
+**stabilen Identität**. Das ist nötig für die Spracheingabe: macOS bindet die
+Mikrofon-Freigabe (TCC) bei einer ad-hoc-Signatur an den `cdhash` der Binary.
+Der ändert sich bei jedem Build — deshalb fragt macOS sonst bei jeder neuen
+Version wieder nach Erlaubnis. Mit einem festen Zertifikat hängt die Freigabe
+am Zertifikat und bleibt bestehen.
+
+Beim ersten Lauf legt `scripts/setup-signing.sh` ein selbstsigniertes
+Code-Signing-Zertifikat `magentic-dev` im Login-Schlüsselbund an (macOS fragt
+dabei einmal nach dem Passwort, und beim ersten Signieren ggf. nach „Immer
+erlauben"). Danach läuft `build-app.sh` ohne Rückfragen durch. Anschließend
+einmal das Mikrofon erlauben — das gilt dann für alle künftigen Builds.
