@@ -31,9 +31,20 @@ echo "→ wails build…"
 # Kein --options runtime: Hardened Runtime verlangt für den Mikrofonzugriff
 # zusätzlich das Entitlement com.apple.security.device.audio-input, sonst
 # scheitert die Spracheingabe in den Sessions.
+#
+# Explizites Designated Requirement: für selbstsignierte Zertifikate ohne
+# Vertrauenskette generiert codesign sonst ein cdhash-Requirement — das ändert
+# sich mit jedem Build, und TCC vergisst die Mikrofon-Freigabe jedes Mal.
+CERT_SHA1="$(security find-certificate -c "$IDENTITY" -Z 2>/dev/null | awk -F': ' '/SHA-1 hash/{print $2}')"
+if [ -z "$CERT_SHA1" ]; then
+  echo "✗ Zertifikat \"$IDENTITY\" nicht im Keychain gefunden."
+  exit 1
+fi
 echo "→ Signiere mit \"$IDENTITY\"…"
 codesign --force --deep --sign "$IDENTITY" \
-  --identifier com.wails.magentic "$APP"
+  --identifier com.wails.magentic \
+  -r="designated => identifier \"com.wails.magentic\" and certificate leaf = H\"$CERT_SHA1\"" \
+  "$APP"
 
 codesign -dv --verbose=2 "$APP" 2>&1 | grep -E '^(Authority|Identifier)=' || true
 
