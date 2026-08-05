@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"strconv"
 	"time"
 
@@ -127,14 +128,31 @@ func (a *App) checkBreak(st *core.State, statuses map[string]core.AgentStatus, a
 func (a *App) watchLoop() {
 	prev := map[string]core.AgentStatus{}
 	pending := map[string]core.AgentStatus{}
+	var lastErrLog time.Time
 	for {
 		time.Sleep(4 * time.Second)
 		st, err := core.LoadState()
 		if err != nil {
+			if time.Since(lastErrLog) > time.Minute {
+				core.Logf("watchLoop: state laden fehlgeschlagen: %v", err)
+				lastErrLog = time.Now()
+			}
 			continue
 		}
 		statuses, contents, activity := core.CollectStatuses(st.Agents)
 		a.storeStatuses(statuses, contents, activity)
+		if len(st.Agents) > 0 {
+			dead := 0
+			for _, s := range statuses {
+				if s == core.StatusDead {
+					dead++
+				}
+			}
+			if dead == len(st.Agents) && time.Since(lastErrLog) > time.Minute {
+				core.Logf("watchLoop: alle %d Agents dead — tmux nicht erreichbar? PATH=%s", dead, os.Getenv("PATH"))
+				lastErrLog = time.Now()
+			}
+		}
 		blocked := 0
 		for _, s := range statuses {
 			if s == core.StatusBlocked {

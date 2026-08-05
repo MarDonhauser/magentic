@@ -62,6 +62,7 @@ func RestoreSessions(st *State) int {
 			continue
 		}
 		if info, err := os.Stat(a.Dir); err != nil || !info.IsDir() {
+			Logf("restore %s: Verzeichnis %s fehlt — Agent entfernt", a.Name, a.Dir)
 			changed = true
 			continue
 		}
@@ -76,9 +77,11 @@ func RestoreSessions(st *State) int {
 			err = TmuxNewClaudeSession(sn, a.Dir, extraArgs)
 		}
 		if err != nil {
+			Logf("restore %s: %v", a.Name, err)
 			kept = append(kept, a)
 			continue
 		}
+		Logf("restore %s: neu erstellt in %s", a.Name, a.Dir)
 		restored++
 		kept = append(kept, a)
 	}

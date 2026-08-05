@@ -48,6 +48,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	installNativeNotifier()
 	runtime.OnFileDrop(ctx, a.onFileDrop)
+	core.Logf("startup: pid %d", os.Getpid())
 	if st, err := core.LoadState(); err == nil {
 		if n := core.RestoreSessions(st); n > 0 {
 			word := "Sessions"
@@ -56,6 +57,9 @@ func (a *App) startup(ctx context.Context) {
 			}
 			core.NotifyDesktop("magentic", fmt.Sprintf("%d %s wiederhergestellt", n, word), "")
 		}
+	} else {
+		core.Logf("startup: state laden fehlgeschlagen: %v", err)
+		core.NotifyDesktop("magentic", "State konnte nicht geladen werden — Sessions wurden nicht wiederhergestellt", "")
 	}
 	go a.watchLoop()
 }
