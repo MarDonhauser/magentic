@@ -772,14 +772,6 @@ async function reorderProjects(dragged, idx) {
   }
 }
 
-const ATTENTION_RANK = { blocked: 0, exited: 1 };
-
-function sessionRank(a) {
-  if (a.status === 'blocked') return 0;
-  if (a.unread) return 1;
-  return 2 + (ATTENTION_RANK[a.status] ?? 2);
-}
-
 function branchChip(a) {
   if (!a.branch) return '';
   const wt = a.worktree ? ' wt' : '';
@@ -816,7 +808,6 @@ function renderSidebar() {
         if (a.status !== 'dead' && !a.dock) agents.push(a);
       }
     }
-    agents.sort((x, y) => sessionRank(x) - sessionRank(y));
     if (!agents.length && !p.path) continue;
     any = true;
     const head = document.createElement('div');
