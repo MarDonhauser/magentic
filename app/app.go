@@ -33,6 +33,7 @@ type App struct {
 	breakNotified   string
 	breakReminders  int
 	breakRemindedAt time.Time
+	meetingQuiet    bool
 }
 
 type ptyTerm struct {

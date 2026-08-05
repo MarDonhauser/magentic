@@ -103,6 +103,16 @@ func (a *App) checkBreak(st *core.State, statuses map[string]core.AgentStatus, a
 	if adv.Level == core.BreakLevelDue && !adv.GoodMoment {
 		return
 	}
+	// Belegtes Mikro heißt Meeting: nicht stören und vor allem nicht beim
+	// Screen-Sharing nach vorne drängen. Die Erinnerung kommt danach normal.
+	if micInUse() {
+		if !a.meetingQuiet {
+			core.Logf("break: Mikrofon belegt (Meeting?) — Erinnerung zurückgestellt")
+			a.meetingQuiet = true
+		}
+		return
+	}
+	a.meetingQuiet = false
 	first := adv.Level != a.breakNotified
 	if !first && time.Since(a.breakRemindedAt) < breakRemindEvery {
 		return
