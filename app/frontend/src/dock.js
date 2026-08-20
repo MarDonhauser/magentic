@@ -5,13 +5,12 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { BrowserOpenURL } from '../wailsjs/runtime/runtime';
 import { developerIcon } from './avatar.js';
+import { onThemeChange, terminalTheme } from './theme.js';
 
 const STORE_KEY = 'magentic.dock';
 const DEFAULT_HEIGHT = 280;
 const MIN_HEIGHT = 120;
 const MAX_RATIO = 0.8;
-const TERM_THEME = { background: '#282d35', foreground: '#dbe0e6', cursor: '#5eead4', selectionBackground: 'rgba(55,207,189,0.30)' };
-
 const DOCK_ICONS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   down: '<path d="m6 9 6 6 6-6"/>',
@@ -38,6 +37,13 @@ function fromB64(b64) {
 }
 
 const tabs = new Map();
+
+onThemeChange(theme => {
+  const nextTheme = terminalTheme(theme);
+  for (const tab of tabs.values()) {
+    if (tab.term) tab.term.options.theme = nextTheme;
+  }
+});
 
 let cb = {};
 let mounted = false;
@@ -261,7 +267,7 @@ function ensureLive(t) {
     fastScrollSensitivity: 12,
     cursorBlink: true,
     macOptionIsMeta: true,
-    theme: TERM_THEME,
+    theme: terminalTheme(),
   });
   const fit = new FitAddon();
   term.loadAddon(fit);

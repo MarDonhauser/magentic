@@ -1,11 +1,11 @@
 import './stats.css';
 import { developerIcon } from './avatar.js';
 
-const SERIES = ['#02ac9c', '#d97530', '#0f9fdc', '#c08a01', '#c863e4', '#71a547'];
-const RAMP = ['#213d38', '#27544e', '#2b6d64', '#2e877c', '#2fa294', '#2fbdad', '#2bd9c6'];
-const DIM = '#2e877c';
-const FADED = '#2b6d64';
-const ZERO_CELL = 'rgba(255,255,255,0.05)';
+const SERIES = Array.from({ length: 6 }, (_, i) => `var(--chart-series-${i + 1})`);
+const RAMP = Array.from({ length: 7 }, (_, i) => `var(--heat-${i + 1})`);
+const DIM = 'var(--chart-dim)';
+const FADED = 'var(--chart-faded)';
+const ZERO_CELL = 'var(--heat-zero)';
 const WEEKDAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const PAD_L = 52;
 

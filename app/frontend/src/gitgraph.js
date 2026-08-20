@@ -9,7 +9,7 @@ const DOT_R = 4;
 const DOT_R_REF = 5.5;
 const MERGE_R = 5;
 
-const PALETTE = ['#c678dd', '#e0b25e', '#5eb7e8', '#98c379', '#e2915f', '#7aa2f7', '#e06c75'];
+const PALETTE = Array.from({ length: 7 }, (_, i) => `var(--graph-series-${i + 1})`);
 
 const ICONS = {
   branch: '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',

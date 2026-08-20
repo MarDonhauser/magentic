@@ -30,6 +30,7 @@ import { renderBoard } from './board.js';
 import { renderStats } from './stats.js';
 import { mountDock, toggleDock, isDockOpen, openInDock, closeDockTab, dockTabs, refitDock } from './dock.js';
 import { mountBreaks, updateBreaks, openBreak, openBreakSettings, isBreakOpen } from './breaks.js';
+import { initThemeToggle, onThemeChange, terminalTheme } from './theme.js';
 mountDeveloperIcons();
 
 const STATUS = {
@@ -93,19 +94,7 @@ function agentVisual(a, project) {
 const $ = id => document.getElementById(id);
 const sessionsEl = $('sessions'), usageBoxEl = $('usage-box'), zgBoxEl = $('zg-box');
 const overviewEl = $('overview'), termsEl = $('terms'), deployBadgeEl = $('deploy-badge');
-
-const TERM_THEME_DARK = {
-  background: '#282d35', foreground: '#dbe0e6', cursor: '#5eead4', selectionBackground: 'rgba(55,207,189,0.30)',
-};
-
-const TERM_THEME_LIGHT = {
-  background: '#fcfcfd', foreground: '#30343b', cursor: '#178f83', cursorAccent: '#fcfcfd',
-  selectionBackground: 'rgba(23,143,131,0.18)', selectionForeground: '#1f252b',
-  black: '#4f5964', red: '#bb4651', green: '#287a50', yellow: '#91631b',
-  blue: '#356fae', magenta: '#7d5aa2', cyan: '#167f82', white: '#727b86',
-  brightBlack: '#8a939d', brightRed: '#d1545f', brightGreen: '#329665', brightYellow: '#ad7825',
-  brightBlue: '#4b84c3', brightMagenta: '#956db8', brightCyan: '#229b9e', brightWhite: '#1f252b',
-};
+initThemeToggle($('theme-toggle'));
 
 let view = 'overview';
 let activeTerm = null;
@@ -217,6 +206,11 @@ async function blobToB64(blob) {
 
 const terms = new Map();
 
+onThemeChange(theme => {
+  const nextTheme = terminalTheme(theme);
+  for (const entry of terms.values()) entry.term.options.theme = nextTheme;
+});
+
 function makeTerm(name) {
   const wrap = document.createElement('div');
   wrap.className = 'term-wrap';
@@ -232,7 +226,7 @@ function makeTerm(name) {
     fastScrollSensitivity: 12,
     cursorBlink: true,
     macOptionIsMeta: true,
-    theme: TERM_THEME_DARK,
+    theme: terminalTheme(),
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
@@ -526,7 +520,6 @@ async function openSession(name) {
   let t = terms.get(name);
   const fresh = !t;
   if (!t) t = makeTerm(name);
-  t.term.options.theme = TERM_THEME_LIGHT;
   t.term.options.fontSize = 14;
   t.term.options.lineHeight = 1.3;
   if (t.wrap.parentElement !== termsEl) termsEl.appendChild(t.wrap);
@@ -848,7 +841,6 @@ async function syncHydra() {
   for (const a of agents) {
     let t = terms.get(a.name);
     if (!t) { t = makeTerm(a.name); fresh.push(a.name); }
-    t.term.options.theme = TERM_THEME_DARK;
     t.term.options.fontSize = 13;
     t.term.options.lineHeight = 1;
     ensureHydraHead(t);

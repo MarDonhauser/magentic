@@ -88,7 +88,7 @@ html, body {
   font-size: 14px;
   color: var(--accent);
   cursor: pointer;
-  --wails-draggable: drag;
+  --wails-draggable: no-drag;
 }
 
 .nav-btn {
