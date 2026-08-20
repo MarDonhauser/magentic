@@ -237,7 +237,7 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 			return false, "", "", fmt.Errorf("Projekt %q nicht gefunden", change.projectName)
 		}
 		for _, session := range state.Agents {
-			if session.Project == state.Projects[idx].Name {
+			if session.ProjectID == state.Projects[idx].ID || session.Project == state.Projects[idx].Name {
 				return false, "", "", fmt.Errorf("Projekt %q hat noch Sessions", state.Projects[idx].Name)
 			}
 		}
@@ -275,6 +275,7 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 	case registryRegisterSession:
 		session := change.session
 		normalizeSession(&session)
+		associateSessionProject(state, &session)
 		if state.AgentByName(session.Name) != nil {
 			return false, "", "", fmt.Errorf("Session %q existiert schon", session.Name)
 		}
@@ -283,6 +284,7 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 	case registryReplaceSession:
 		session := change.session
 		normalizeSession(&session)
+		associateSessionProject(state, &session)
 		idx := sessionIndex(state, session.ID, session.Name)
 		if idx < 0 {
 			return false, "", "", fmt.Errorf("Session %q nicht gefunden", session.Name)
@@ -346,6 +348,7 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 				continue
 			}
 			normalizeSession(&session)
+			associateSessionProject(state, &session)
 			state.Agents = append(state.Agents, session)
 			last = session.ID
 			changed = true
@@ -371,11 +374,24 @@ func normalizeRegistryState(state *State) bool {
 	for i := range state.Agents {
 		before := state.Agents[i]
 		normalizeSession(&state.Agents[i])
+		associateSessionProject(state, &state.Agents[i])
 		if !reflect.DeepEqual(before, state.Agents[i]) {
 			changed = true
 		}
 	}
 	return changed
+}
+
+func associateSessionProject(state *State, session *Session) {
+	if session.ProjectID != "" {
+		if project := state.ProjectByID(session.ProjectID); project != nil {
+			session.Project = project.Name
+		}
+		return
+	}
+	if project := state.ProjectByName(session.Project); project != nil {
+		session.ProjectID = project.ID
+	}
 }
 
 func normalizeSession(session *Session) {
@@ -452,6 +468,15 @@ func validateRegistryState(state *State) error {
 		sessionIDs[session.ID] = true
 		sessionNames[session.Name] = true
 		runtimeNames[session.RuntimeName] = true
+		if session.ProjectID != "" {
+			project := state.ProjectByID(session.ProjectID)
+			if project == nil {
+				return fmt.Errorf("Session %q verweist auf ein unbekanntes Projekt", session.Name)
+			}
+			if session.Project != project.Name {
+				return fmt.Errorf("Session %q enthält eine widersprüchliche Projektzuordnung", session.Name)
+			}
+		}
 		for _, run := range session.AgentRuns {
 			if run.Vendor == "" || run.ExternalID == "" {
 				return fmt.Errorf("Session %q enthält eine unvollständige AgentRunRef", session.Name)
@@ -583,4 +608,3 @@ func projectOrder(projects []Project) []ProjectID {
 	}
 	return order
 }
-

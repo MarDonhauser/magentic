@@ -261,9 +261,9 @@ func sendPromptLiteral(session, prompt string, submit bool, expectedTool string)
 	return nil
 }
 
-// SendPromptToSession sends immediately when Claude's input is ready. While an
-// agent is working, it reuses the established readiness loop and submits the
-// prompt once the composer is available again.
+// SendPromptToSession sends immediately when the detected agent's input is
+// ready. While Claude is working, it reuses the established readiness loop and
+// submits the prompt once the composer is available again.
 func SendPromptToSession(session, prompt string) error {
 	tool, content, err := inspectLivePromptTarget(session, "")
 	if err != nil {
@@ -318,8 +318,7 @@ func SendSkill(name, cmd string) error {
 	case StatusExited, StatusDead:
 		return fmt.Errorf("Claude läuft in dieser Session nicht mehr")
 	}
-	SendSlashCommand(sn, cmd)
-	return nil
+	return SendPromptToSession(sn, cmd)
 }
 
 func DoneAgent(name string) error {
@@ -343,6 +342,12 @@ func BuildSessionHandoffPrompt(source Agent, tool string) string {
 		dir = "(unbekannt)"
 	}
 	providerSessionID := strings.TrimSpace(source.SessionID)
+	// SessionID is the legacy Claude run identifier. If another provider is
+	// running in the source pane, it may be stale and must not steer transcript
+	// discovery toward an unrelated Claude session.
+	if tool != AgentToolClaude {
+		providerSessionID = ""
+	}
 	providerSessionRef := providerSessionID
 	if providerSessionRef == "" {
 		providerSessionRef = "(nicht gespeichert — read-only über die tmux-Suchreferenz ermitteln)"
@@ -480,24 +485,18 @@ func HandoffSession(st *State, sourceName, targetName string) error {
 	if target.IsTerm() && targetTool == "" {
 		return fmt.Errorf("Ziel-Session %q ist ein reines Terminal — kein laufender KI-Prozess erkannt", target.Name)
 	}
+	if targetTool == "" {
+		return fmt.Errorf("in Ziel-Session %q wurde kein laufendes unterstütztes KI-Tool erkannt", target.Name)
+	}
 	targetContent := LastLines(TmuxCapturePane(targetSession, 0), 25)
 	targetStatus := DetectClaudeStatus(true, targetInfo.Command, targetContent)
 	if err := validateHandoffTargetStatus(target.Name, targetStatus); err != nil {
 		return err
 	}
 
-	if targetTool == "" && strings.TrimSpace(target.SessionID) == "" {
-		return fmt.Errorf("in Ziel-Session %q wurde kein laufendes KI-Tool erkannt", target.Name)
-	}
-	if targetTool == "" {
-		targetTool = AgentToolClaude
-	}
-
 	prompt := BuildSessionHandoffPrompt(source, sourceTool)
-	if targetTool != AgentToolClaude {
-		return sendPromptLiteral(targetSession, prompt, true)
-	}
-	return SendPromptToSession(targetSession, prompt)
+	ready := targetTool != AgentToolClaude || strings.Contains(strings.ToLower(targetContent), "shift+tab to cycle")
+	return enqueuePrompt(targetSession, prompt, true, targetTool, !ready, false, ready)
 }
 
 func StartCleanup(st *State, path, mainBranch string) (string, error) {

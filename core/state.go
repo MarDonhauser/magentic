@@ -48,9 +48,9 @@ const (
 
 type Project struct {
 	ID         ProjectID `json:"id,omitempty"`
-	Name       string `json:"name"`
-	Path       string `json:"path"`
-	MainBranch string `json:"main_branch,omitempty"`
+	Name       string    `json:"name"`
+	Path       string    `json:"path"`
+	MainBranch string    `json:"main_branch,omitempty"`
 }
 
 const KindTerm = "term"
@@ -63,6 +63,7 @@ const KindDock = "dock"
 type Session struct {
 	ID           SessionID           `json:"id,omitempty"`
 	Name         string              `json:"name"`
+	ProjectID    ProjectID           `json:"project_id,omitempty"`
 	Project      string              `json:"project"`
 	Dir          string              `json:"dir"`
 	Worktree     bool                `json:"worktree"`
@@ -75,7 +76,7 @@ type Session struct {
 	BaseCommit   string              `json:"base_commit,omitempty"`
 	BaseDirty    []string            `json:"base_dirty,omitempty"`
 	SessionID    string              `json:"session_id,omitempty"` // legacy Claude run identifier
-	AgentRuns    []AgentRunRef        `json:"agent_runs,omitempty"`
+	AgentRuns    []AgentRunRef       `json:"agent_runs,omitempty"`
 	DeployAt     time.Time           `json:"deploy_at,omitzero"`
 	LaterAt      time.Time           `json:"later_at,omitzero"`
 	SeenAt       time.Time           `json:"seen_at,omitzero"`
@@ -155,6 +156,15 @@ func (s *State) AgentByName(name string) *Agent {
 func (s *State) ProjectByName(name string) *Project {
 	for i := range s.Projects {
 		if s.Projects[i].Name == name {
+			return &s.Projects[i]
+		}
+	}
+	return nil
+}
+
+func (s *State) ProjectByID(id ProjectID) *Project {
+	for i := range s.Projects {
+		if s.Projects[i].ID == id {
 			return &s.Projects[i]
 		}
 	}

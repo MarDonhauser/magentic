@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"magentic/core"
 )
@@ -13,6 +14,7 @@ func installHandoffFakeTmux(t *testing.T, paneContent, sourceCommand, targetComm
 	t.Helper()
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "tmux-args.log")
+	listCountPath := filepath.Join(dir, "list-count")
 	script := `#!/bin/sh
 for arg in "$@"; do
   printf '%s\037' "$arg" >> "$MAGENTIC_HANDOFF_TMUX_LOG"
@@ -21,12 +23,27 @@ printf '\036' >> "$MAGENTIC_HANDOFF_TMUX_LOG"
 
 case "$1" in
   list-panes)
+	count=0
+	if [ -f "$MAGENTIC_HANDOFF_LIST_COUNT" ]; then
+	  read -r count < "$MAGENTIC_HANDOFF_LIST_COUNT"
+	fi
+	count=$((count + 1))
+	printf '%s\n' "$count" > "$MAGENTIC_HANDOFF_LIST_COUNT"
+	target_command="$MAGENTIC_HANDOFF_TARGET_COMMAND"
+	if [ -n "$MAGENTIC_HANDOFF_TARGET_COMMAND_AFTER" ] && [ "$count" -ge "${MAGENTIC_HANDOFF_TARGET_SWITCH_AT:-2}" ]; then
+	  target_command="$MAGENTIC_HANDOFF_TARGET_COMMAND_AFTER"
+	fi
     printf '%ssource\t%s\t1\n' "$MAGENTIC_HANDOFF_SESSION_PREFIX" "$MAGENTIC_HANDOFF_SOURCE_COMMAND"
-    printf '%starget\t%s\t1\n' "$MAGENTIC_HANDOFF_SESSION_PREFIX" "$MAGENTIC_HANDOFF_TARGET_COMMAND"
+    printf '%starget\t%s\t1\n' "$MAGENTIC_HANDOFF_SESSION_PREFIX" "$target_command"
     ;;
   capture-pane)
     printf '%s\n' "$MAGENTIC_HANDOFF_PANE_CONTENT"
     ;;
+  send-keys)
+	if [ -n "$MAGENTIC_HANDOFF_SEND_DELAY" ]; then
+	  sleep "$MAGENTIC_HANDOFF_SEND_DELAY"
+	fi
+	;;
 esac
 `
 	tmuxPath := filepath.Join(dir, "tmux")
@@ -34,6 +51,7 @@ esac
 		t.Fatal(err)
 	}
 	t.Setenv("MAGENTIC_HANDOFF_TMUX_LOG", logPath)
+	t.Setenv("MAGENTIC_HANDOFF_LIST_COUNT", listCountPath)
 	t.Setenv("MAGENTIC_HANDOFF_PANE_CONTENT", paneContent)
 	t.Setenv("MAGENTIC_HANDOFF_SESSION_PREFIX", core.SessionPrefix)
 	t.Setenv("MAGENTIC_HANDOFF_SOURCE_COMMAND", sourceCommand)
@@ -135,7 +153,7 @@ func TestAppHandoffSessionAllowsCodexStartedInTerminalAsSource(t *testing.T) {
 	logPath := installHandoffFakeTmux(t, "Bereit\nshift+tab to cycle", "codex", "claude")
 	source, target := defaultHandoffAgents()
 	source.Kind = core.KindTerm
-	source.SessionID = ""
+	source.SessionID = "stale-claude-session-id"
 	source.Name = "source"
 	handoffTestState(t, source, target)
 
@@ -154,8 +172,12 @@ func TestAppHandoffSessionAllowsCodexStartedInTerminalAsSource(t *testing.T) {
 	if literalCall == nil || literalCall[4] != wantInput {
 		t.Fatalf("Codex-Terminal-Handoff nicht literal gesendet: %#v", literalCall)
 	}
+	if strings.Contains(literalCall[4], source.SessionID) {
+		t.Fatalf("Codex-Terminal-Handoff enthält alte Claude-ID: %s", literalCall[4])
+	}
 	for _, want := range []string{
 		`Tool: "codex"`,
+		`Gespeicherte Provider-/CLI-Session-ID: "(nicht gespeichert`,
 		`Magentic-/tmux-Session-ID (Suchreferenz): "` + core.SessionName("source") + `"`,
 		`${CODEX_HOME:-~/.codex}/sessions/**/rollout-*.jsonl`,
 		`session_meta`,
@@ -211,6 +233,102 @@ func TestAppHandoffSessionRejectsPlainTerminalAsTarget(t *testing.T) {
 		t.Fatalf("HandoffSession() error = %v, want plain terminal error", err)
 	}
 	assertNoHandoffSend(t, logPath)
+}
+
+func TestAppHandoffSessionRejectsUnknownLiveTargetDespiteStoredSessionID(t *testing.T) {
+	logPath := installHandoffFakeTmux(t, "Ready", "claude", "node")
+	source, target := defaultHandoffAgents()
+	handoffTestState(t, source, target)
+
+	err := (&App{}).HandoffSession("source", "target")
+	if err == nil || !strings.Contains(err.Error(), "unterstütztes KI-Tool") {
+		t.Fatalf("HandoffSession() error = %v, want unsupported live target error", err)
+	}
+	assertNoHandoffSend(t, logPath)
+}
+
+func TestAppHandoffSessionRevalidatesLiveToolBeforeLiteralSend(t *testing.T) {
+	logPath := installHandoffFakeTmux(t, "Bereit\nshift+tab to cycle", "claude", "claude")
+	t.Setenv("MAGENTIC_HANDOFF_TARGET_COMMAND_AFTER", "bash")
+	t.Setenv("MAGENTIC_HANDOFF_TARGET_SWITCH_AT", "2")
+	source, target := defaultHandoffAgents()
+	handoffTestState(t, source, target)
+
+	err := (&App{}).HandoffSession("source", "target")
+	if err == nil || !strings.Contains(err.Error(), "kein unterstütztes KI-Tool mehr") {
+		t.Fatalf("HandoffSession() error = %v, want live revalidation error", err)
+	}
+	assertNoHandoffSend(t, logPath)
+}
+
+func TestAppHandoffSessionRevalidatesLiveToolBeforeEnter(t *testing.T) {
+	logPath := installHandoffFakeTmux(t, "Bereit\nshift+tab to cycle", "claude", "claude")
+	t.Setenv("MAGENTIC_HANDOFF_TARGET_COMMAND_AFTER", "bash")
+	t.Setenv("MAGENTIC_HANDOFF_TARGET_SWITCH_AT", "3")
+	source, target := defaultHandoffAgents()
+	handoffTestState(t, source, target)
+
+	err := (&App{}).HandoffSession("source", "target")
+	if err == nil || !strings.Contains(err.Error(), "kein unterstütztes KI-Tool mehr") {
+		t.Fatalf("HandoffSession() error = %v, want live revalidation error", err)
+	}
+	literal, enter := handoffSendCounts(t, logPath)
+	if literal != 1 || enter != 0 {
+		t.Fatalf("send-keys counts = literal %d, Enter %d; want 1, 0", literal, enter)
+	}
+}
+
+func TestAppHandoffSessionDeduplicatesPendingPromptPerTarget(t *testing.T) {
+	logPath := installHandoffFakeTmux(t, "Bereit\nshift+tab to cycle", "claude", "claude")
+	t.Setenv("MAGENTIC_HANDOFF_SEND_DELAY", "0.2")
+	source, target := defaultHandoffAgents()
+	handoffTestState(t, source, target)
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- (&App{}).HandoffSession("source", "target")
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		literal, _ := handoffSendCounts(t, logPath)
+		if literal > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("first handoff did not reach literal send")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := (&App{}).HandoffSession("source", "target"); err != nil {
+		t.Fatalf("deduplicated HandoffSession() error = %v", err)
+	}
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first HandoffSession() error = %v", err)
+	}
+	literal, enter := handoffSendCounts(t, logPath)
+	if literal != 1 || enter != 1 {
+		t.Fatalf("send-keys counts = literal %d, Enter %d; want one deduplicated handoff", literal, enter)
+	}
+}
+
+func handoffSendCounts(t *testing.T, logPath string) (literal, enter int) {
+	t.Helper()
+	if _, err := os.Stat(logPath); os.IsNotExist(err) {
+		return 0, 0
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range parseFakeTmuxCalls(t, logPath) {
+		if len(call) == 5 && call[0] == "send-keys" && call[3] == "-l" {
+			literal++
+		}
+		if len(call) == 4 && call[0] == "send-keys" && call[3] == "Enter" {
+			enter++
+		}
+	}
+	return literal, enter
 }
 
 func assertNoHandoffSend(t *testing.T, logPath string) {

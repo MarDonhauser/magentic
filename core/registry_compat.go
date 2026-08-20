@@ -208,4 +208,3 @@ func reorderProjects(latest, desired []Project) []Project {
 	}
 	return ordered
 }
-

@@ -79,6 +79,24 @@ func TestBuildSessionHandoffPromptWithoutProviderIDUsesTmuxReference(t *testing.
 	}
 }
 
+func TestBuildSessionHandoffPromptIgnoresStaleClaudeIDForLiveCodex(t *testing.T) {
+	source := Agent{
+		Name:      "term-navi",
+		Project:   "navi",
+		Dir:       "/work/navi",
+		Kind:      KindTerm,
+		SessionID: "stale-claude-session-id",
+	}
+	prompt := BuildSessionHandoffPrompt(source, AgentToolCodex)
+
+	if strings.Contains(prompt, source.SessionID) {
+		t.Fatalf("Codex-Handoff enthält alte Claude-ID:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, `Gespeicherte Provider-/CLI-Session-ID: "(nicht gespeichert`) {
+		t.Fatalf("Codex-Handoff markiert Provider-ID nicht als ungespeichert:\n%s", prompt)
+	}
+}
+
 func TestPromptTerminalInputUsesBracketedPasteForMultilinePrompt(t *testing.T) {
 	if got := promptTerminalInput("eine Zeile"); got != "eine Zeile" {
 		t.Fatalf("einzeiliger Prompt = %q", got)
