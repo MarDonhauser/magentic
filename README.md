@@ -308,8 +308,8 @@ Die gemeinsame Logik in `core/` ist entlang weniger tiefer Module organisiert:
   Sessions nur über deren dauerhafte Referenz. Das Board scannt Archive nur
   explizit und begrenzt.
 - **Attention** leitet Benachrichtigungen, Dock-Badge, native Aufmerksamkeit
-  und Pauseneskalation deterministisch aus einer Observation ab; der Watcher
-  führt nur noch diese Intents aus.
+  und Pauseneskalation deterministisch aus einer Observation und expliziten
+  AttentionEvents ab; der Watcher führt nur noch diese Intents aus.
 
 Die Domain-Sprache steht in `CONTEXT.md`, dauerhafte Entscheidungen in
 `docs/adr/`. Alte mutable-State- und formatabhängige Funktionen sind nur noch

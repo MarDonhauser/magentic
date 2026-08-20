@@ -414,12 +414,13 @@ func (a *App) DoneAgent(name string) error {
 	return core.DoneAgent(name)
 }
 
-func (a *App) HandoffSession(sourceName, targetName string) error {
+func (a *App) HandoffSession(sourceID, targetID string) error {
 	st, err := core.LoadState()
 	if err != nil {
 		return err
 	}
-	return core.HandoffSession(st, sourceName, targetName)
+	snapshot := a.observationFor(st.Agents, true)
+	return core.HandoffSession(st, snapshot, core.SessionID(sourceID), core.SessionID(targetID))
 }
 
 func (a *App) SendSkill(name, cmd string) error {

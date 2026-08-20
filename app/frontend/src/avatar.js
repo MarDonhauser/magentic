@@ -1,4 +1,5 @@
 import './avatar.css';
+import { sessionToolCandidates } from './session-tool.js';
 
 const cache = new Map();
 
@@ -333,15 +334,11 @@ const SESSION_TOOL_LABELS = Object.freeze({
 });
 
 export function sessionToolKey(session) {
-  if (session?.term) return 'bash';
-  const identity = [
-    session?.source,
-    session?.provider,
-    session?.tool,
-    session?.command,
-    session?.agent,
-  ].filter(Boolean).join(' ');
-  return developerIconName(identity) || '';
+  for (const identity of sessionToolCandidates(session)) {
+    const resolved = developerIconName(identity);
+    if (resolved) return resolved;
+  }
+  return session?.term ? 'bash' : '';
 }
 
 export function sessionToolLabel(session) {

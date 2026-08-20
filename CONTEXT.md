@@ -74,8 +74,12 @@ _Avoid_: Observation, phase, action
 ## Attention
 
 **AttentionPlan**:
-A deterministic set of notification, Dock badge, native attention, and window intents derived from one Observation plus break, deployment, and quiet signals.
+A deterministic set of notification, Dock badge, native attention, and window intents derived from one Observation plus explicit attention events, break advice, deployment outcomes, active-Session, and quiet signals.
 _Avoid_: Notification side effect, status transition, watcher state
+
+**AttentionEvent**:
+An explicit local transition, such as a finished or reset break, submitted to Attention so it shares the same priority and deduplication policy as all other attention facts.
+_Avoid_: Direct notification, callback side effect, UI-only flag
 
 **AttentionSuppression**:
 An explicit reason why a potential attention intent was deferred or consumed without notifying the developer.

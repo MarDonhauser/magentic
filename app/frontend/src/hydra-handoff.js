@@ -94,17 +94,9 @@ export function createHandoffCoordinator({
       .filter(agent => agent.id)
       .map(agent => [agent.id, agent]));
 
-    if (state.sourceId && !agents.has(state.sourceId)) {
+    if (state.kind !== 'submitting' && state.sourceId && !agents.has(state.sourceId)) {
       requestEpoch += 1;
       state = idleState();
-    } else if (state.kind === 'submitting' && !agents.has(state.targetId)) {
-      requestEpoch += 1;
-      state = {
-        kind: 'armed',
-        sourceId: state.sourceId,
-        source: state.source,
-        feedback: feedback('error', 'Die Zielsession ist während der Übergabe verschwunden'),
-      };
     }
     emit();
     return snapshot();
@@ -120,11 +112,15 @@ export function createHandoffCoordinator({
     return { ok: true };
   };
 
-  const cancel = () => {
+  const cancel = ({ force = false } = {}) => {
+    if (state.kind === 'submitting' && !force) return { ok: false, busy: true };
     requestEpoch += 1;
     state = idleState();
     emit();
+    return { ok: true };
   };
+
+  const leave = () => state.kind === 'submitting' ? { ok: false, busy: true } : cancel();
 
   const submitTarget = async targetId => {
     if (state.kind !== 'armed') return { ok: false, reason: 'Keine Quellsession ausgewählt' };
@@ -193,6 +189,7 @@ export function createHandoffCoordinator({
     activate,
     arm,
     cancel,
+    leave,
     reject,
     submitTarget,
     clearFeedback,
@@ -258,6 +255,7 @@ export function createHydraHandoff({
   const win = doc.defaultView || globalThis.window;
   let agentsById = new Map();
   let agentsByName = new Map();
+  let agentCount = 0;
   let drag = null;
   let suppressClick = false;
   let sourceTrigger = null;
@@ -293,7 +291,7 @@ export function createHydraHandoff({
   function updateStatus(state) {
     const element = statusElement();
     if (!element) return;
-    const presentation = statusPresentation(state, agentsById.size);
+    const presentation = statusPresentation(state, agentCount);
     element.classList.toggle('is-handoff', presentation.active);
     element.classList.toggle('is-error', presentation.tone === 'is-error');
     element.classList.toggle('is-success', presentation.tone === 'is-success');
@@ -324,7 +322,7 @@ export function createHydraHandoff({
       const isSource = !!sourceId && id === sourceId;
       const sourceReason = handoffSourceReason(agent);
       const targetReason = sourceId ? handoffTargetReason(sourceId, agent) : '';
-      const isTarget = !!sourceId && !targetReason;
+      const isTarget = !!sourceId && (busy ? id === targetId : !targetReason);
       const unavailable = sourceId ? !!targetReason && !isSource : !!sourceReason;
 
       wrap.classList.toggle('handoff-source', isSource);
@@ -335,7 +333,8 @@ export function createHydraHandoff({
       button.classList.toggle('is-unavailable', unavailable);
       button.disabled = busy;
       button.setAttribute('aria-pressed', String(isSource));
-      button.setAttribute('aria-keyshortcuts', isSource ? 'Escape' : '');
+      if (isSource) button.setAttribute('aria-keyshortcuts', 'Escape');
+      else button.removeAttribute('aria-keyshortcuts');
       if (status?.id) button.setAttribute('aria-describedby', status.id);
       else button.removeAttribute('aria-describedby');
       button.removeAttribute('aria-disabled');
@@ -496,6 +495,13 @@ export function createHydraHandoff({
     const session = pointerSession(button);
     const state = coordinator.snapshot();
     if (state.kind !== 'armed') sourceTrigger = button;
+    const reason = state.kind === 'armed'
+      ? handoffTargetReason(state.source?.id || state.sourceId, session.agent)
+      : handoffSourceReason(session.agent);
+    if (reason) {
+      coordinator.reject(reason, state.kind === 'armed' ? state.source?.id || state.sourceId : '');
+      return;
+    }
     coordinator.activate(session.id);
   }
 
@@ -525,6 +531,7 @@ export function createHydraHandoff({
   return {
     reconcile(sessions) {
       const normalized = (sessions || []).map(normalizeAgent);
+      agentCount = normalized.length;
       agentsById = new Map(normalized.filter(agent => agent.id).map(agent => [agent.id, agent]));
       agentsByName = new Map(normalized.map(agent => [agent.name, agent]));
       return coordinator.reconcile(normalized);
@@ -534,7 +541,7 @@ export function createHydraHandoff({
       cleanupPointer();
       suppressClick = false;
       sourceTrigger = null;
-      coordinator.cancel();
+      coordinator.leave();
     },
     dispose() {
       if (disposed) return;
@@ -545,7 +552,7 @@ export function createHydraHandoff({
       win.removeEventListener('keydown', onKeyDown, { capture: true });
       win.removeEventListener('blur', onWindowBlur);
       disposed = true;
-      coordinator.cancel();
+      coordinator.cancel({ force: true });
     },
   };
 }

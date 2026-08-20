@@ -154,6 +154,18 @@ func (s *State) AgentByName(name string) *Agent {
 	return nil
 }
 
+func (s *State) SessionByID(id SessionID) *Session {
+	if s == nil || id == "" {
+		return nil
+	}
+	for i := range s.Agents {
+		if s.Agents[i].ID == id {
+			return &s.Agents[i]
+		}
+	}
+	return nil
+}
+
 func (s *State) ProjectByName(name string) *Project {
 	for i := range s.Projects {
 		if s.Projects[i].Name == name {

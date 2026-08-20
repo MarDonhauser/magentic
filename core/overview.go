@@ -515,7 +515,8 @@ func toOvAgent(a Agent, observed SessionObservation, branch string) OvAgent {
 	}
 	phase, phaseLabel := agentPhase(a, agentAlive(st))
 	tool := observed.Tool
-	handoffCapable := len(a.AgentRuns) > 0 || strings.TrimSpace(a.SessionID) != "" || (tool != "" && tool != AgentToolBash)
+	handoffSource := handoffSourceCapable(a, observed)
+	handoffTarget := handoffTargetCapable(a, observed)
 	// Survey deliberately omits per-Session baseline deltas. Keep the legacy
 	// fields explicitly unknown instead of rebuilding that Git meaning here.
 	return OvAgent{
@@ -537,8 +538,8 @@ func toOvAgent(a Agent, observed SessionObservation, branch string) OvAgent {
 		Branch:        branch,
 		Unread:        observed.Unread,
 		Dock:          a.IsDock(),
-		HandoffSource: handoffCapable,
-		HandoffTarget: handoffCapable,
+		HandoffSource: handoffSource,
+		HandoffTarget: handoffTarget,
 	}
 }
 

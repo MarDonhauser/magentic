@@ -1684,6 +1684,7 @@ body.tl-open #timeline { display: flex; }
               box-shadow var(--duration-fast) var(--ease-out);
 }
 .hydra-head .hh-magnet .ico { width: 14px; height: 14px; }
+.hydra-head .hh-magnet { touch-action: none; }
 .hydra-head .hh-max { font-size: 13px; }
 .hydra-head .hh-kill { font-size: 12px; white-space: nowrap; }
 .hydra-head .hh-magnet:hover:not(:disabled):not([aria-disabled="true"]),
@@ -1696,8 +1697,8 @@ body.tl-open #timeline { display: flex; }
   background: color-mix(in srgb, var(--critical) 10%, transparent);
   color: var(--critical);
 }
-.hydra-head .hh-magnet:disabled,
-.hydra-head .hh-magnet[aria-disabled="true"] { cursor: not-allowed; opacity: 0.32; }
+.hydra-head .hh-magnet:disabled { cursor: wait; opacity: 0.32; }
+.hydra-head .hh-magnet.is-unavailable:not(:disabled) { cursor: help; opacity: 0.42; }
 .hydra-head .hh-magnet.is-source {
   background: var(--accent-soft);
   color: var(--accent);
@@ -1759,6 +1760,8 @@ body.tl-open #timeline { display: flex; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+#hydra-handoff-status.is-error { color: var(--critical); }
+#hydra-handoff-status.is-success { color: var(--good); }
 #hydra-handoff-status.is-handoff .ico { width: 13px; height: 13px; }
 #hydra-handoff-status.is-handoff span { overflow: hidden; text-overflow: ellipsis; }
 

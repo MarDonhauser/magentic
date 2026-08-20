@@ -32,6 +32,7 @@ import { renderStats } from './stats.js';
 import { mountDock, toggleDock, isDockOpen, openInDock, closeDockTab, dockTabs, refitDock } from './dock.js';
 import { mountBreaks, updateBreaks, openBreak, openBreakSettings, isBreakOpen } from './breaks.js';
 import { initThemeToggle, onThemeChange, terminalTheme } from './theme.js';
+import { createHydraHandoff } from './hydra-handoff.js';
 mountDeveloperIcons();
 
 const STATUS = {
@@ -520,7 +521,7 @@ function markSeen(name) {
 }
 
 async function openSession(name) {
-  cancelSessionHandoff(true);
+  hydraHandoff.leave();
   view = 'term';
   hydraProject = null;
   termsEl.classList.remove('hydra');
@@ -568,7 +569,7 @@ function showPanel(id) {
 }
 
 function leaveTerm() {
-  cancelSessionHandoff(true);
+  hydraHandoff.leave();
   markSeen(activeTerm);
   activeTerm = null;
   SetActiveTerm('');
@@ -754,234 +755,14 @@ for (const id of ['graph-view', 'board-view']) {
 }
 
 const hydraGridEl = $('hydra-grid');
-let handoffSourceName = '';
-let handoffTargetName = '';
-let handoffBusy = false;
-let handoffDrag = null;
-let handoffOverName = '';
-let suppressHandoffClick = false;
-
-function handoffSourceReason(agent) {
-  if (!agent) return 'Session nicht gefunden';
-  if (agent.term && agent.handoffSource !== true) return 'Reine Terminals haben keinen KI-Verlauf zum Übergeben';
-  if (agent.handoffSource === false) return 'Für diese Session ist keine übertragbare Session-ID bekannt';
-  return '';
-}
-
-function handoffTargetReason(source, agent) {
-  if (!agent) return 'Zielsession nicht gefunden';
-  if (agent.name === source) return 'Quelle und Ziel müssen verschieden sein';
-  if (agent.term && agent.handoffTarget !== true) return 'Kontext kann nur an eine KI-Session übergeben werden';
-  if (agent.handoffTarget === false) return 'Dieses Ziel unterstützt noch keine sichere Kontextübergabe';
-  if (agent.status === 'blocked') return `${agent.name} wartet auf eine Eingabe — zuerst den offenen Dialog beantworten`;
-  if (['exited', 'dead'].includes(agent.status)) return `${agent.name} läuft nicht mehr`;
-  return '';
-}
-
-function hydraHandoffStatus(count = hydraAgents().length) {
-  if (handoffBusy && handoffSourceName && handoffTargetName) {
-    return {
-      active: true,
-      html: `${icon('magnet')}<span>${esc(handoffSourceName)} → ${esc(handoffTargetName)} wird übergeben …</span>`,
-    };
-  }
-  if (handoffSourceName) {
-    return {
-      active: true,
-      html: `${icon('magnet')}<span>Kontext von ${esc(handoffSourceName)}: Ziel wählen · Esc bricht ab</span>`,
-    };
-  }
-  return {
-    active: false,
-    html: `${count} ${count === 1 ? 'Session' : 'Sessions'} parallel`,
-  };
-}
-
-function updateHydraHandoffStatus() {
-  const el = $('hydra-handoff-status');
-  if (!el) return;
-  const state = hydraHandoffStatus();
-  el.classList.toggle('is-handoff', state.active);
-  el.innerHTML = state.html;
-}
-
-function updateHydraHandoffState() {
-  for (const wrap of hydraGridEl.querySelectorAll('.term-wrap')) {
-    const name = wrap.dataset.termName || '';
-    const agent = agentInfo(name);
-    const button = wrap.querySelector('.hh-magnet');
-    if (!button) continue;
-    const isSource = !!handoffSourceName && name === handoffSourceName;
-    const targetReason = handoffSourceName ? handoffTargetReason(handoffSourceName, agent) : '';
-    const isTarget = !!handoffSourceName && !targetReason;
-    const sourceReason = handoffSourceReason(agent);
-
-    wrap.classList.toggle('handoff-source', isSource);
-    wrap.classList.toggle('handoff-target', isTarget);
-    wrap.classList.toggle('handoff-over', isTarget && name === handoffOverName);
-    button.classList.toggle('is-source', isSource);
-    button.classList.toggle('is-target', isTarget);
-    button.setAttribute('aria-pressed', String(isSource));
-
-    if (!handoffSourceName) {
-      button.disabled = handoffBusy;
-      button.setAttribute('aria-disabled', String(!!sourceReason));
-      button.setAttribute('aria-label', sourceReason ? `${name}: ${sourceReason}` : `Kontext aus Session ${name} weitergeben`);
-      button.title = sourceReason || 'Session-Magnet: auf eine andere KI-Session ziehen oder zum Auswählen aktivieren';
-    } else if (isSource) {
-      button.disabled = handoffBusy;
-      button.setAttribute('aria-disabled', 'false');
-      button.setAttribute('aria-label', `Kontextübergabe aus Session ${name} abbrechen`);
-      button.title = 'Kontextübergabe abbrechen';
-    } else {
-      button.disabled = handoffBusy;
-      button.setAttribute('aria-disabled', String(!!targetReason));
-      button.setAttribute('aria-label', targetReason ? `${name}: ${targetReason}` : `Kontext aus Session ${handoffSourceName} an ${name} übergeben`);
-      button.title = targetReason || `Kontext aus „${handoffSourceName}“ hierhin übergeben`;
-    }
-  }
-  updateHydraHandoffStatus();
-}
-
-function removeHandoffDragVisuals() {
-  const drag = handoffDrag;
-  window.removeEventListener('pointermove', moveSessionMagnet);
-  window.removeEventListener('pointerup', dropSessionMagnet);
-  window.removeEventListener('pointercancel', cancelSessionMagnetDrag);
-  if (drag?.pointerTarget?.hasPointerCapture?.(drag.pointerId)) {
-    try { drag.pointerTarget.releasePointerCapture(drag.pointerId); } catch { /* pointer is already gone */ }
-  }
-  drag?.ghost?.remove();
-  handoffDrag = null;
-  handoffOverName = '';
-  document.body.classList.remove('session-magnet-dragging');
-}
-
-function cancelSessionHandoff(force = false) {
-  if (handoffBusy && !force) return;
-  removeHandoffDragVisuals();
-  suppressHandoffClick = false;
-  handoffSourceName = '';
-  handoffTargetName = '';
-  updateHydraHandoffState();
-}
-
-function armSessionHandoff(name) {
-  const reason = handoffSourceReason(agentInfo(name));
-  if (reason) {
-    toast(reason, true);
-    return false;
-  }
-  handoffSourceName = name;
-  handoffTargetName = '';
-  updateHydraHandoffState();
-  return true;
-}
-
-async function completeSessionHandoff(source, target) {
-  if (handoffBusy) return;
-  const reason = handoffTargetReason(source, agentInfo(target));
-  if (reason) {
-    toast(reason, true);
-    return;
-  }
-  handoffSourceName = source;
-  handoffTargetName = target;
-  handoffBusy = true;
-  updateHydraHandoffState();
-  try {
-    await HandoffSession(source, target);
-    toast(`Kontextübergabe von „${source}“ an „${target}“ angestoßen`);
-  } catch (err) {
-    toast('Kontextübergabe fehlgeschlagen: ' + errorText(err), true);
-  } finally {
-    handoffBusy = false;
-    handoffSourceName = '';
-    handoffTargetName = '';
-    updateHydraHandoffState();
-  }
-}
-
-function sessionMagnetPointerDown(e, term) {
-  if (e.button !== 0 || handoffBusy) return;
-  if (handoffSourceName && handoffSourceName !== term.name) return;
-  if (handoffSourceReason(agentInfo(term.name))) return;
-  e.stopPropagation();
-  handoffDrag = {
-    source: term.name,
-    pointerId: e.pointerId,
-    pointerTarget: e.currentTarget,
-    startX: e.clientX,
-    startY: e.clientY,
-    active: false,
-    ghost: null,
-  };
-  e.currentTarget.setPointerCapture?.(e.pointerId);
-  window.addEventListener('pointermove', moveSessionMagnet);
-  window.addEventListener('pointerup', dropSessionMagnet);
-  window.addEventListener('pointercancel', cancelSessionMagnetDrag);
-}
-
-function moveSessionMagnet(e) {
-  const drag = handoffDrag;
-  if (!drag || e.pointerId !== drag.pointerId) return;
-  if (e.pointerType === 'mouse' && e.buttons === 0) {
-    cancelSessionMagnetDrag();
-    return;
-  }
-  if (!drag.active) {
-    if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) < 4) return;
-    drag.active = true;
-    suppressHandoffClick = true;
-    armSessionHandoff(drag.source);
-    drag.ghost = document.createElement('div');
-    drag.ghost.className = 'session-magnet-ghost';
-    drag.ghost.innerHTML = `${icon('magnet')}<span>${esc(drag.source)}</span>`;
-    document.body.appendChild(drag.ghost);
-    document.body.classList.add('session-magnet-dragging');
-  }
-  e.preventDefault();
-  drag.ghost.style.transform = `translate3d(${e.clientX + 12}px, ${e.clientY + 12}px, 0)`;
-  const wrap = document.elementFromPoint(e.clientX, e.clientY)?.closest('#hydra-grid .term-wrap');
-  const name = wrap?.dataset.termName || '';
-  const next = name && !handoffTargetReason(drag.source, agentInfo(name)) ? name : '';
-  if (next !== handoffOverName) {
-    handoffOverName = next;
-    updateHydraHandoffState();
-  }
-}
-
-function dropSessionMagnet(e) {
-  const drag = handoffDrag;
-  if (drag && e?.pointerId !== drag.pointerId) return;
-  const target = handoffOverName;
-  const wasActive = !!drag?.active;
-  removeHandoffDragVisuals();
-  if (!wasActive || !drag) return;
-  setTimeout(() => { suppressHandoffClick = false; }, 0);
-  updateHydraHandoffState();
-  if (target) completeSessionHandoff(drag.source, target);
-  else toast('Kein gültiges KI-Terminal getroffen — Ziel wählen oder mit Esc abbrechen', true);
-}
-
-function cancelSessionMagnetDrag(e) {
-  if (handoffDrag && e?.pointerId != null && e.pointerId !== handoffDrag.pointerId) return;
-  const wasActive = !!handoffDrag?.active;
-  removeHandoffDragVisuals();
-  if (wasActive) cancelSessionHandoff();
-  setTimeout(() => { suppressHandoffClick = false; }, 0);
-}
-
-window.addEventListener('blur', cancelSessionMagnetDrag);
-
-// Consume Escape before xterm sees it; cancelling the handoff must never send
-// an ESC byte to the focused agent terminal.
-window.addEventListener('keydown', e => {
-  if (e.key !== 'Escape' || !handoffSourceName) return;
-  e.preventDefault();
-  e.stopImmediatePropagation();
-  cancelSessionHandoff();
-}, { capture: true });
+const hydraHandoff = createHydraHandoff({
+  root: hydraGridEl,
+  statusElement: () => $('hydra-handoff-status'),
+  submit: (sourceId, targetId) => HandoffSession(sourceId, targetId),
+  notify: toast,
+  renderIcon: () => icon('magnet'),
+  formatError: errorText,
+});
 
 function hydraAgents() {
   const p = (ov?.projects || []).find(x => x.name === hydraProject);
@@ -996,7 +777,7 @@ function hydraAgents() {
 }
 
 function enterHydra(project) {
-  cancelSessionHandoff(true);
+  hydraHandoff.leave();
   view = 'hydra';
   markSeen(activeTerm);
   activeTerm = null;
@@ -1011,13 +792,12 @@ function enterHydra(project) {
 
 function updateHydraBar() {
   if (view !== 'hydra') return;
-  const n = hydraAgents().length;
-  const handoffStatus = hydraHandoffStatus(n);
+  const agents = hydraAgents();
   termBarEl.innerHTML =
     `<button class="btn tiny" id="tb-back" title="Übersicht (⌘0)">‹ Übersicht</button>` +
     `<span class="dot" style="background:var(--accent)"></span>` +
     `<span class="tb-name">${developerIcon('claude')} Hydra · ${esc(hydraProject)}</span>` +
-    `<span class="tb-st${handoffStatus.active ? ' is-handoff' : ''}" id="hydra-handoff-status" role="status" aria-live="polite">${handoffStatus.html}</span>` +
+    `<span class="tb-st" id="hydra-handoff-status" role="status" aria-live="polite" aria-atomic="true"></span>` +
     `<span class="tb-actions">` +
     `<button class="btn tiny" id="tb-add" title="Neue Session in ${esc(hydraProject)} — erscheint direkt im Raster">${developerIcon('claude')} Session</button>` +
     `<button class="btn tiny" id="tb-term" title="Reines Terminal in ${esc(hydraProject)} — Shell statt Claude">${developerIcon('bash')} Terminal</button></span>`;
@@ -1034,6 +814,7 @@ function updateHydraBar() {
       if (n2) await focusHydraSession(n2);
     } catch { /* toast zeigt den Fehler */ }
   };
+  hydraHandoff.reconcile(agents);
 }
 
 async function focusHydraSession(name) {
@@ -1048,27 +829,12 @@ function ensureHydraHead(t) {
   const head = document.createElement('div');
   head.className = 'hydra-head';
   head.innerHTML =
-    `<span class="hh-avatar">${agentPortrait(t.name, 18, agentInfo(t.name))}</span>` +
+    `<span class="hh-avatar"></span>` +
     `<span class="dot"></span><span class="hh-name">${esc(t.name)}</span>` +
     `<span class="hh-status"></span>` +
     `<button type="button" class="hh-magnet" aria-label="Kontext aus Session ${esc(t.name)} weitergeben" aria-pressed="false">${icon('magnet')}</button>` +
-    `<button class="hh-max" title="Session groß öffnen">⤢</button>` +
-    `<button class="hh-kill" title="Session beenden">✕</button>`;
-  const magnet = head.querySelector('.hh-magnet');
-  magnet.addEventListener('pointerdown', e => sessionMagnetPointerDown(e, t));
-  magnet.onclick = e => {
-    e.stopPropagation();
-    if (suppressHandoffClick || handoffBusy) return;
-    if (!handoffSourceName) {
-      armSessionHandoff(t.name);
-      return;
-    }
-    if (handoffSourceName === t.name) {
-      cancelSessionHandoff();
-      return;
-    }
-    completeSessionHandoff(handoffSourceName, t.name);
-  };
+    `<button type="button" class="hh-max" aria-label="Session ${esc(t.name)} groß öffnen" title="Session groß öffnen">⤢</button>` +
+    `<button type="button" class="hh-kill" aria-label="Session ${esc(t.name)} beenden" title="Session beenden">✕</button>`;
   head.querySelector('.hh-max').onclick = () => openSession(t.name);
   head.querySelector('.hh-kill').onclick = e => {
     const b = e.currentTarget;
@@ -1096,11 +862,18 @@ function ensureHydraHead(t) {
   });
 }
 
+function updateHydraHead(t, agent) {
+  const portraitKey = `${agent?.id || ''}:${sessionToolKey(agent)}`;
+  if (t.hydraPortraitKey !== portraitKey) {
+    t.head.querySelector('.hh-avatar').innerHTML = agentPortrait(t.name, 18, agent);
+    t.hydraPortraitKey = portraitKey;
+  }
+}
+
 async function syncHydra() {
   if (view !== 'hydra') return;
   const agents = hydraAgents();
   const names = new Set(agents.map(a => a.name));
-  if (handoffSourceName && !names.has(handoffSourceName)) cancelSessionHandoff(true);
   for (const [n, t] of terms) {
     if (t.wrap.parentElement === hydraGridEl && !names.has(n)) {
       termsEl.appendChild(t.wrap);
@@ -1109,7 +882,7 @@ async function syncHydra() {
   }
   hydraGridEl.querySelector('.none')?.remove();
   if (!agents.length) {
-    cancelSessionHandoff(true);
+    hydraHandoff.reconcile([]);
     hydraGridEl.innerHTML = `<div class="none">Keine aktiven Sessions in ${esc(hydraProject)} — oben mit „+ Session" eine starten</div>`;
     updateHydraBar();
     return;
@@ -1123,13 +896,15 @@ async function syncHydra() {
     ensureHydraHead(t);
     if (t.wrap.parentElement !== hydraGridEl) hydraGridEl.appendChild(t.wrap);
     t.wrap.dataset.termName = t.name;
+    t.wrap.dataset.sessionId = String(a.id || '');
+    updateHydraHead(t, a);
     const v = agentVisual(a, hydraProject);
     t.head.querySelector('.dot').style.background = v.color;
     t.head.querySelector('.hh-status').innerHTML = `${visHtml(v)} · ${esc(a.age)}`;
   }
   hydraGridEl.classList.toggle('single', agents.length === 1);
   hydraGridEl.classList.toggle('odd', agents.length % 2 === 1 && agents.length > 1);
-  updateHydraHandoffState();
+  hydraHandoff.reconcile(agents);
   for (const a of agents) {
     const t = terms.get(a.name);
     if (!t) continue;

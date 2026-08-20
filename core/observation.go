@@ -233,7 +233,7 @@ func observeWithRunner(ctx context.Context, sessions []Session, runner observati
 		return snapshot
 	}
 
-	panes, parseProblems := parseObservedPanes(listed)
+	panes, parseProblems, presenceComplete := parseObservedPanes(listed)
 	snapshot.Problems = append(snapshot.Problems, parseProblems...)
 	jobs := make([]struct {
 		index int
@@ -246,6 +246,10 @@ func observeWithRunner(ctx context.Context, sessions []Session, runner observati
 		observed := &snapshot.Sessions[i]
 		pane, present := panes[runtimeNames[i]]
 		if !present {
+			if !presenceComplete {
+				observed.Availability = ObservationPartial
+				continue
+			}
 			observed.Availability = ObservationAvailable
 			observed.Presence = SessionPresenceAbsent
 			observed.Status = StatusDead
@@ -340,15 +344,20 @@ func runObservationCommand(ctx context.Context, runner observationRunner, timeou
 	return out, err, timedOut
 }
 
-func parseObservedPanes(output string) (map[string]observedPane, []ObservationProblem) {
+func parseObservedPanes(output string) (map[string]observedPane, []ObservationProblem, bool) {
 	panes := map[string]observedPane{}
 	var problems []ObservationProblem
+	presenceComplete := true
 	for lineNo, line := range strings.Split(strings.TrimRight(output, "\n"), "\n") {
 		if line == "" {
 			continue
 		}
 		parts := strings.SplitN(line, "\t", 5)
 		if len(parts) != 5 || strings.TrimSpace(parts[0]) == "" || !validObservedPaneID(parts[1]) {
+			// An unidentifiable row may belong to any registered RuntimeName. The
+			// remaining parsed rows still prove presence, but their absence cannot
+			// prove that a Session is gone.
+			presenceComplete = false
 			problems = append(problems, ObservationProblem{
 				Operation: "parse-list-panes", Message: fmt.Sprintf("malformed row %d", lineNo+1),
 			})
@@ -372,7 +381,7 @@ func parseObservedPanes(output string) (map[string]observedPane, []ObservationPr
 			panes[parts[0]] = pane
 		}
 	}
-	return panes, problems
+	return panes, problems, presenceComplete
 }
 
 func validObservedPaneID(id string) bool {
