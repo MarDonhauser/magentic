@@ -336,6 +336,78 @@ func TestLifecycleResumeReopensRegistryAndRemainsRunningAfterReconcile(t *testin
 	}
 }
 
+func TestLifecycleResumePersistsCapturedBaselineForLegacySession(t *testing.T) {
+	lifecycle, runtime, registry, ledgerPath := lifecycleHarness(t)
+	project := registerLifecycleProject(t, registry)
+	laterAt := time.Date(2026, 8, 20, 9, 30, 0, 0, time.UTC)
+	legacy := registerLifecycleSession(t, registry, runtime, Session{
+		ID: "legacy-resume", Name: "legacy", RuntimeName: "opaque-legacy-runtime",
+		ProjectID: project.ID, Project: project.Name, Dir: project.Path, LaterAt: laterAt,
+	}, false)
+	if legacy.BaseCommit != "" {
+		t.Fatalf("legacy fixture already has a baseline: %+v", legacy)
+	}
+
+	resumed, err := lifecycle.Resume(context.Background(), legacy.ID, legacy.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Record.Phase != LifecycleConverged || !resumed.Record.Applied.BaselineKnown {
+		t.Fatalf("Resume did not converge with a known baseline: %+v", resumed.Record)
+	}
+	if resumed.Session.BaseCommit != "abc123" || resumed.Record.Session.BaseCommit != "abc123" {
+		t.Fatalf("captured baseline was lost from Resume result: %+v", resumed.Record.Session)
+	}
+	if !resumed.Session.LaterAt.IsZero() {
+		t.Fatalf("Resume did not reopen the legacy Session: %+v", resumed.Session)
+	}
+
+	reloadedRegistry := OpenRegistry(registry.path)
+	reloadedSnapshot, err := reloadedRegistry.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloadedState := reloadedSnapshot.State()
+	reloaded := reloadedState.SessionByID(legacy.ID)
+	if reloaded == nil || reloaded.BaseCommit != "abc123" || !reloaded.LaterAt.IsZero() {
+		t.Fatalf("reloaded Registry lost the resumed baseline or running intent: %+v", reloaded)
+	}
+	if reloaded.RuntimeName != "opaque-legacy-runtime" {
+		t.Fatalf("Resume changed the persisted runtime identity: %+v", reloaded)
+	}
+
+	reloadedLifecycle := newSessionLifecycle(
+		reloadedRegistry,
+		runtime,
+		fakeLifecycleRepositories{worktreePath: filepath.Join(filepath.Dir(ledgerPath), "project-agents", "legacy")},
+		ledgerPath,
+	)
+	reconciled, err := reloadedLifecycle.Reconcile(context.Background())
+	if err != nil || len(reconciled.Problems) != 0 {
+		t.Fatalf("reloaded lifecycle did not reconcile cleanly: result=%+v err=%v", reconciled, err)
+	}
+	if !runtime.runtimeNames[legacy.RuntimeName] {
+		t.Fatal("Reconcile stopped the resumed legacy runtime")
+	}
+	ledgerSnapshot, err := reloadedLifecycle.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ledgerSnapshot.Records) != 1 || ledgerSnapshot.Records[0].Session.BaseCommit != "abc123" ||
+		!ledgerSnapshot.Records[0].Applied.BaselineKnown || ledgerSnapshot.Records[0].Phase != LifecycleConverged {
+		t.Fatalf("reloaded lifecycle ledger lost the captured baseline: %+v", ledgerSnapshot.Records)
+	}
+	finalSnapshot, err := OpenRegistry(registry.path).Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalState := finalSnapshot.State()
+	finalSession := finalState.SessionByID(legacy.ID)
+	if finalSession == nil || finalSession.BaseCommit != "abc123" || !finalSession.LaterAt.IsZero() {
+		t.Fatalf("Reconcile changed persisted Registry truth: %+v", finalSession)
+	}
+}
+
 func TestLifecycleSerializesParkAndResumeAcrossInstances(t *testing.T) {
 	lifecycle, runtime, registry, ledgerPath := lifecycleHarness(t)
 	project := registerLifecycleProject(t, registry)

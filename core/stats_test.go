@@ -104,6 +104,49 @@ func TestCommitsPerDayReportsGitLogFailure(t *testing.T) {
 	}
 }
 
+func TestCommitsPerDayReportsMalformedGitLogAsPartial(t *testing.T) {
+	const validTimestamp = "1700000000"
+	tests := []struct {
+		name        string
+		log         string
+		wantCommits int
+	}{
+		{name: "truncated record", log: "malformed\n"},
+		{name: "invalid timestamp with known subtotal", log: validTimestamp + "\x1fme@example.com\x1fMe\nnot-a-time\x1fme@example.com\x1fMe\n", wantCommits: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			run := func(_ string, args ...string) (string, error) {
+				if len(args) < 2 {
+					return "", errors.New("unexpected git command")
+				}
+				switch {
+				case args[0] == "config" && args[1] == "user.email":
+					return "me@example.com\n", nil
+				case args[0] == "config" && args[1] == "user.name":
+					return "Me\n", nil
+				case args[0] == "log":
+					return test.log, nil
+				default:
+					return "", errors.New("unexpected git command")
+				}
+			}
+
+			result := commitsPerDayWithGit("Project", "/repo", "2026-01-01", run)
+			commits := 0
+			for _, count := range result.Days {
+				commits += count
+			}
+			if result.State != HistorySourcePartial || commits != test.wantCommits {
+				t.Fatalf("malformed log became exact: %#v", result)
+			}
+			if len(result.Problems) != 1 || result.Problems[0].Kind != statsCommitProblemMalformed {
+				t.Fatalf("malformed log diagnostic = %#v", result.Problems)
+			}
+		})
+	}
+}
+
 func TestBuildStatsExposesPartialCommitCoverageAndKnownSubtotal(t *testing.T) {
 	const commitTimestamp = "1700000000"
 	now := time.Unix(1700003600, 0).In(time.Local)

@@ -287,6 +287,51 @@ func TestAttentionPlansBreakEventsWithDedupeAndReset(t *testing.T) {
 	}
 }
 
+func TestAttentionOwnsStartupNotificationPolicy(t *testing.T) {
+	tests := []struct {
+		name    string
+		event   AttentionEvent
+		kind    AttentionIntentKind
+		message string
+	}{
+		{
+			name: "one restored Session", event: AttentionEvent{Key: "startup", Kind: AttentionEventStartupRestored, Count: 1},
+			kind: AttentionIntentStartupRestored, message: "1 Session wiederhergestellt",
+		},
+		{
+			name: "multiple restored Sessions", event: AttentionEvent{Key: "startup", Kind: AttentionEventStartupRestored, Count: 3},
+			kind: AttentionIntentStartupRestored, message: "3 Sessions wiederhergestellt",
+		},
+		{
+			name: "restore failed", event: AttentionEvent{Key: "startup", Kind: AttentionEventStartupFailed},
+			kind: AttentionIntentStartupFailed, message: "State konnte nicht geladen werden — Sessions wurden nicht wiederhergestellt",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			planner := NewAttentionPlanner(AttentionPlannerConfig{})
+			input := attentionTestInput(attentionTestStart, attentionSnapshot(ObservationUnavailable))
+			input.Events = []AttentionEvent{test.event}
+			plan := planner.Plan(input)
+			assertSingleAttentionKind(t, plan, test.kind)
+			if plan.Notifications[0].Message != test.message {
+				t.Fatalf("message = %q, want %q", plan.Notifications[0].Message, test.message)
+			}
+			duplicate := planner.Plan(input)
+			if len(duplicate.Notifications) != 0 || !hasAttentionSuppression(duplicate, AttentionSuppressedDuplicate) {
+				t.Fatalf("startup event was not deduped: %#v", duplicate)
+			}
+		})
+	}
+
+	invalid := attentionTestInput(attentionTestStart, attentionSnapshot(ObservationUnavailable))
+	invalid.Events = []AttentionEvent{{Kind: AttentionEventStartupRestored}}
+	plan := NewAttentionPlanner(AttentionPlannerConfig{}).Plan(invalid)
+	if len(plan.Notifications) != 0 || !hasAttentionSuppression(plan, AttentionSuppressedInsufficientFacts) {
+		t.Fatalf("zero restored count should be suppressed: %#v", plan)
+	}
+}
+
 func TestAttentionPrioritizesSessionInputOverBreakAndDeployment(t *testing.T) {
 	planner := NewAttentionPlanner(AttentionPlannerConfig{})
 	planner.Plan(attentionTestInput(attentionTestStart, attentionSnapshot(ObservationAvailable, attentionObserved("one", AttentionWorking))))

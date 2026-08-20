@@ -76,6 +76,7 @@ type OvUsage struct {
 }
 
 type OvLater struct {
+	ID      SessionID `json:"id"`
 	Name    string `json:"name"`
 	Project string `json:"project"`
 	Age     string `json:"age"`
@@ -119,30 +120,6 @@ func agentAlive(s AgentStatus) bool {
 
 type overviewRepositories interface {
 	Survey(context.Context, []Project) (RepositoriesSurvey, error)
-}
-
-func BuildOverview(s *State) Overview {
-	if s == nil {
-		s = &State{}
-	}
-	sessions := observationSessions(s.Agents)
-	copyOfState := *s
-	copyOfState.Agents = sessions
-	return BuildOverviewFromObservation(&copyOfState, Observe(context.Background(), sessions))
-}
-
-func BuildOverviewFrom(s *State, statuses map[string]AgentStatus, contents map[string]string, activity map[string]time.Time) Overview {
-	return BuildOverviewWithToolsFrom(s, statuses, contents, activity, nil)
-}
-
-func BuildOverviewWithToolsFrom(s *State, statuses map[string]AgentStatus, contents map[string]string, activity map[string]time.Time, tools map[string]string) Overview {
-	if s == nil {
-		s = &State{}
-	}
-	sessions, snapshot := legacyObservationSnapshot(s.Agents, statuses, contents, activity, tools)
-	copyOfState := *s
-	copyOfState.Agents = sessions
-	return BuildOverviewFromObservation(&copyOfState, snapshot)
 }
 
 // BuildOverviewFromObservation projects one coherent runtime snapshot into the
@@ -200,7 +177,7 @@ func buildOverviewFromSurvey(s *State, snapshot ObservationSnapshot, survey Repo
 		}
 		later[a.ID] = true
 		observed := observationForSession(a, observations)
-		ov.Later = append(ov.Later, OvLater{Name: a.Name, Project: a.Project, Age: FormatAge(a.LaterAt), Term: a.IsTerm(), Tool: observed.Tool})
+		ov.Later = append(ov.Later, OvLater{ID: a.ID, Name: a.Name, Project: a.Project, Age: FormatAge(a.LaterAt), Term: a.IsTerm(), Tool: observed.Tool})
 	}
 	// Dock-Terminals bleiben aus den Zählern: sie sind Werkzeug, keine Sitzung,
 	// und tauchen deshalb auch in der Sitzungsliste nicht auf.

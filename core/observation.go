@@ -81,6 +81,89 @@ type ObservationSnapshot struct {
 	Problems     []ObservationProblem    `json:"problems,omitempty"`
 }
 
+// promptInputState is the provider-aware input fact consumed by prompt
+// delivery. Raw pane commands and content stay inside Observation; actions only
+// decide from this projection and its explicit knowledge gates.
+type promptInputState string
+
+const (
+	promptInputUnknown       promptInputState = "unknown"
+	promptInputReady         promptInputState = "ready"
+	promptInputBusy          promptInputState = "busy"
+	promptInputNeedsResponse promptInputState = "needs-response"
+	promptInputClosed        promptInputState = "closed"
+)
+
+type promptTargetObservation struct {
+	SessionID    SessionID
+	Availability ObservationAvailability
+	Presence     SessionPresence
+	Tool         string
+	Status       AgentStatus
+	ContentKnown bool
+	Input        promptInputState
+}
+
+// observePromptTarget adapts a runtime-only prompt transport target to one
+// fresh, targeted Observation. The scoped SessionID exists only to preserve
+// Observation's stable join semantics for this single probe.
+func observePromptTarget(ctx context.Context, runtimeName string) promptTargetObservation {
+	target := Session{
+		ID:          SessionID("prompt-target:" + runtimeName),
+		Name:        strings.TrimPrefix(runtimeName, SessionPrefix),
+		RuntimeName: runtimeName,
+	}
+	return promptTargetObservationFromSnapshot(target, Observe(ctx, []Session{target}))
+}
+
+func promptTargetObservationFromSnapshot(target Session, snapshot ObservationSnapshot) promptTargetObservation {
+	for _, observed := range snapshot.Sessions {
+		if observed.SessionID == target.ID {
+			return promptTargetObservationFromSession(observed)
+		}
+	}
+	return promptTargetObservation{
+		SessionID: target.ID, Availability: ObservationUnavailable,
+		Presence: SessionPresenceUnknown, Status: StatusUnknown, Input: promptInputUnknown,
+	}
+}
+
+func promptTargetObservationFromSession(observed SessionObservation) promptTargetObservation {
+	return promptTargetObservation{
+		SessionID: observed.SessionID, Availability: observed.Availability,
+		Presence: observed.Presence, Tool: observed.Tool, Status: observed.Status,
+		ContentKnown: observed.ContentKnown, Input: promptInputStateFromObservation(observed),
+	}
+}
+
+func promptInputStateFromObservation(observed SessionObservation) promptInputState {
+	if observed.Availability != ObservationAvailable ||
+		observed.Presence != SessionPresencePresent || !observed.ContentKnown {
+		return promptInputUnknown
+	}
+	// Observation currently has UI semantics only for Claude. Other supported
+	// providers remain truthfully unknown and use queued literal input rather
+	// than borrowing Claude's composer markers.
+	if observed.Tool != AgentToolClaude {
+		return promptInputUnknown
+	}
+	switch observed.Status {
+	case StatusIdle:
+		if strings.Contains(strings.ToLower(observed.Content), "shift+tab to cycle") {
+			return promptInputReady
+		}
+		return promptInputUnknown
+	case StatusRunning, StatusAgents, StatusShell:
+		return promptInputBusy
+	case StatusBlocked:
+		return promptInputNeedsResponse
+	case StatusExited, StatusDead:
+		return promptInputClosed
+	default:
+		return promptInputUnknown
+	}
+}
+
 const (
 	defaultObservationCycleTimeout = 1500 * time.Millisecond
 	defaultObservationProbeTimeout = 500 * time.Millisecond

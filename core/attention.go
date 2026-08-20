@@ -41,6 +41,8 @@ const (
 	AttentionIntentBreakFinished    AttentionIntentKind = "break-finished"
 	AttentionIntentDeploymentFailed AttentionIntentKind = "deployment-failed"
 	AttentionIntentDeploymentReady  AttentionIntentKind = "deployment-ready"
+	AttentionIntentStartupRestored  AttentionIntentKind = "startup-restored"
+	AttentionIntentStartupFailed    AttentionIntentKind = "startup-failed"
 )
 
 type NativeAttentionLevel string
@@ -95,16 +97,19 @@ type AttentionEventKind string
 const (
 	// AttentionEventBreakReset acknowledges a user break action and cancels
 	// any outstanding break attention without producing a notification.
-	AttentionEventBreakReset    AttentionEventKind = "break-reset"
-	AttentionEventBreakFinished AttentionEventKind = "break-finished"
+	AttentionEventBreakReset      AttentionEventKind = "break-reset"
+	AttentionEventBreakFinished   AttentionEventKind = "break-finished"
+	AttentionEventStartupRestored AttentionEventKind = "startup-restored"
+	AttentionEventStartupFailed   AttentionEventKind = "startup-failed"
 )
 
 // AttentionEvent carries explicit local UI transitions into the same planner
 // cycle as Observation, break, and deployment facts. Key identifies one event
 // episode and is used for bounded deduplication.
 type AttentionEvent struct {
-	Key  string             `json:"key,omitempty"`
-	Kind AttentionEventKind `json:"kind"`
+	Key   string             `json:"key,omitempty"`
+	Kind  AttentionEventKind `json:"kind"`
+	Count int                `json:"count,omitempty"`
 }
 
 type AttentionInput struct {
@@ -413,6 +418,44 @@ func (p *AttentionPlanner) eventCandidates(events []AttentionEvent, plan *Attent
 				Kind: AttentionIntentBreakFinished, Title: "magentic",
 				Message: "Pause vorbei — nichts drängt.", Sound: "Purr",
 				DedupeKey: key, Priority: 150,
+			}})
+		case AttentionEventStartupRestored:
+			if event.Count < 1 {
+				plan.Suppressions = append(plan.Suppressions, AttentionSuppression{
+					Kind: AttentionIntentStartupRestored, DedupeKey: attentionEventKey(event), Reason: AttentionSuppressedInsufficientFacts,
+				})
+				continue
+			}
+			key := attentionEventKey(event)
+			if p.seenExternal[key] {
+				plan.Suppressions = append(plan.Suppressions, AttentionSuppression{
+					Kind: AttentionIntentStartupRestored, DedupeKey: key, Reason: AttentionSuppressedDuplicate,
+				})
+				continue
+			}
+			p.rememberExternal(key)
+			word := "Sessions"
+			if event.Count == 1 {
+				word = "Session"
+			}
+			candidates = append(candidates, attentionCandidate{intent: AttentionNotificationIntent{
+				Kind: AttentionIntentStartupRestored, Title: "magentic",
+				Message:   fmt.Sprintf("%d %s wiederhergestellt", event.Count, word),
+				DedupeKey: key, Priority: 100,
+			}})
+		case AttentionEventStartupFailed:
+			key := attentionEventKey(event)
+			if p.seenExternal[key] {
+				plan.Suppressions = append(plan.Suppressions, AttentionSuppression{
+					Kind: AttentionIntentStartupFailed, DedupeKey: key, Reason: AttentionSuppressedDuplicate,
+				})
+				continue
+			}
+			p.rememberExternal(key)
+			candidates = append(candidates, attentionCandidate{intent: AttentionNotificationIntent{
+				Kind: AttentionIntentStartupFailed, Title: "magentic",
+				Message:   "State konnte nicht geladen werden — Sessions wurden nicht wiederhergestellt",
+				DedupeKey: key, Priority: 300,
 			}})
 		default:
 			plan.Suppressions = append(plan.Suppressions, AttentionSuppression{

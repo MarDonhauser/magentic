@@ -235,11 +235,18 @@ func TestPromptTerminalInputUsesBracketedPasteForMultilinePrompt(t *testing.T) {
 }
 
 func TestPromptTargetRuntimeKeepsProviderSemanticsSeparate(t *testing.T) {
-	content := "Do you want to run this command?\n❯ 1. Yes"
-	if err := validatePromptTargetRuntime("codex", AgentToolCodex, "codex", content); err != nil {
+	codex := promptTargetObservation{
+		Availability: ObservationAvailable, Presence: SessionPresencePresent,
+		Tool: AgentToolCodex, Status: StatusUnknown, ContentKnown: true, Input: promptInputUnknown,
+	}
+	if err := validatePromptTargetObservation("codex", codex); err != nil {
 		t.Fatalf("generic Codex prompt transport reused Claude status semantics: %v", err)
 	}
-	if err := validatePromptTargetRuntime("claude", AgentToolClaude, "claude", content); err == nil {
+	claude := promptTargetObservation{
+		Availability: ObservationAvailable, Presence: SessionPresencePresent,
+		Tool: AgentToolClaude, Status: StatusBlocked, ContentKnown: true, Input: promptInputNeedsResponse,
+	}
+	if err := validatePromptTargetObservation("claude", claude); err == nil {
 		t.Fatal("Claude blocked status was not enforced")
 	}
 }

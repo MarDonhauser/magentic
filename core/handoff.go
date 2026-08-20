@@ -190,16 +190,20 @@ func handoffObservationForSession(snapshot ObservationSnapshot, session Session)
 	}
 }
 
-func validateHandoffDeliveryReady(name, tool string, status AgentStatus, content string) error {
-	if tool != AgentToolClaude {
-		if _, supported := handoffVendorForTool(tool); supported {
-			return fmt.Errorf("Eingabebereitschaft der Ziel-Session %q ist für %s unbekannt", name, tool)
+func validateHandoffDeliveryReady(name string, observed promptTargetObservation) error {
+	if observed.Tool != AgentToolClaude {
+		// Presence is not a safe composer-readiness signal. Standalone Codex and
+		// Copilot sessions also guard against concurrent writers/resumes. They
+		// need lifecycle-owned app-server/ACP Adapters before this live-TUI
+		// delivery Interface can accept them as targets.
+		if _, supported := handoffVendorForTool(observed.Tool); supported {
+			return fmt.Errorf("Eingabebereitschaft der Ziel-Session %q ist für %s unbekannt", name, observed.Tool)
 		}
 		return fmt.Errorf("in Ziel-Session %q läuft kein unterstütztes KI-Tool", name)
 	}
-	switch status {
+	switch observed.Status {
 	case StatusIdle:
-		// Continue with the provider-specific composer marker below.
+		// Continue with Observation's provider-specific input fact below.
 	case StatusBlocked:
 		return fmt.Errorf("Ziel-Session %q wartet auf eine Antwort — erst den offenen Dialog beantworten", name)
 	case StatusExited:
@@ -211,7 +215,7 @@ func validateHandoffDeliveryReady(name, tool string, status AgentStatus, content
 	default:
 		return fmt.Errorf("Eingabebereitschaft der Ziel-Session %q ist unbekannt", name)
 	}
-	if !strings.Contains(strings.ToLower(content), "shift+tab to cycle") {
+	if observed.Input != promptInputReady {
 		return fmt.Errorf("Ziel-Session %q zeigt keinen sicher eingabebereiten Claude-Composer", name)
 	}
 	return nil
@@ -224,7 +228,7 @@ func validateHandoffTarget(session Session, observed SessionObservation) (string
 	if strings.TrimSpace(session.TmuxName()) == "" {
 		return "", false, fmt.Errorf("Ziel-Session %q besitzt keinen RuntimeName", session.Name)
 	}
-	if observed.Availability != ObservationAvailable && observed.Availability != ObservationPartial {
+	if observed.Availability != ObservationAvailable {
 		return "", false, fmt.Errorf("Observation der Ziel-Session %q ist nicht vollständig verfügbar", session.Name)
 	}
 	if observed.Presence != SessionPresencePresent {
@@ -246,9 +250,10 @@ func validateHandoffTarget(session Session, observed SessionObservation) (string
 		}
 		return "", false, fmt.Errorf("in Ziel-Session %q läuft kein unterstütztes KI-Tool", session.Name)
 	}
+	promptTarget := promptTargetObservationFromSession(observed)
 	switch observed.Status {
 	case StatusRunning, StatusAgents, StatusShell, StatusIdle:
-		waitForReady := observed.Status != StatusIdle || !strings.Contains(strings.ToLower(observed.Content), "shift+tab to cycle")
+		waitForReady := promptTarget.Input != promptInputReady
 		return tool, waitForReady, nil
 	case StatusBlocked:
 		return "", false, fmt.Errorf("Ziel-Session %q wartet auf eine Antwort — erst den offenen Dialog beantworten", session.Name)
@@ -262,9 +267,8 @@ func validateHandoffTarget(session Session, observed SessionObservation) (string
 }
 
 func handoffLiveTargetValidator(name string) promptTargetValidator {
-	return func(tool, content string) error {
-		status := statusForAgentRuntime(true, tool, tool, LastLines(content, 25))
-		return validateHandoffDeliveryReady(name, tool, status, content)
+	return func(observed promptTargetObservation) error {
+		return validateHandoffDeliveryReady(name, observed)
 	}
 }
 

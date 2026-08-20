@@ -7,68 +7,6 @@ import (
 	"testing"
 )
 
-func TestParseTasks(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "tasks.md")
-	content := `## 1. Vorbereitung
-
-- [x] 1.1 Reachability prüfen
-      mehrzeilige Fortsetzung, die keine eigene Task ist
-- [ ] 1.2 Route ergänzen
-
-## 2. Backend
-
-* [X] 2.1 Profile durchreichen
-- [ ] 2.2 Contracts umstellen
-kein Task
-- [-] 2.3 verworfen
-`
-	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	tasks := parseTasks(p)
-	if len(tasks) != 5 {
-		t.Fatalf("%d Tasks, erwartet 5: %+v", len(tasks), tasks)
-	}
-	if !tasks[0].Done || tasks[0].Section != "1. Vorbereitung" {
-		t.Fatalf("erste Task falsch: %+v", tasks[0])
-	}
-	if tasks[1].Done {
-		t.Fatalf("offene Task als erledigt geparst: %+v", tasks[1])
-	}
-	if !tasks[2].Done || tasks[2].Section != "2. Backend" {
-		t.Fatalf("Großes X / Sternchen-Liste falsch geparst: %+v", tasks[2])
-	}
-	if tasks[4].Done {
-		t.Fatalf("[-] darf nicht als erledigt zählen: %+v", tasks[4])
-	}
-}
-
-func TestParseTasksMissingFile(t *testing.T) {
-	if tasks := parseTasks(filepath.Join(t.TempDir(), "fehlt.md")); tasks != nil {
-		t.Fatalf("erwartet nil, bekam %+v", tasks)
-	}
-}
-
-func TestBoardColumn(t *testing.T) {
-	cases := []struct {
-		name string
-		it   BoardItem
-		want string
-	}{
-		{"ohne Tasks", BoardItem{}, ColBacklog},
-		{"nichts erledigt", BoardItem{Total: 5}, ColBacklog},
-		{"teilweise erledigt", BoardItem{Total: 5, Done: 2}, ColActive},
-		{"alles erledigt", BoardItem{Total: 5, Done: 5}, ColReview},
-		{"laufende Session schlägt alles", BoardItem{Total: 5, Done: 5, Agents: []string{"hera"}}, ColActive},
-	}
-	for _, c := range cases {
-		if got := boardColumn(c.it); got != c.want {
-			t.Errorf("%s: %q, erwartet %q", c.name, got, c.want)
-		}
-	}
-}
-
 func TestMatchesItemRequiresDurableSpecificationReference(t *testing.T) {
 	reference := makeSpecificationRef(Project{ID: "project-1"}, SpecificationSpecKit, "reqspec-v2-default-activation", false)
 	cases := []struct {
@@ -145,35 +83,6 @@ func TestBoardPreservesUnknownSpecificationStage(t *testing.T) {
 	}
 	if len(item.Agents) != 0 {
 		t.Fatalf("slug collision falsely marked Specification active: %#v", item.Agents)
-	}
-}
-
-func TestReadDocHead(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "proposal.md")
-	content := `# ReqSpec v2 Default Activation
-
-## Why
-
-Die typisierte v2-Ebene ist implementiert, aber vom Produkt aus nicht
-erreichbar, weil die Export-Route nie ein Profil durchreicht.
-
-## What Changes
-
-- Route bekommt einen Profil-Parameter
-`
-	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	title, summary := readDocHead(p)
-	if title != "ReqSpec v2 Default Activation" {
-		t.Fatalf("Titel %q", title)
-	}
-	if summary == "" || len(summary) > 320 {
-		t.Fatalf("Summary unbrauchbar: %q", summary)
-	}
-	if got := summary[:12]; got != "Die typisier" {
-		t.Fatalf("Summary beginnt mit %q — erwartet den Why-Abschnitt", got)
 	}
 }
 

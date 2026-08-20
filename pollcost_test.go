@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
+
+	"magentic/core"
 )
 
 func TestRealPollCost(t *testing.T) {
@@ -16,23 +19,14 @@ func TestRealPollCost(t *testing.T) {
 	}
 	t.Logf("Projekte=%d Agents=%d", len(st.Projects), len(st.Agents))
 
+	ctx := context.Background()
 	start := time.Now()
-	CollectStatuses(st.Agents)
-	t.Logf("CollectStatuses(%d agents): %v", len(st.Agents), time.Since(start))
+	observation := core.Observe(ctx, st.Agents)
+	t.Logf("Observe(%d sessions): %v (availability=%s)", len(st.Agents), time.Since(start), observation.Availability)
 
-	dirs := map[string]bool{}
-	for _, a := range st.Agents {
-		dirs[a.Dir] = true
-	}
-	for _, p := range st.Projects {
-		dirs[p.Path] = true
-	}
-	for d := range dirs {
-		s := time.Now()
-		gi := CollectGitInfo(d)
-		el := time.Since(s)
-		t.Logf("CollectGitInfo %-60s %8v (repo=%v)", d, el, gi.IsRepo)
-	}
+	start = time.Now()
+	survey, surveyErr := core.NewRepositories().Survey(ctx, st.Projects)
+	t.Logf("Repositories.Survey(%d projects): %v (results=%d, err=%v)", len(st.Projects), time.Since(start), len(survey.Projects), surveyErr)
 
 	start = time.Now()
 	res := pollCmd(*st, nil)()

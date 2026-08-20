@@ -33,14 +33,26 @@ func TestOverviewCarriesDetectedAgentTool(t *testing.T) {
 	s := &State{
 		Projects: []Project{{Name: "NAVI", Path: "/work/navi", MainBranch: "main"}},
 		Agents: []Agent{
-			{Name: "term-navi", Project: "NAVI", Dir: "/work/navi", Kind: KindTerm, CreatedAt: time.Now()},
-			{Name: "shell-navi", Project: "NAVI", Dir: "/work/navi", Kind: KindTerm, CreatedAt: time.Now()},
+			{ID: "term-navi", Name: "term-navi", Project: "NAVI", Dir: "/work/navi", Kind: KindTerm, CreatedAt: time.Now()},
+			{ID: "shell-navi", Name: "shell-navi", Project: "NAVI", Dir: "/work/navi", Kind: KindTerm, CreatedAt: time.Now()},
 		},
 	}
-	statuses := map[string]AgentStatus{"term-navi": StatusIdle, "shell-navi": StatusTerm}
-	tools := map[string]string{"term-navi": AgentToolCodex, "shell-navi": AgentToolBash}
+	snapshot := ObservationSnapshot{
+		ObservedAt:   time.Now(),
+		Availability: ObservationAvailable,
+		Sessions: []SessionObservation{
+			{
+				SessionID: "term-navi", Availability: ObservationAvailable,
+				Presence: SessionPresencePresent, Status: StatusIdle, Tool: AgentToolCodex,
+			},
+			{
+				SessionID: "shell-navi", Availability: ObservationAvailable,
+				Presence: SessionPresencePresent, Status: StatusTerm, Tool: AgentToolBash,
+			},
+		},
+	}
 
-	got := BuildOverviewWithToolsFrom(s, statuses, map[string]string{}, map[string]time.Time{}, tools)
+	got := BuildOverviewFromObservation(s, snapshot)
 	if len(got.Projects) != 1 || len(got.Projects[0].Worktrees) != 1 || len(got.Projects[0].Worktrees[0].Agents) != 2 {
 		t.Fatalf("unerwartete Overview-Struktur: %#v", got.Projects)
 	}

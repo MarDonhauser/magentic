@@ -128,7 +128,11 @@ func TestParseRefsEmpty(t *testing.T) {
 func TestParseGraphCommits(t *testing.T) {
 	out := "aaa\x1fa\x1fbbb ccc\x1fMerge branch 'x'\x1fMartin\x1f1754200000\x1fHEAD -> main\x1e" +
 		"bbb\x1fb\x1f\x1fInitial\x1fMartin\x1f1754100000\x1f\x1e"
-	commits := parseGraphCommits(out, map[string]string{"main": "/tmp/wt"}, map[string][]string{"/tmp/wt": {"hera"}})
+	history, err := parseRepositoryCommitHistory(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commits := graphCommits(history, map[string]string{"main": "/tmp/wt"}, map[string][]string{"/tmp/wt": {"hera"}})
 	if len(commits) != 2 {
 		t.Fatalf("%d Commits, erwartet 2", len(commits))
 	}
@@ -143,5 +147,21 @@ func TestParseGraphCommits(t *testing.T) {
 	}
 	if commits[1].Merge || len(commits[1].Parents) != 0 {
 		t.Fatalf("Wurzel-Commit falsch geparst: %+v", commits[1])
+	}
+}
+
+func TestGitGraphDoesNotTurnMalformedHistoryIntoKnownEmptyGraph(t *testing.T) {
+	projectPath := t.TempDir()
+	runner := &repositoriesRecordingRunner{t: t, steps: []repositoriesRunnerStep{
+		{dir: projectPath, args: []string{"worktree", "list", "--porcelain"}, output: repositoriesTopologyFixture(repositoriesTopologyWorktree{Path: projectPath, Head: "aaaa", Branch: "main"})},
+		{dir: projectPath, args: []string{"status", "--porcelain=v2", "--branch"}, output: repositoriesStatusFixture("aaaa", "main")},
+		{dir: projectPath, args: []string{"log", "--all", "--date-order", "--max-count=11", "--format=" + repositoryCommitHistoryFormat}, output: "malformed\x1e"},
+	}}
+	state := &State{Projects: []Project{{ID: "project-id", Name: "Project", Path: projectPath, MainBranch: "main"}}}
+
+	graph := buildGitGraphUsing(state, "Project", 10, newRepositories(runner))
+	runner.assertDone()
+	if graph.Availability != RepositoryUnknown || graph.Err == "" || len(graph.Commits) != 0 || len(graph.Problems) == 0 {
+		t.Fatalf("malformed history became a known empty Graph: %#v", graph)
 	}
 }

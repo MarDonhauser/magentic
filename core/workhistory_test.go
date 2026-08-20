@@ -287,6 +287,29 @@ func TestHistoryAssociationsFromStateUsesDurableIDsAndAgentRuns(t *testing.T) {
 	}
 }
 
+func TestHistoryLocationFallbackTreatsMultiProviderRunsAsOneSession(t *testing.T) {
+	associations := HistoryAssociations{
+		Projects: []HistoryProjectAssociation{{Key: "project-id", Name: "Project", Path: "/work/demo"}},
+		Sessions: []HistorySessionAssociation{
+			{Key: "session-id", Name: "Session", ProjectKey: "project-id", Dir: "/work/demo", Provider: HistoryProviderClaude, ConversationID: "claude-run"},
+			{Key: "session-id", Name: "Session", ProjectKey: "project-id", Dir: "/work/demo", Provider: HistoryProviderCodex, ConversationID: "codex-run"},
+		},
+	}
+	resolver := newHistoryAssociationResolver(associations)
+
+	got := resolver.resolve(historyRecord{
+		Provider: HistoryProviderCodex,
+		// A source can know its CWD while its conversation ID is absent or does
+		// not yet match the Registry binding.
+		ConversationID: "unbound-run",
+		CWD:            "/work/demo/subdirectory",
+	})
+	if got.SessionKey.State != HistoryFactKnown || got.SessionKey.Value != "session-id" ||
+		got.ProjectKey.State != HistoryFactKnown || got.ProjectKey.Value != "project-id" {
+		t.Fatalf("multi-provider location attribution = %#v", got)
+	}
+}
+
 func openTestWorkHistory(t *testing.T) (*WorkHistory, string, string, string) {
 	t.Helper()
 	root := t.TempDir()

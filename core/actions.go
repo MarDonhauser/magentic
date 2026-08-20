@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -121,112 +122,223 @@ func ReopenLater(st *State, name string) error {
 }
 
 type promptTargetQueue struct {
-	sendMu    sync.Mutex
+	sendSlot  chan struct{}
 	pendingMu sync.Mutex
-	pending   map[string]struct{}
+	pending   map[string]*pendingPrompt
 }
 
 var promptTargetQueues sync.Map
 
-type promptTargetValidator func(tool, content string) error
+type promptTargetValidator func(promptTargetObservation) error
+
+type pendingPrompt struct {
+	done chan struct{}
+	err  error
+}
+
+var (
+	errPromptDeliveryPending  = errors.New("identische Prompt-Zustellung läuft bereits")
+	errPromptDeliveryDeadline = errors.New("Zeitlimit für Prompt-Zustellung überschritten")
+)
+
+const promptDeliveryTimeout = 180 * time.Second
+
+func newPromptTargetQueue() *promptTargetQueue {
+	return &promptTargetQueue{
+		sendSlot: make(chan struct{}, 1),
+		pending:  map[string]*pendingPrompt{},
+	}
+}
 
 func queueForPromptTarget(session string) *promptTargetQueue {
-	q, _ := promptTargetQueues.LoadOrStore(session, &promptTargetQueue{pending: map[string]struct{}{}})
+	q, _ := promptTargetQueues.LoadOrStore(session, newPromptTargetQueue())
 	return q.(*promptTargetQueue)
 }
 
-func (q *promptTargetQueue) begin(key string) bool {
+func (q *promptTargetQueue) begin(key string) (*pendingPrompt, bool) {
 	q.pendingMu.Lock()
 	defer q.pendingMu.Unlock()
-	if _, exists := q.pending[key]; exists {
-		return false
+	if pending, exists := q.pending[key]; exists {
+		return pending, false
 	}
-	q.pending[key] = struct{}{}
-	return true
+	pending := &pendingPrompt{done: make(chan struct{})}
+	q.pending[key] = pending
+	return pending, true
 }
 
-func (q *promptTargetQueue) finish(key string) {
+func (q *promptTargetQueue) finish(key string, pending *pendingPrompt, err error) {
 	q.pendingMu.Lock()
-	delete(q.pending, key)
+	pending.err = err
+	close(pending.done)
+	if q.pending[key] == pending {
+		delete(q.pending, key)
+	}
 	q.pendingMu.Unlock()
 }
 
-func inspectLivePromptTarget(session, expectedTool string) (string, string, error) {
-	info, exists := TmuxPaneInfos()[session]
-	if !exists {
-		return "", "", fmt.Errorf("Ziel-Session %q läuft nicht mehr", strings.TrimPrefix(session, SessionPrefix))
-	}
-	tool := promptAITool(info.Command)
-	if tool == "" {
-		return "", "", fmt.Errorf("in Ziel-Session %q läuft kein unterstütztes KI-Tool mehr", strings.TrimPrefix(session, SessionPrefix))
-	}
-	if expectedTool != "" && tool != expectedTool {
-		return "", "", fmt.Errorf("KI-Tool in Ziel-Session %q wechselte von %s zu %s", strings.TrimPrefix(session, SessionPrefix), expectedTool, tool)
-	}
-	content := TmuxCapturePane(session, 0)
-	if err := validatePromptTargetRuntime(strings.TrimPrefix(session, SessionPrefix), tool, info.Command, content); err != nil {
-		return "", "", err
-	}
-	return tool, content, nil
+func promptDeadlineError(session string) error {
+	return fmt.Errorf("%w: Ziel-Session %q", errPromptDeliveryDeadline, strings.TrimPrefix(session, SessionPrefix))
 }
 
-func deliverPrompt(session, prompt string, submit bool, expectedTool string, waitForReady, tolerateStartup bool, validate promptTargetValidator) error {
+func waitForPromptDeadline(deadline time.Time, delay time.Duration, session string) error {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return promptDeadlineError(session)
+	}
+	if delay < remaining {
+		remaining = delay
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	<-timer.C
+	if !time.Now().Before(deadline) {
+		return promptDeadlineError(session)
+	}
+	return nil
+}
+
+func (q *promptTargetQueue) acquire(deadline time.Time, session string) error {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return promptDeadlineError(session)
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case q.sendSlot <- struct{}{}:
+		if !time.Now().Before(deadline) {
+			<-q.sendSlot
+			return promptDeadlineError(session)
+		}
+		return nil
+	case <-timer.C:
+		return promptDeadlineError(session)
+	}
+}
+
+func (q *promptTargetQueue) waitForPending(pending *pendingPrompt, deadline time.Time, session string) error {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return promptDeadlineError(session)
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-pending.done:
+		return pending.err
+	case <-timer.C:
+		return promptDeadlineError(session)
+	}
+}
+
+func (q *promptTargetQueue) enqueue(session, key string, synchronous bool, deadline time.Time, deliver func(time.Time) error) error {
+	pending, owner := q.begin(key)
+	if !owner {
+		if synchronous {
+			return q.waitForPending(pending, deadline, session)
+		}
+		return fmt.Errorf("%w für Ziel-Session %q", errPromptDeliveryPending, strings.TrimPrefix(session, SessionPrefix))
+	}
+	run := func() (err error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				q.finish(key, pending, fmt.Errorf("Prompt-Zustellung abgebrochen: %v", recovered))
+				panic(recovered)
+			}
+			q.finish(key, pending, err)
+		}()
+		if err = q.acquire(deadline, session); err != nil {
+			return err
+		}
+		defer func() { <-q.sendSlot }()
+		return deliver(deadline)
+	}
+	if synchronous {
+		return run()
+	}
+	go func() {
+		if err := run(); err != nil {
+			Logf("Prompt-Queue %s: %v", session, err)
+		}
+	}()
+	return nil
+}
+
+func inspectLivePromptTarget(session, expectedTool string) (promptTargetObservation, error) {
+	name := strings.TrimPrefix(session, SessionPrefix)
+	observed := observePromptTarget(context.Background(), session)
+	if err := validatePromptTargetObservation(name, observed); err != nil {
+		return promptTargetObservation{}, err
+	}
+	if expectedTool != "" && observed.Tool != expectedTool {
+		return promptTargetObservation{}, fmt.Errorf(
+			"KI-Tool in Ziel-Session %q wechselte von %s zu %s", name, expectedTool, observed.Tool,
+		)
+	}
+	return observed, nil
+}
+
+func deliverPrompt(session, prompt string, submit bool, expectedTool string, waitForReady, tolerateStartup bool, validate promptTargetValidator, deadline time.Time) error {
 	if waitForReady {
-		for i := 0; i < 180; i++ {
-			time.Sleep(1 * time.Second)
-			tool, content, err := inspectLivePromptTarget(session, expectedTool)
+		for {
+			if err := waitForPromptDeadline(deadline, time.Second, session); err != nil {
+				return err
+			}
+			observed, err := inspectLivePromptTarget(session, expectedTool)
 			if err != nil {
 				if tolerateStartup {
 					continue
 				}
 				return err
 			}
-			content = strings.ToLower(content)
-			if strings.Contains(content, "trust this folder") {
-				continue
-			}
-			if !strings.Contains(content, "shift+tab to cycle") {
+			if observed.Input != promptInputReady {
 				continue
 			}
 			if validate != nil {
-				if err := validate(tool, content); err != nil {
+				if err := validate(observed); err != nil {
 					continue
 				}
 			}
-			time.Sleep(500 * time.Millisecond)
+			if err := waitForPromptDeadline(deadline, 500*time.Millisecond, session); err != nil {
+				return err
+			}
 			return sendPromptLiteralValidated(session, prompt, submit, expectedTool, validate)
 		}
-		return fmt.Errorf("Ziel-Session %q wurde nicht rechtzeitig eingabebereit", strings.TrimPrefix(session, SessionPrefix))
+	}
+	if !time.Now().Before(deadline) {
+		return promptDeadlineError(session)
 	}
 	return sendPromptLiteralValidated(session, prompt, submit, expectedTool, validate)
+}
+
+func promptDeliveryKey(prompt string, submit bool, expectedTool string, waitForReady, tolerateStartup, preferSync bool, validate promptTargetValidator) string {
+	validationPolicy := "unvalidated"
+	if validate != nil {
+		// Handoff is currently the sole caller with a validator. Keep its strict
+		// delivery contract out of generic/lifecycle deduplication.
+		validationPolicy = "handoff-validated"
+	}
+	return strings.Join([]string{
+		expectedTool,
+		strconv.FormatBool(submit),
+		strconv.FormatBool(waitForReady),
+		strconv.FormatBool(tolerateStartup),
+		strconv.FormatBool(preferSync),
+		validationPolicy,
+		prompt,
+	}, "\x00")
 }
 
 func enqueuePrompt(session, prompt string, submit bool, expectedTool string, waitForReady, tolerateStartup, preferSync bool, validate promptTargetValidator) error {
 	if strings.TrimSpace(prompt) == "" {
 		return fmt.Errorf("Prompt ist leer")
 	}
-	key := expectedTool + "\x00" + strconv.FormatBool(submit) + "\x00" + prompt
+	key := promptDeliveryKey(prompt, submit, expectedTool, waitForReady, tolerateStartup, preferSync, validate)
 	q := queueForPromptTarget(session)
-	if !q.begin(key) {
-		return nil
-	}
-	run := func() error {
-		defer q.finish(key)
-		return deliverPrompt(session, prompt, submit, expectedTool, waitForReady, tolerateStartup, validate)
-	}
-	if preferSync {
-		q.sendMu.Lock()
-		defer q.sendMu.Unlock()
-		return run()
-	}
-	go func() {
-		q.sendMu.Lock()
-		defer q.sendMu.Unlock()
-		if err := run(); err != nil {
-			Logf("Prompt-Queue %s: %v", session, err)
-		}
-	}()
-	return nil
+	deadline := time.Now().Add(promptDeliveryTimeout)
+	return q.enqueue(session, key, preferSync, deadline, func(deadline time.Time) error {
+		return deliverPrompt(session, prompt, submit, expectedTool, waitForReady, tolerateStartup, validate, deadline)
+	})
 }
 
 func SendPromptWhenReady(session, prompt string, submit bool) {
@@ -253,12 +365,12 @@ func sendPromptLiteral(session, prompt string, submit bool, expectedTool string)
 }
 
 func sendPromptLiteralValidated(session, prompt string, submit bool, expectedTool string, validate promptTargetValidator) error {
-	tool, content, err := inspectLivePromptTarget(session, expectedTool)
+	observed, err := inspectLivePromptTarget(session, expectedTool)
 	if err != nil {
 		return err
 	}
 	if validate != nil {
-		if err := validate(tool, content); err != nil {
+		if err := validate(observed); err != nil {
 			return err
 		}
 	}
@@ -268,12 +380,12 @@ func sendPromptLiteralValidated(session, prompt string, submit bool, expectedToo
 	if !submit {
 		return nil
 	}
-	tool, content, err = inspectLivePromptTarget(session, expectedTool)
+	observed, err = inspectLivePromptTarget(session, expectedTool)
 	if err != nil {
 		return err
 	}
 	if validate != nil {
-		if err := validate(tool, content); err != nil {
+		if err := validate(observed); err != nil {
 			return err
 		}
 	}
@@ -287,12 +399,16 @@ func sendPromptLiteralValidated(session, prompt string, submit bool, expectedToo
 // ready. While Claude is working, it reuses the established readiness loop and
 // submits the prompt once the composer is available again.
 func SendPromptToSession(session, prompt string) error {
-	tool, content, err := inspectLivePromptTarget(session, "")
+	observed, err := inspectLivePromptTarget(session, "")
 	if err != nil {
 		return err
 	}
-	ready := tool != AgentToolClaude || strings.Contains(strings.ToLower(content), "shift+tab to cycle")
-	return enqueuePrompt(session, prompt, true, tool, !ready, false, ready, nil)
+	return enqueuePromptForObservedTarget(session, prompt, observed)
+}
+
+func enqueuePromptForObservedTarget(session, prompt string, observed promptTargetObservation) error {
+	ready := observed.Tool != AgentToolClaude || observed.Input == promptInputReady
+	return enqueuePrompt(session, prompt, true, observed.Tool, !ready, false, ready, nil)
 }
 
 func SendSlashCommand(session, cmd string) {
@@ -350,40 +466,42 @@ func SendSkill(name, cmd string) error {
 	if session == nil {
 		return fmt.Errorf("unbekannte Session: %s", name)
 	}
-	sn := session.TmuxName()
-	if name == "" || !TmuxHasSession(sn) {
-		return fmt.Errorf("Session läuft nicht mehr")
+	return sendSkillToSession(*session, cmd)
+}
+
+// SendSkillByID resolves the action target through its durable Registry
+// identity. Name-based SendSkill remains a compatibility Adapter for the TUI.
+func SendSkillByID(id SessionID, cmd string) error {
+	st, err := LoadState()
+	if err != nil {
+		return err
 	}
+	session := st.SessionByID(id)
+	if session == nil {
+		return fmt.Errorf("unbekannte SessionID: %s", id)
+	}
+	return sendSkillToSession(*session, cmd)
+}
+
+func sendSkillToSession(session Session, cmd string) error {
+	name := session.Name
+	sn := session.TmuxName()
 	if session.IsTerm() {
 		return fmt.Errorf("%s ist eine Terminal-Session — dort läuft kein Claude", name)
 	}
-	infos := TmuxPaneInfos()
-	info, exists := infos[sn]
-	if !exists || DetectAgentTool(info.Command, false) != AgentToolClaude {
-		return fmt.Errorf("in Session %q läuft kein unterstütztes Claude-Tool", name)
+	observed, err := inspectLivePromptTarget(sn, AgentToolClaude)
+	if err != nil {
+		return err
 	}
-	status := statusForAgentRuntime(true, AgentToolClaude, info.Command, TmuxCapturePane(sn, 0))
-	switch status {
-	case StatusBlocked:
-		return fmt.Errorf("%s wartet auf eine Antwort — erst den offenen Dialog beantworten", name)
-	case StatusExited, StatusDead:
-		return fmt.Errorf("Claude läuft in dieser Session nicht mehr")
-	}
-	return SendPromptToSession(sn, cmd)
+	return enqueuePromptForObservedTarget(sn, cmd, observed)
 }
 
 func DoneAgent(name string) error {
 	return SendSkill(name, "/done ")
 }
 
-func promptAITool(command string) string {
-	tool := DetectAgentTool(command, false)
-	switch tool {
-	case AgentToolClaude, AgentToolCodex, AgentToolGemini, AgentToolCopilot:
-		return tool
-	default:
-		return ""
-	}
+func DoneSession(id SessionID) error {
+	return SendSkillByID(id, "/done ")
 }
 
 func validatePromptTargetStatus(name string, status AgentStatus) error {
@@ -401,14 +519,30 @@ func validatePromptTargetStatus(name string, status AgentStatus) error {
 	}
 }
 
-func validatePromptTargetRuntime(name, tool, command, content string) error {
-	status := statusForAgentRuntime(true, tool, command, content)
-	if status == StatusUnknown && tool != AgentToolClaude {
+func validatePromptTargetObservation(name string, observed promptTargetObservation) error {
+	if observed.Availability != ObservationAvailable {
+		return fmt.Errorf("Observation der Ziel-Session %q ist nicht vollständig verfügbar", name)
+	}
+	if observed.Presence != SessionPresencePresent {
+		if observed.Presence == SessionPresenceAbsent {
+			return fmt.Errorf("Ziel-Session %q läuft nicht mehr", name)
+		}
+		return fmt.Errorf("Laufzeit-Präsenz der Ziel-Session %q ist unbekannt", name)
+	}
+	if !observed.ContentKnown {
+		return fmt.Errorf("Terminalinhalt der Ziel-Session %q ist nicht bekannt", name)
+	}
+	switch observed.Tool {
+	case AgentToolClaude, AgentToolCodex, AgentToolGemini, AgentToolCopilot:
+	default:
+		return fmt.Errorf("in Ziel-Session %q läuft kein unterstütztes KI-Tool mehr", name)
+	}
+	if observed.Status == StatusUnknown && observed.Tool != AgentToolClaude {
 		// The non-Claude prompt Adapters support literal queued input, but do not
 		// claim UI-phase semantics that Observation cannot establish.
 		return nil
 	}
-	return validatePromptTargetStatus(name, status)
+	return validatePromptTargetStatus(name, observed.Status)
 }
 
 func StartCleanup(st *State, path, mainBranch string) (string, error) {
@@ -615,6 +749,18 @@ func CreateTermSessionFor(st *State, agentName, name string) (string, error) {
 	if a == nil {
 		return "", fmt.Errorf("Session %q nicht gefunden", agentName)
 	}
+	return createTermSessionFor(st, *a, name)
+}
+
+func CreateTermSessionForID(st *State, sessionID SessionID, name string) (string, error) {
+	a := st.SessionByID(sessionID)
+	if a == nil {
+		return "", fmt.Errorf("SessionID %q nicht gefunden", sessionID)
+	}
+	return createTermSessionFor(st, *a, name)
+}
+
+func createTermSessionFor(st *State, a Session, name string) (string, error) {
 	hint := a.Project
 	if hint == "" || a.Worktree {
 		hint = filepath.Base(a.Dir)

@@ -100,6 +100,7 @@ initThemeToggle($('theme-toggle'));
 
 let view = 'overview';
 let activeTerm = null;
+let activeSessionID = null;
 let ov = null;
 let projects = [];
 let overviewSync = { kind: 'loading', error: '', lastOkAt: '' };
@@ -223,7 +224,7 @@ onThemeChange(theme => {
   for (const entry of terms.values()) entry.term.options.theme = nextTheme;
 });
 
-function makeTerm(name) {
+function makeTerm(sessionID, name) {
   const wrap = document.createElement('div');
   wrap.className = 'term-wrap';
   const inner = document.createElement('div');
@@ -305,7 +306,7 @@ function makeTerm(name) {
   term.onScroll(updateSb);
   term.onWriteParsed(updateSb);
 
-  const t = { term, fit, wrap, name };
+  const t = { term, fit, wrap, name, sessionID };
   terms.set(name, t);
   return t;
 }
@@ -324,20 +325,33 @@ const termComposeHintEl = $('term-compose-hint');
 let composerBusy = false;
 let composerHintTimer = null;
 
-function agentInfo(name) {
+function agentInfo(name, sessionID = '') {
   for (const p of ov?.projects || []) {
     for (const wt of p.worktrees || []) {
       for (const a of wt.agents || []) {
-        if (a.name === name) return { ...a, project: p.name };
+        if ((sessionID && a.id === sessionID) || (!sessionID && a.name === name)) {
+          return { ...a, project: p.name };
+        }
       }
     }
   }
   return null;
 }
 
+function openSessionByName(name) {
+  const session = agentInfo(name);
+  if (!session?.id) {
+    toast(`Session „${name}“ ist nicht mehr registriert`, true);
+    return;
+  }
+  return openSession(session.id, session.name);
+}
+
 function updateTermBar() {
-  if (view !== 'term' || !activeTerm) return;
-  const a = agentInfo(activeTerm);
+  if (view !== 'term' || !activeTerm || !activeSessionID) return;
+  const sessionID = activeSessionID;
+  const sessionName = activeTerm;
+  const a = agentInfo(sessionName, sessionID);
   const v = agentVisual(a, a?.project);
   const gone = !a || ['exited', 'dead'].includes(a.status);
   const claudeActions = a?.term ? '' :
@@ -359,20 +373,20 @@ function updateTermBar() {
   $('tb-back').onclick = showOverview;
   if (!a?.term) {
     $('tb-done').onclick = () =>
-      act(DoneAgent(activeTerm), `/done an „${activeTerm}" gesendet — Plan in der Session bestätigen`).catch(() => {});
+      act(DoneAgent(sessionID), `/done an „${sessionName}" gesendet — Plan in der Session bestätigen`).catch(() => {});
     $('tb-deploy').onclick = () =>
-      act(SendSkill(activeTerm, '/deploy '), `/deploy an „${activeTerm}" gesendet — Plan in der Session bestätigen`)
+      act(SendSkill(sessionID, '/deploy '), `/deploy an „${sessionName}" gesendet — Plan in der Session bestätigen`)
         .then(startDeployWatch).catch(() => {});
     $('tb-dd').onclick = () =>
-      act(SendSkill(activeTerm, '/done und sobald done komplett abgeschlossen ist, führe direkt /deploy aus '),
-        `/done + /deploy an „${activeTerm}" gesendet — Plan in der Session bestätigen`)
+      act(SendSkill(sessionID, '/done und sobald done komplett abgeschlossen ist, führe direkt /deploy aus '),
+        `/done + /deploy an „${sessionName}" gesendet — Plan in der Session bestätigen`)
         .then(startDeployWatch).catch(() => {});
   }
   $('tb-links').onclick = e => openLinksMenu(e.currentTarget);
-  $('tb-later').onclick = () => parkSession(activeTerm);
+  $('tb-later').onclick = () => parkSession(sessionID, sessionName);
   $('tb-kill').onclick = e => {
     const b = e.currentTarget;
-    if (b.dataset.confirm) { killSession(activeTerm); return; }
+    if (b.dataset.confirm) { killSession(sessionID, sessionName); return; }
     b.dataset.confirm = '1';
     b.innerHTML = icon('x') + ' wirklich?';
     setTimeout(() => {
@@ -458,7 +472,7 @@ async function sendComposerMessage() {
   } finally {
     composerBusy = false;
     termComposerEl.removeAttribute('aria-busy');
-    const a = agentInfo(activeTerm);
+    const a = agentInfo(activeTerm, activeSessionID);
     updateComposerControls(!a || ['exited', 'dead'].includes(a.status));
     termPromptEl.focus();
   }
@@ -495,7 +509,7 @@ termComposerEl.addEventListener('submit', e => {
   sendComposerMessage();
 });
 termPromptEl.addEventListener('input', () => {
-  const a = agentInfo(activeTerm);
+  const a = agentInfo(activeTerm, activeSessionID);
   updateComposerControls(!a || ['exited', 'dead'].includes(a.status));
 });
 termPromptEl.addEventListener('keydown', e => {
@@ -520,27 +534,41 @@ function markSeen(name) {
   if (name) MarkSeen(name).catch(() => {});
 }
 
-async function openSession(name) {
+async function openSession(sessionID, name) {
+  if (!sessionID || !name) {
+    toast('Session kann ohne stabile ID nicht geöffnet werden', true);
+    return;
+  }
   hydraHandoff.leave();
   view = 'term';
   hydraProject = null;
   termsEl.classList.remove('hydra');
   if (dockTabs().includes(name)) closeDockTab(name);
-  if (activeTerm && activeTerm !== name) markSeen(activeTerm);
+  if (activeTerm && activeSessionID !== sessionID) markSeen(activeTerm);
   markSeen(name);
   activeTerm = name;
-  SetActiveTerm(name);
+  activeSessionID = sessionID;
+  SetActiveTerm(sessionID);
   showPanel('terms');
   let t = terms.get(name);
+  if (t && t.sessionID && t.sessionID !== sessionID) {
+    EventsOff('term:data:' + name);
+    EventsOff('term:closed:' + name);
+    try { t.term.dispose(); } catch { /* bereits beendet */ }
+    t.wrap.remove();
+    terms.delete(name);
+    t = null;
+  }
   const fresh = !t;
-  if (!t) t = makeTerm(name);
+  if (!t) t = makeTerm(sessionID, name);
+  else t.sessionID = sessionID;
   t.term.options.fontSize = 14;
   t.term.options.lineHeight = 1.3;
   if (t.wrap.parentElement !== termsEl) termsEl.appendChild(t.wrap);
   for (const [n, o] of terms) o.wrap.classList.toggle('active', n === name);
   t.fit.fit();
   if (fresh) {
-    try { await OpenTerm(name, t.term.cols, t.term.rows); }
+    try { await OpenTerm(sessionID, name, t.term.cols, t.term.rows); }
     catch (err) { t.term.write('\x1b[31m' + err + '\x1b[0m\r\n'); }
   } else {
     ResizeTerm(name, t.term.cols, t.term.rows);
@@ -572,6 +600,7 @@ function leaveTerm() {
   hydraHandoff.leave();
   markSeen(activeTerm);
   activeTerm = null;
+  activeSessionID = null;
   SetActiveTerm('');
   hydraProject = null;
   termsEl.classList.remove('hydra');
@@ -781,6 +810,7 @@ function enterHydra(project) {
   view = 'hydra';
   markSeen(activeTerm);
   activeTerm = null;
+  activeSessionID = null;
   SetActiveTerm('');
   hydraProject = project;
   showPanel('terms');
@@ -835,10 +865,10 @@ function ensureHydraHead(t) {
     `<button type="button" class="hh-magnet" aria-label="Kontext aus Session ${esc(t.name)} weitergeben" aria-pressed="false">${icon('magnet')}</button>` +
     `<button type="button" class="hh-max" aria-label="Session ${esc(t.name)} groß öffnen" title="Session groß öffnen">⤢</button>` +
     `<button type="button" class="hh-kill" aria-label="Session ${esc(t.name)} beenden" title="Session beenden">✕</button>`;
-  head.querySelector('.hh-max').onclick = () => openSession(t.name);
+  head.querySelector('.hh-max').onclick = () => openSession(t.sessionID, t.name);
   head.querySelector('.hh-kill').onclick = e => {
     const b = e.currentTarget;
-    if (b.dataset.confirm) { killSession(t.name); return; }
+    if (b.dataset.confirm) { killSession(t.sessionID, t.name); return; }
     b.dataset.confirm = '1';
     b.textContent = '✕ wirklich?';
     setTimeout(() => {
@@ -851,7 +881,8 @@ function ensureHydraHead(t) {
   t.wrap.addEventListener('focusin', () => {
     if (view !== 'hydra') return;
     activeTerm = t.name;
-    SetActiveTerm(t.name);
+    activeSessionID = t.sessionID;
+    SetActiveTerm(t.sessionID);
     for (const w of hydraGridEl.querySelectorAll('.term-wrap')) {
       w.classList.toggle('focused', w === t.wrap);
     }
@@ -890,7 +921,16 @@ async function syncHydra() {
   const fresh = [];
   for (const a of agents) {
     let t = terms.get(a.name);
-    if (!t) { t = makeTerm(a.name); fresh.push(a.name); }
+    if (t && t.sessionID && t.sessionID !== a.id) {
+      EventsOff('term:data:' + a.name);
+      EventsOff('term:closed:' + a.name);
+      try { t.term.dispose(); } catch { /* bereits beendet */ }
+      t.wrap.remove();
+      terms.delete(a.name);
+      t = null;
+    }
+    if (!t) { t = makeTerm(a.id, a.name); fresh.push(a.name); }
+    else t.sessionID = a.id;
     t.term.options.fontSize = 13;
     t.term.options.lineHeight = 1;
     ensureHydraHead(t);
@@ -910,7 +950,7 @@ async function syncHydra() {
     if (!t) continue;
     t.fit.fit();
     if (fresh.includes(a.name)) {
-      try { await OpenTerm(a.name, t.term.cols, t.term.rows); }
+      try { await OpenTerm(a.id, a.name, t.term.cols, t.term.rows); }
       catch (err) { t.term.write('\x1b[31m' + err + '\x1b[0m\r\n'); }
     } else {
       ResizeTerm(a.name, t.term.cols, t.term.rows);
@@ -919,12 +959,12 @@ async function syncHydra() {
 }
 
 
-function makeProjDraggable(head, name) {
+function makeProjDraggable(head, id, name) {
   head.classList.add('draggable');
-  head.dataset.proj = name;
+  head.dataset.projectId = id;
   head.addEventListener('pointerdown', e => {
     if (e.button !== 0 || e.target.closest('.proj-add')) return;
-    pdrag = { name, head, startY: e.clientY, active: false };
+    pdrag = { id, name, head, startY: e.clientY, active: false };
     window.addEventListener('pointermove', onProjPointerMove);
     window.addEventListener('pointerup', onProjPointerUp, { once: true });
   });
@@ -953,7 +993,7 @@ function onProjPointerUp(e) {
   if (d.active) {
     suppressHeadClick = true;
     setTimeout(() => { suppressHeadClick = false; }, 0);
-    reorderProjects(d.name, dropIndexAt(e.clientY));
+    reorderProjects(d.id, dropIndexAt(e.clientY));
   }
 }
 
@@ -992,7 +1032,7 @@ function clearDropMarks() {
 
 async function reorderProjects(dragged, idx) {
   if (!dragged) return;
-  const order = (ov?.projects || []).filter(p => p.path).map(p => p.name);
+  const order = (ov?.projects || []).filter(p => p.path).map(p => p.id);
   const from = order.indexOf(dragged);
   if (from < 0) return;
   order.splice(from, 1);
@@ -1052,7 +1092,7 @@ function attentionBar() {
   bar.className = 'wait';
   bar.innerHTML = `<span class="at-wait">${icon('lock')} ${label}</span>`;
   bar.title = 'Nächste wartende Session öffnen';
-  bar.onclick = () => openSession(waiting[0].name);
+  bar.onclick = () => openSession(waiting[0].id, waiting[0].name);
 }
 
 function renderSidebar() {
@@ -1079,7 +1119,7 @@ function renderSidebar() {
     }
     head.appendChild(label);
     if (p.path) {
-      makeProjDraggable(head, p.name);
+      makeProjDraggable(head, p.id, p.name);
     }
     if (p.path) {
       const plus = document.createElement('button');
@@ -1097,7 +1137,7 @@ function renderSidebar() {
                 n => (worktree ? `Worktree-Session „${n}" gestartet` : `Session „${n}" gestartet`));
           if (!name) return;
           if (view === 'hydra' && hydraProject === p.name) await focusHydraSession(name);
-          else openSession(name);
+          else openSessionByName(name);
         } catch { /* toast zeigt den Fehler */ }
       };
       head.appendChild(plus);
@@ -1106,8 +1146,8 @@ function renderSidebar() {
     for (const a of agents) {
       const v = agentVisual(a, p.name);
       const idx = sidebarSessions.length;
-      sidebarSessions.push(a.name);
-      const active = view === 'term' && a.name === activeTerm;
+      sidebarSessions.push({ id: a.id, name: a.name });
+      const active = view === 'term' && a.id === activeSessionID;
       const div = document.createElement('div');
       div.className = 'session' +
         (active ? ' selected' : '') +
@@ -1130,10 +1170,11 @@ function renderSidebar() {
         `</span>` +
         (a.status === 'blocked' ? `<span class="sflag" title="wartet auf deine Eingabe">!</span>` :
           a.unread && !active ? `<span class="sdot" title="neu seit deinem letzten Blick"></span>` : '');
-      div.onclick = () => openSession(a.name);
+      div.dataset.sessionId = String(a.id || '');
+      div.onclick = () => openSession(a.id, a.name);
       div.oncontextmenu = e => {
         e.preventDefault();
-        showMenu(e.clientX, e.clientY, a.name, a.status);
+        showMenu(e.clientX, e.clientY, a.id, a.name, a.status);
       };
       attachHover(div, a.name);
       sessionsEl.appendChild(div);
@@ -1157,10 +1198,11 @@ function renderSidebar() {
         `<span class="sname">${esc(l.name)}</span>` +
         (l.project ? `<span class="sstatus">${esc(l.project)}</span>` : '') +
         `<span class="sage">${esc(l.age)}</span>`;
-      div.onclick = () => reopenLater(l.name);
+      div.dataset.sessionId = String(l.id || '');
+      div.onclick = () => reopenLater(l.id, l.name);
       div.oncontextmenu = e => {
         e.preventDefault();
-        showMenu(e.clientX, e.clientY, l.name, 'later');
+        showMenu(e.clientX, e.clientY, l.id, l.name, 'later');
       };
       sessionsEl.appendChild(div);
     }
@@ -1279,10 +1321,10 @@ function renderZg() {
 function agentPill(a, project) {
   const v = agentVisual(a, project);
   const done = (a.status === 'idle' || a.status === 'running') && !a.phase
-    ? `<button class="btn tiny" data-act="done" data-agent="${esc(a.name)}" title="/done — Arbeit committen und auf dev bringen">${icon('check')} done</button>`
+    ? `<button class="btn tiny" data-act="done" data-session-id="${esc(a.id)}" data-agent="${esc(a.name)}" title="/done — Arbeit committen und auf dev bringen">${icon('check')} done</button>`
     : '';
   const open = a.status !== 'dead'
-    ? `<button class="btn tiny" data-act="open" data-agent="${esc(a.name)}" title="Terminal öffnen">${developerIcon('bash')}</button>`
+    ? `<button class="btn tiny" data-act="open" data-session-id="${esc(a.id)}" data-agent="${esc(a.name)}" title="Terminal öffnen">${developerIcon('bash')}</button>`
     : '';
   return `<span class="pill${a.status === 'blocked' ? ' waiting' : ''}${a.unread ? ' unread' : ''}">` +
     `<span class="pill-avatar">${agentPortrait(a.name, 18, a)}</span>` +
@@ -1319,7 +1361,7 @@ function attentionOverview() {
   const queue = waiting.map(a => {
     const context = [a.project, a.branch].filter(Boolean).join(' · ');
     const status = agentVisual(a, a.project);
-    return `<button type="button" class="attention-session" data-act="open" data-agent="${esc(a.name)}">` +
+    return `<button type="button" class="attention-session" data-act="open" data-session-id="${esc(a.id)}" data-agent="${esc(a.name)}">` +
       `<span class="attention-session-avatar">${agentPortrait(a.name, 24, a)}</span>` +
       `<span class="attention-session-copy"><strong>${esc(a.name)}</strong><span>${esc(context)}</span></span>` +
       `<span class="attention-session-status">${visHtml(status)}</span>` +
@@ -1405,17 +1447,17 @@ function projectCard(p) {
   const rows = (p.worktrees || []).map((wt, i) => worktreeRow(p, wt, i, p.worktrees.length)).join('');
   let projectTools = '';
   if (p.path) {
-    const mainCfg = editingMain === p.name
+    const mainCfg = editingMain === p.id
       ? `<div class="project-menu-config"><label for="main-input">Hauptbranch</label>` +
         `<span class="maincfg"><input class="inline-input" id="main-input" value="${esc(p.mainBranch)}" placeholder="main">` +
-        `<button class="btn tiny" data-act="mainsave" data-project="${esc(p.name)}" title="Hauptbranch speichern">${icon('check')}</button>` +
+        `<button class="btn tiny" data-act="mainsave" data-project-id="${esc(p.id)}" data-project-name="${esc(p.name)}" title="Hauptbranch speichern">${icon('check')}</button>` +
         `<button class="btn tiny" data-act="maincancel" title="Änderung verwerfen">${icon('x')}</button></span></div>`
-      : `<button class="project-menu-item" data-act="mainedit" data-project="${esc(p.name)}" title="Hauptbranch ändern">` +
+      : `<button class="project-menu-item" data-act="mainedit" data-project-id="${esc(p.id)}" data-project-name="${esc(p.name)}" title="Hauptbranch ändern">` +
         `<span>${icon('gitbranch')} Hauptbranch</span><b>${esc(p.mainBranchKnown ? p.mainBranch : 'unbekannt')}</b></button>`;
-    const rmProj = confirmRemoveProject === p.name
-      ? `<button class="project-menu-item danger confirm" data-act="rmproj2" data-project="${esc(p.name)}">${icon('x')} Repository wirklich entfernen?</button>`
-      : `<button class="project-menu-item danger" data-act="rmproj1" data-project="${esc(p.name)}" title="Repository aus magentic entfernen — löscht keine Dateien">${icon('x')} Repository entfernen</button>`;
-    const menuOpen = editingMain === p.name || confirmRemoveProject === p.name ? ' open' : '';
+    const rmProj = confirmRemoveProject === p.id
+      ? `<button class="project-menu-item danger confirm" data-act="rmproj2" data-project-id="${esc(p.id)}" data-project-name="${esc(p.name)}">${icon('x')} Repository wirklich entfernen?</button>`
+      : `<button class="project-menu-item danger" data-act="rmproj1" data-project-id="${esc(p.id)}" data-project-name="${esc(p.name)}" title="Repository aus magentic entfernen — löscht keine Dateien">${icon('x')} Repository entfernen</button>`;
+    const menuOpen = editingMain === p.id || confirmRemoveProject === p.id ? ' open' : '';
     projectTools = `<div class="project-tools">` +
       `<div class="project-lenses"><span class="project-tools-label">Ansichten</span>` +
       `<button class="project-lens" data-act="showgraph" data-project="${esc(p.name)}" title="Git-Graph dieses Projekts — wo Worktrees abzweigen und zusammenlaufen">${developerIcon('git')} Graph</button>` +
@@ -1705,11 +1747,11 @@ overviewEl.addEventListener('click', async e => {
   try {
     switch (d.act) {
       case 'retryoverview': await refresh(true); break;
-      case 'open': await openSession(d.agent); break;
+      case 'open': await openSession(d.sessionId, d.agent); break;
       case 'showgraph': await showGraph(d.project); break;
       case 'showboard': await showBoard(d.project); break;
       case 'showstats': await showStats(d.project); break;
-      case 'done': await act(DoneAgent(d.agent), `/done an „${d.agent}" gesendet — Plan in der Session bestätigen`); break;
+      case 'done': await act(DoneAgent(d.sessionId), `/done an „${d.agent}" gesendet — Plan in der Session bestätigen`); break;
       case 'cleanup': await act(Cleanup(d.project, d.worktree), n => `Cleanup-Agent „${n}" gestartet`); break;
       case 'merge': await act(Merge(d.project, d.source, d.target), n => `Merge-Agent „${n}" gestartet (${d.source} → ${d.target})`); break;
       case 'deploy':
@@ -1720,7 +1762,7 @@ overviewEl.addEventListener('click', async e => {
       case 'newworktree': await act(NewSession(d.project, true, ''), n => `Worktree-Session „${n}" gestartet`); break;
       case 'newterm': {
         const n = await act(NewTermSession(d.project, false, ''), x => `Terminal „${x}" geöffnet`);
-        if (n) openSession(n);
+        if (n) openSessionByName(n);
         break;
       }
       case 'addproject': {
@@ -1728,22 +1770,22 @@ overviewEl.addEventListener('click', async e => {
         if (path) await act(AddProject(path), n => `Repository „${n}" hinzugefügt`);
         break;
       }
-      case 'rmproj1': confirmRemoveProject = d.project; renderOverview(); break;
+      case 'rmproj1': confirmRemoveProject = d.projectId; renderOverview(); break;
       case 'rmproj2':
         confirmRemoveProject = null;
-        await act(RemoveProject(d.project), `Repository „${d.project}" entfernt`);
+        await act(RemoveProject(d.projectId), `Repository „${d.projectName}" entfernt`);
         break;
       case 'remove1': confirmRemove = d.project + '|' + d.worktree; renderOverview(); break;
       case 'remove2':
         confirmRemove = null;
         await act(RemoveWorktree(d.project, d.worktree), 'Worktree entfernt');
         break;
-      case 'mainedit': editingMain = d.project; renderOverview(); $('main-input')?.focus(); break;
+      case 'mainedit': editingMain = d.projectId; renderOverview(); $('main-input')?.focus(); break;
       case 'maincancel': editingMain = null; renderOverview(); break;
       case 'mainsave': {
         const v = $('main-input').value.trim();
         editingMain = null;
-        await act(SetMainBranch(d.project, v), v ? `Hauptbranch: ${v}` : 'Hauptbranch: automatisch');
+        await act(SetMainBranch(d.projectId, v), v ? `Hauptbranch: ${v}` : 'Hauptbranch: automatisch');
         break;
       }
       case 'dsrefresh': await refreshDeployStatus(); break;
@@ -2017,7 +2059,7 @@ $('tl-body').addEventListener('click', e => {
   if (!row) return;
   const en = tlEntries[parseInt(row.dataset.i)];
   if (!en) return;
-  if (en.agent && agentInfo(en.agent)) openSession(en.agent);
+  if (en.agent && agentInfo(en.agent)) openSessionByName(en.agent);
   else showModal(`${en.source ? `${en.source} · ` : ''}${en.project} · ${en.day} ${en.time}`, en.text, false);
 });
 
@@ -2031,8 +2073,8 @@ function hideMenu() {
   menuFor = null;
 }
 
-function showMenu(x, y, name, status) {
-  menuFor = name;
+function showMenu(x, y, sessionID, name, status) {
+  menuFor = { id: sessionID, name };
   const session = agentInfo(name) || (ov?.later || []).find(item => item.name === name);
   if (status === 'later') {
     menuEl.innerHTML =
@@ -2056,8 +2098,8 @@ function showMenu(x, y, name, status) {
 async function openTermInContext() {
   let name = null;
   try {
-    if (activeTerm) {
-      name = await act(NewTermSessionFor(activeTerm), x => `Terminal „${x}" geöffnet`);
+    if (activeSessionID) {
+      name = await act(NewTermSessionFor(activeSessionID), x => `Terminal „${x}" geöffnet`);
     } else if (hydraProject) {
       name = await act(NewTermSession(hydraProject, false, ''), x => `Terminal „${x}" geöffnet`);
     } else {
@@ -2067,13 +2109,13 @@ async function openTermInContext() {
   } catch { return; }
   if (!name) return;
   if (view === 'hydra') await focusHydraSession(name);
-  else openSession(name);
+  else openSessionByName(name);
 }
 
-async function afterSessionGone(name) {
+async function afterSessionGone(sessionID, name) {
   if (dockTabs().includes(name)) closeDockTab(name);
   const t = terms.get(name);
-  if (t) {
+  if (t && (!t.sessionID || t.sessionID === sessionID)) {
     EventsOff('term:data:' + name);
     EventsOff('term:closed:' + name);
     try { t.term.dispose(); } catch { /* schon weg */ }
@@ -2081,49 +2123,53 @@ async function afterSessionGone(name) {
     terms.delete(name);
   }
   if (view === 'hydra') {
-    if (activeTerm === name) { activeTerm = null; SetActiveTerm(''); }
+    if (activeSessionID === sessionID) {
+      activeTerm = null;
+      activeSessionID = null;
+      SetActiveTerm('');
+    }
     await refresh(true);
     syncHydra();
     return;
   }
-  if (activeTerm === name) showOverview();
+  if (activeSessionID === sessionID) showOverview();
 }
 
-async function killSession(name) {
+async function killSession(sessionID, name) {
   try {
-    await act(KillSession(name), `Session „${name}" beendet`);
+    await act(KillSession(sessionID, name), `Session „${name}" beendet`);
   } catch { return; }
-  await afterSessionGone(name);
+  await afterSessionGone(sessionID, name);
 }
 
-async function parkSession(name) {
+async function parkSession(sessionID, name) {
   try {
-    await act(LaterSession(name), `Session „${name}" für später geparkt`);
+    await act(LaterSession(sessionID), `Session „${name}" für später geparkt`);
   } catch { return; }
-  await afterSessionGone(name);
+  await afterSessionGone(sessionID, name);
 }
 
-async function reopenLater(name) {
+async function reopenLater(sessionID, name) {
   try {
-    await act(ReopenSession(name), `Session „${name}" wieder geöffnet`);
+    await act(ReopenSession(sessionID), `Session „${name}" wieder geöffnet`);
   } catch { return; }
-  openSession(name);
+  openSession(sessionID, name);
 }
 
 menuEl.addEventListener('click', async e => {
   const mi = e.target.closest('.mi');
   if (!mi || !menuFor) return;
-  const name = menuFor;
+  const { id, name } = menuFor;
   switch (mi.dataset.mi) {
-    case 'open': hideMenu(); openSession(name); break;
-    case 'later': hideMenu(); parkSession(name); break;
-    case 'reopen': hideMenu(); reopenLater(name); break;
+    case 'open': hideMenu(); openSession(id, name); break;
+    case 'later': hideMenu(); parkSession(id, name); break;
+    case 'reopen': hideMenu(); reopenLater(id, name); break;
     case 'done':
       hideMenu();
-      try { await act(DoneAgent(name), `/done an „${name}" gesendet — Plan in der Session bestätigen`); } catch { }
+      try { await act(DoneAgent(id), `/done an „${name}" gesendet — Plan in der Session bestätigen`); } catch { }
       break;
     case 'kill':
-      if (mi.dataset.confirm) { hideMenu(); killSession(name); }
+      if (mi.dataset.confirm) { hideMenu(); killSession(id, name); }
       else { mi.dataset.confirm = '1'; mi.innerHTML = icon('x') + ' wirklich beenden?'; }
       break;
   }

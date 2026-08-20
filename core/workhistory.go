@@ -1000,7 +1000,7 @@ func newHistoryAssociationResolver(input HistoryAssociations) historyAssociation
 func (r historyAssociationResolver) resolve(record historyRecord) HistoryAttribution {
 	var session *HistorySessionAssociation
 	if record.ConversationID != "" {
-		matches := r.exactSessions[string(record.Provider)+"\x00"+record.ConversationID]
+		matches := uniqueHistorySessionMatches(r.exactSessions[string(record.Provider)+"\x00"+record.ConversationID])
 		if len(matches) == 1 {
 			copy := matches[0]
 			session = &copy
@@ -1009,7 +1009,7 @@ func (r historyAssociationResolver) resolve(record historyRecord) HistoryAttribu
 		}
 	}
 	if session == nil && record.CWD != "" {
-		matches := longestHistorySessionMatches(r.sessions, record.CWD)
+		matches := longestHistorySessionMatches(r.sessions, record.CWD, record.Provider)
 		if len(matches) == 1 {
 			copy := matches[0]
 			session = &copy
@@ -1072,7 +1072,7 @@ func longestHistoryProjectMatches(projects []HistoryProjectAssociation, path str
 	return out
 }
 
-func longestHistorySessionMatches(sessions []HistorySessionAssociation, path string) []HistorySessionAssociation {
+func longestHistorySessionMatches(sessions []HistorySessionAssociation, path string, provider HistoryProvider) []HistorySessionAssociation {
 	clean := filepath.Clean(path)
 	best := -1
 	var out []HistorySessionAssociation
@@ -1089,6 +1089,39 @@ func longestHistorySessionMatches(sessions []HistorySessionAssociation, path str
 		} else if len(root) == best {
 			out = append(out, session)
 		}
+	}
+	// A Registry Session may have several provider-qualified AgentRuns and thus
+	// several associations for the same directory. Prefer associations that can
+	// represent this provider, then collapse them by durable Session key. This
+	// keeps a multi-provider Session singular while preserving real ambiguity
+	// between different Sessions sharing a directory.
+	var compatible []HistorySessionAssociation
+	for _, session := range out {
+		if session.Provider == "" || session.Provider == provider {
+			compatible = append(compatible, session)
+		}
+	}
+	if len(compatible) > 0 {
+		out = compatible
+	}
+	return uniqueHistorySessionMatches(out)
+}
+
+func uniqueHistorySessionMatches(sessions []HistorySessionAssociation) []HistorySessionAssociation {
+	seen := make(map[string]bool, len(sessions))
+	out := make([]HistorySessionAssociation, 0, len(sessions))
+	for _, session := range sessions {
+		key := session.Key
+		if key == "" {
+			// Hand-built query inputs need not carry Registry IDs. Do not collapse
+			// distinct anonymous associations merely because their key is empty.
+			key = strings.Join([]string{session.Name, session.ProjectKey, session.Dir, string(session.Provider), session.ConversationID}, "\x00")
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, session)
 	}
 	return out
 }

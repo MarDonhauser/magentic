@@ -1737,7 +1737,7 @@ body.tl-open #timeline { display: flex; }
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 #hydra-grid .term-wrap.handoff-over::before {
-  content: "Loslassen: Kontext übergeben";
+  content: "Loslassen: Aufbereitung anstoßen";
   position: absolute;
   z-index: 4;
   inset: 30px 0 0;

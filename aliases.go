@@ -8,9 +8,6 @@ type (
 	Agent          = core.Agent
 	RegistryChange = core.RegistryChange
 	AgentStatus    = core.AgentStatus
-	GitInfo        = core.GitInfo
-	WorktreeInfo   = core.WorktreeInfo
-	SessionChanges = core.SessionChanges
 	PaneInfo       = core.PaneInfo
 	UsageInfo      = core.UsageInfo
 	Overview       = core.Overview
@@ -46,14 +43,13 @@ var (
 	TmuxPaneInfos        = core.TmuxPaneInfos
 	TmuxListSessions     = core.TmuxListSessions
 
-	LoadState                      = core.LoadState
-	StatePath                      = core.StatePath
-	OpenRegistry                   = core.OpenRegistry
-	RegisterProject                = core.RegisterProject
-	RemoveProject                  = core.RemoveProject
-	AddDiscoveredSessions          = core.AddDiscoveredSessions
+	LoadState             = core.LoadState
+	StatePath             = core.StatePath
+	OpenRegistry          = core.OpenRegistry
+	RegisterProject       = core.RegisterProject
+	RemoveProject         = core.RemoveProject
+	AddDiscoveredSessions = core.AddDiscoveredSessions
 
-	CollectStatuses      = core.CollectStatuses
 	DetectClaudeStatus   = core.DetectClaudeStatus
 	lastLines            = core.LastLines
 	statusRank           = core.StatusRank
@@ -63,17 +59,9 @@ var (
 	backgroundShellCount = core.BackgroundShellCount
 	shellDetail          = core.ShellDetail
 
-	gitCmd                = core.GitCmd
-	CollectGitInfo        = core.CollectGitInfo
-	CollectWorktrees      = core.CollectWorktrees
-	CollectSessionChanges = core.CollectSessionChanges
-	CaptureBaseline       = core.CaptureBaseline
-	AheadBehind           = core.AheadBehind
-	CreateWorktree        = core.CreateWorktree
-
+	gitCmd        = core.GitCmd
 	CachedUsage   = core.CachedUsage
 	PickAgentName = core.PickAgentName
-	BuildOverview = core.BuildOverview
 
 	zeitgeistInfo   = core.ZeitgeistInfo
 	zeitgeistStart  = core.ZeitgeistStart

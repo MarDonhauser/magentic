@@ -61,15 +61,15 @@ func (a *App) startup(ctx context.Context) {
 	core.TmuxConfigureUX()
 	if st, err := core.LoadState(); err == nil {
 		if n := core.RestoreSessions(st); n > 0 {
-			word := "Sessions"
-			if n == 1 {
-				word = "Session"
-			}
-			core.NotifyDesktop("magentic", fmt.Sprintf("%d %s wiederhergestellt", n, word), "")
+			a.executeAttentionEvents(core.AttentionEvent{
+				Key: "startup:restore", Kind: core.AttentionEventStartupRestored, Count: n,
+			})
 		}
 	} else {
 		core.Logf("startup: state laden fehlgeschlagen: %v", err)
-		core.NotifyDesktop("magentic", "State konnte nicht geladen werden — Sessions wurden nicht wiederhergestellt", "")
+		a.executeAttentionEvents(core.AttentionEvent{
+			Key: "startup:restore", Kind: core.AttentionEventStartupFailed,
+		})
 	}
 	go a.watchLoop()
 }
@@ -138,6 +138,61 @@ func (a *App) Projects() ([]string, error) {
 	return names, nil
 }
 
+func loadSessionByID(rawID string) (*core.State, core.Session, error) {
+	id := core.SessionID(strings.TrimSpace(rawID))
+	if id == "" {
+		return nil, core.Session{}, fmt.Errorf("SessionID fehlt")
+	}
+	st, err := core.LoadState()
+	if err != nil {
+		return nil, core.Session{}, err
+	}
+	session := st.SessionByID(id)
+	if session == nil {
+		return nil, core.Session{}, fmt.Errorf("unbekannte SessionID: %s", id)
+	}
+	return st, *session, nil
+}
+
+// loadSessionTarget resolves every identified browser action exclusively by
+// SessionID. The name fallback exists only for persisted legacy Dock tabs,
+// which predate IDs in the browser state; a supplied but stale ID never falls
+// through to a newly-created Session that happens to reuse its old name.
+func loadSessionTarget(rawID, legacyDockName string) (*core.State, core.Session, error) {
+	if strings.TrimSpace(rawID) != "" {
+		return loadSessionByID(rawID)
+	}
+	name := strings.TrimSpace(legacyDockName)
+	if name == "" {
+		return nil, core.Session{}, fmt.Errorf("SessionID fehlt")
+	}
+	st, err := core.LoadState()
+	if err != nil {
+		return nil, core.Session{}, err
+	}
+	session := st.AgentByName(name)
+	if session == nil || !session.IsDock() {
+		return nil, core.Session{}, fmt.Errorf("unbekannter Legacy-Dock-Tab: %s", name)
+	}
+	return st, *session, nil
+}
+
+func loadProjectByID(rawID string) (*core.State, core.Project, error) {
+	id := core.ProjectID(strings.TrimSpace(rawID))
+	if id == "" {
+		return nil, core.Project{}, fmt.Errorf("ProjectID fehlt")
+	}
+	st, err := core.LoadState()
+	if err != nil {
+		return nil, core.Project{}, err
+	}
+	project := st.ProjectByID(id)
+	if project == nil {
+		return nil, core.Project{}, fmt.Errorf("unbekannte ProjectID: %s", id)
+	}
+	return st, *project, nil
+}
+
 func (a *App) PickFolder() (string, error) {
 	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
 		Title: "Repository-Ordner wählen",
@@ -168,21 +223,35 @@ func (a *App) AddProject(path string) (string, error) {
 	return name, nil
 }
 
-func (a *App) RemoveProject(name string) error {
-	st, err := core.LoadState()
+func (a *App) RemoveProject(projectID string) error {
+	_, project, err := loadProjectByID(projectID)
 	if err != nil {
 		return err
-	}
-	project := st.ProjectByName(name)
-	if project == nil {
-		return fmt.Errorf("Projekt %q nicht gefunden", name)
 	}
 	_, err = core.OpenRegistry(core.StatePath()).Change(a.ctx, core.RemoveProject(project.ID, project.Name))
 	return err
 }
 
 func (a *App) ReorderProjects(order []string) error {
-	_, err := core.OpenRegistry(core.StatePath()).Change(a.ctx, core.ReorderProjects(order))
+	st, err := core.LoadState()
+	if err != nil {
+		return err
+	}
+	names := make([]string, 0, len(order))
+	seen := make(map[core.ProjectID]bool, len(order))
+	for _, rawID := range order {
+		id := core.ProjectID(strings.TrimSpace(rawID))
+		if id == "" || seen[id] {
+			return fmt.Errorf("ungültige ProjectID in Sortierung: %q", rawID)
+		}
+		project := st.ProjectByID(id)
+		if project == nil {
+			return fmt.Errorf("unbekannte ProjectID in Sortierung: %s", id)
+		}
+		seen[id] = true
+		names = append(names, project.Name)
+	}
+	_, err = core.OpenRegistry(core.StatePath()).Change(a.ctx, core.ReorderProjects(names))
 	return err
 }
 
@@ -262,13 +331,6 @@ func (a *App) Stats(days int) (core.Stats, error) {
 		return core.Stats{}, err
 	}
 	return core.BuildStats(st, days), nil
-}
-
-func (a *App) RevealPath(path string) error {
-	if path == "" {
-		return fmt.Errorf("kein Pfad")
-	}
-	return exec.Command("open", "-R", path).Start()
 }
 
 func (a *App) StartBoardItem(project, token string) (string, error) {
@@ -403,16 +465,16 @@ func (a *App) NewDockSession(project string) (string, error) {
 	return core.CreateDockSession(st, project)
 }
 
-func (a *App) NewTermSessionFor(agent string) (string, error) {
-	st, err := core.LoadState()
+func (a *App) NewTermSessionFor(sessionID string) (string, error) {
+	st, session, err := loadSessionByID(sessionID)
 	if err != nil {
 		return "", err
 	}
-	return core.CreateTermSessionFor(st, agent, "")
+	return core.CreateTermSessionForID(st, session.ID, "")
 }
 
-func (a *App) DoneAgent(name string) error {
-	return core.DoneAgent(name)
+func (a *App) DoneAgent(sessionID string) error {
+	return core.DoneSession(core.SessionID(strings.TrimSpace(sessionID)))
 }
 
 func (a *App) HandoffSession(sourceID, targetID string) error {
@@ -424,16 +486,17 @@ func (a *App) HandoffSession(sourceID, targetID string) error {
 	return core.HandoffSession(st, snapshot, core.SessionID(sourceID), core.SessionID(targetID))
 }
 
-func (a *App) SendSkill(name, cmd string) error {
+func (a *App) SendSkill(sessionID, cmd string) error {
 	if !strings.HasPrefix(cmd, "/") {
 		return fmt.Errorf("nur Slash-Kommandos erlaubt")
 	}
-	if err := core.SendSkill(name, cmd); err != nil {
+	id := core.SessionID(strings.TrimSpace(sessionID))
+	if err := core.SendSkillByID(id, cmd); err != nil {
 		return err
 	}
 	if strings.Contains(cmd, "/deploy") {
 		if st, err := core.LoadState(); err == nil {
-			if session := st.AgentByName(name); session != nil {
+			if session := st.SessionByID(id); session != nil {
 				_, _ = core.OpenRegistry(core.StatePath()).Change(a.ctx, core.MarkSessionDeploy(session.ID, session.Name, time.Now()))
 			}
 		}
@@ -502,66 +565,47 @@ func (a *App) RemoveWorktree(project, reference string) error {
 	return nil
 }
 
-func (a *App) SetMainBranch(project, main string) error {
-	st, err := core.LoadState()
+func (a *App) SetMainBranch(projectID, main string) error {
+	_, project, err := loadProjectByID(projectID)
 	if err != nil {
 		return err
 	}
-	proj := st.ProjectByName(project)
-	if proj == nil {
-		return fmt.Errorf("unbekanntes Projekt: %s", project)
-	}
-	_, err = core.OpenRegistry(core.StatePath()).Change(a.ctx, core.SetProjectMainBranch(proj.ID, proj.Name, strings.TrimSpace(main)))
+	_, err = core.OpenRegistry(core.StatePath()).Change(a.ctx, core.SetProjectMainBranch(project.ID, project.Name, strings.TrimSpace(main)))
 	return err
 }
 
-func (a *App) KillSession(name string) error {
-	a.CloseTerm(name)
-	st, err := core.LoadState()
+func (a *App) KillSession(sessionID, legacyDockName string) error {
+	st, session, err := loadSessionTarget(sessionID, legacyDockName)
 	if err != nil {
 		return err
 	}
-	return core.RemoveRegisteredSession(st, name)
+	a.CloseTerm(session.Name)
+	return core.RemoveRegisteredSession(st, session.Name)
 }
 
-func (a *App) LaterSession(name string) error {
-	st, err := core.LoadState()
+func (a *App) LaterSession(sessionID string) error {
+	st, session, err := loadSessionByID(sessionID)
 	if err != nil {
 		return err
 	}
-	if !st.HasAgent(name) {
-		if discovered := core.DiscoverNew(st); len(discovered) > 0 {
-			changed, changeErr := core.OpenRegistry(core.StatePath()).Change(a.ctx, core.AddDiscoveredSessions(discovered))
-			if changeErr != nil {
-				return changeErr
-			}
-			st = changed.Snapshot.MutableState()
-		}
-	}
-	if !st.HasAgent(name) {
-		return fmt.Errorf("unbekannte Session: %s", name)
-	}
-	a.CloseTerm(name)
-	return core.ParkSession(st, name)
+	a.CloseTerm(session.Name)
+	return core.ParkSession(st, session.Name)
 }
 
-func (a *App) ReopenSession(name string) error {
-	st, err := core.LoadState()
+func (a *App) ReopenSession(sessionID string) error {
+	st, session, err := loadSessionByID(sessionID)
 	if err != nil {
 		return err
 	}
-	return core.ReopenLater(st, name)
+	return core.ReopenLater(st, session.Name)
 }
 
-func (a *App) OpenTerm(name string, cols, rows int) error {
-	st, err := core.LoadState()
+func (a *App) OpenTerm(sessionID, legacyDockName string, cols, rows int) error {
+	_, registered, err := loadSessionTarget(sessionID, legacyDockName)
 	if err != nil {
 		return err
 	}
-	registered := st.AgentByName(name)
-	if registered == nil {
-		return fmt.Errorf("unbekannte Session: %s", name)
-	}
+	name := registered.Name
 	session := registered.TmuxName()
 	if !core.TmuxHasSession(session) {
 		return fmt.Errorf("Session %q existiert nicht mehr", name)

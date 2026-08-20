@@ -1,5 +1,6 @@
 import './gitgraph.css';
 import { developerIcon } from './avatar.js';
+import { branchMergeState } from './gitgraph-state.js';
 
 const ROW_H = 30;
 const LANE_W = 16;
@@ -120,7 +121,12 @@ function legendHtml(branches, mainLane, mainName, opts) {
       : (b.divergenceKnown
           ? `<span class="gg-ab">${ahead ? `<span class="gg-ahead" title="${ahead} Commits vor ${esc(mainName)}">↑${ahead}</span>` : ''}${behind ? `<span class="gg-behind" title="${behind} Commits hinter ${esc(mainName)}">↓${behind}</span>` : ''}${!ahead && !behind ? '<span title="deckungsgleich mit ' + esc(mainName) + '">=</span>' : ''}</span>`
           : `<span class="gg-ab gg-ab-unknown" title="Abstand zu ${esc(mainName)} konnte nicht ermittelt werden">?</span>`);
-    const merged = b.merged && !isMain ? `<span class="gg-badge gg-merged">merged</span>` : '';
+    const mergeState = branchMergeState(b, isMain);
+    const merged = mergeState === 'merged'
+      ? `<span class="gg-badge gg-merged">merged</span>`
+      : (mergeState === 'unknown'
+          ? `<span class="gg-ab gg-ab-unknown" title="Merge-Status zu ${esc(mainName)} konnte nicht ermittelt werden">merge&nbsp;?</span>`
+          : '');
     const wt = b.worktreeRef
       ? `<span class="gg-wt-hint" title="Worktree ${esc(b.worktreeLocation || b.name)}">${ico('folder')}${esc(b.worktreeLocation || b.name)}</span>`
       : '';

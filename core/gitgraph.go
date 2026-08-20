@@ -2,9 +2,7 @@ package core
 
 import (
 	"context"
-	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -43,6 +41,7 @@ type GraphBranch struct {
 	Behind           int         `json:"behind"`
 	DivergenceKnown  bool        `json:"divergenceKnown"`
 	Merged           bool        `json:"merged"`
+	MergedKnown      bool        `json:"mergedKnown"`
 	Agents           []string    `json:"agents,omitempty"`
 }
 
@@ -59,9 +58,11 @@ type GitGraph struct {
 	Err          string              `json:"err,omitempty"`
 }
 
-const graphFmt = "%H\x1f%h\x1f%P\x1f%s\x1f%an\x1f%ct\x1f%D\x1e"
-
 func BuildGitGraph(s *State, projName string, limit int) GitGraph {
+	return buildGitGraphUsing(s, projName, limit, NewRepositories())
+}
+
+func buildGitGraphUsing(s *State, projName string, limit int, repositories *Repositories) GitGraph {
 	g := GitGraph{Project: projName, Availability: RepositoryUnknown}
 	proj := s.ProjectByName(projName)
 	if proj == nil {
@@ -72,7 +73,8 @@ func BuildGitGraph(s *State, projName string, limit int) GitGraph {
 	if limit <= 0 || limit > 400 {
 		limit = 120
 	}
-	survey, surveyErr := NewRepositories().Survey(context.Background(), []Project{*proj})
+	ctx := context.Background()
+	survey, surveyErr := repositories.Survey(ctx, []Project{*proj})
 	if surveyErr != nil {
 		g.Err = "Repository-Status konnte nicht gelesen werden"
 		g.Problems = append(g.Problems, RepositoryProblem{Operation: "survey", Message: surveyErr.Error()})
@@ -121,13 +123,16 @@ func BuildGitGraph(s *State, projName string, limit int) GitGraph {
 		agentsByDir[a.Dir] = append(agentsByDir[a.Dir], a.Name)
 	}
 
-	out, err := GitCmdCached(proj.Path, "log", "--all", "--date-order",
-		"--max-count="+strconv.Itoa(limit+1), "--format="+graphFmt)
-	if err != nil {
-		g.Err = "git log fehlgeschlagen"
+	history := repositories.CommitHistory(ctx, proj.Path, limit+1)
+	if !history.Known() {
+		g.Availability = RepositoryUnknown
+		g.Err = "Git-Verlauf konnte nicht gelesen werden"
+		if history.Problem != nil {
+			g.Problems = append(g.Problems, *history.Problem)
+		}
 		return g
 	}
-	commits := parseGraphCommits(out, wtByBranch, agentsByDir)
+	commits := graphCommits(history.Value, wtByBranch, agentsByDir)
 	for i := range commits {
 		for j := range commits[i].Refs {
 			worktree, known := worktreeByBranch[commits[i].Refs[j].Name]
@@ -149,7 +154,9 @@ func BuildGitGraph(s *State, projName string, limit int) GitGraph {
 			g.Lanes = c.Lane + 1
 		}
 	}
-	g.Branches = collectGraphBranches(proj.Path, main, commits, wtByBranch, agentsByDir, divergenceByBranch)
+	var branchProblems []RepositoryProblem
+	g.Branches, branchProblems = collectGraphBranches(ctx, repositories, proj.Path, main, commits, wtByBranch, agentsByDir, divergenceByBranch)
+	g.Problems = append(g.Problems, branchProblems...)
 	for i := range g.Branches {
 		if worktree, known := worktreeByBranch[g.Branches[i].Name]; known {
 			g.Branches[i].WorktreeRef = worktree.Reference
@@ -160,32 +167,21 @@ func BuildGitGraph(s *State, projName string, limit int) GitGraph {
 	return g
 }
 
-func parseGraphCommits(out string, wtByBranch map[string]string, agentsByDir map[string][]string) []GraphCommit {
-	var commits []GraphCommit
-	for _, rec := range strings.Split(out, "\x1e") {
-		rec = strings.TrimLeft(rec, "\n")
-		if rec == "" {
-			continue
-		}
-		f := strings.Split(rec, "\x1f")
-		if len(f) < 7 {
-			continue
-		}
-		ts, _ := strconv.ParseInt(f[5], 10, 64)
+func graphCommits(history []RepositoryCommit, wtByBranch map[string]string, agentsByDir map[string][]string) []GraphCommit {
+	commits := make([]GraphCommit, 0, len(history))
+	for _, fact := range history {
 		c := GraphCommit{
-			Hash:    f[0],
-			Short:   f[1],
-			Subject: f[3],
-			Author:  f[4],
-			Time:    ts,
-			Age:     FormatAge(time.Unix(ts, 0)),
+			Hash:    fact.Hash,
+			Short:   fact.Short,
+			Parents: append([]string(nil), fact.Parents...),
+			Subject: fact.Subject,
+			Author:  fact.Author,
+			Time:    fact.Timestamp,
+			Age:     FormatAge(time.Unix(fact.Timestamp, 0)),
 		}
-		if p := strings.Fields(f[2]); len(p) > 0 {
-			c.Parents = p
-			c.Merge = len(p) > 1
-		}
+		c.Merge = len(c.Parents) > 1
 		seen := map[string]bool{}
-		for _, r := range parseRefs(f[6]) {
+		for _, r := range parseRefs(fact.Decorations) {
 			if wt, ok := wtByBranch[r.Name]; ok {
 				r.Worktree = wt
 				for _, ag := range agentsByDir[wt] {
@@ -276,18 +272,7 @@ func assignLanes(commits []GraphCommit) {
 	}
 }
 
-func aheadBehindRefs(dir, base, ref string) (ahead, behind int, known bool) {
-	out, err := GitCmdCached(dir, "rev-list", "--left-right", "--count", base+"..."+ref)
-	if err != nil {
-		return 0, 0, false
-	}
-	if _, err := fmt.Sscanf(strings.TrimSpace(out), "%d\t%d", &behind, &ahead); err != nil {
-		return 0, 0, false
-	}
-	return ahead, behind, true
-}
-
-func collectGraphBranches(projPath, main string, commits []GraphCommit, wtByBranch map[string]string, agentsByDir map[string][]string, divergenceByBranch map[string]RepositoryFact[RepositoryDivergence]) []GraphBranch {
+func collectGraphBranches(ctx context.Context, repositories *Repositories, projPath, main string, commits []GraphCommit, wtByBranch map[string]string, agentsByDir map[string][]string, divergenceByBranch map[string]RepositoryFact[RepositoryDivergence]) ([]GraphBranch, []RepositoryProblem) {
 	laneOf := map[string]int{}
 	for _, c := range commits {
 		for _, r := range c.Refs {
@@ -298,19 +283,20 @@ func collectGraphBranches(projPath, main string, commits []GraphCommit, wtByBran
 			}
 		}
 	}
-	merged := map[string]bool{}
+	merged := RepositoryFact[map[string]bool]{State: RepositoryUnknown}
 	if main != "" {
-		if out, err := GitCmdCached(projPath, "branch", "--merged", main, "--format=%(refname:short)"); err == nil {
-			for _, l := range strings.Split(out, "\n") {
-				if l = strings.TrimSpace(l); l != "" {
-					merged[l] = true
-				}
-			}
-		}
+		merged = repositories.MergedBranches(ctx, projPath, main)
+	}
+	var problems []RepositoryProblem
+	if merged.Problem != nil {
+		problems = append(problems, *merged.Problem)
 	}
 	var out []GraphBranch
 	for name, lane := range laneOf {
-		b := GraphBranch{Name: name, Lane: lane, IsMain: name == main, Merged: merged[name]}
+		b := GraphBranch{Name: name, Lane: lane, IsMain: name == main, MergedKnown: merged.Known()}
+		if merged.Known() {
+			b.Merged = merged.Value[name]
+		}
 		if wt, ok := wtByBranch[name]; ok {
 			b.Worktree = wt
 			b.Agents = agentsByDir[wt]
@@ -321,12 +307,22 @@ func collectGraphBranches(projPath, main string, commits []GraphCommit, wtByBran
 					b.Ahead = divergence.Value.Ahead
 					b.Behind = divergence.Value.Behind
 					b.DivergenceKnown = true
+				} else if divergence.Problem != nil {
+					problems = append(problems, *divergence.Problem)
 				}
 			} else {
-				b.Ahead, b.Behind, b.DivergenceKnown = aheadBehindRefs(projPath, main, name)
+				divergence := repositories.CompareRefs(ctx, projPath, main, name)
+				if divergence.Known() {
+					b.Ahead = divergence.Value.Ahead
+					b.Behind = divergence.Value.Behind
+					b.DivergenceKnown = true
+				} else if divergence.Problem != nil {
+					problems = append(problems, *divergence.Problem)
+				}
 			}
 		} else if b.IsMain {
 			b.DivergenceKnown = true
+			b.MergedKnown = true
 		}
 		out = append(out, b)
 	}
@@ -339,5 +335,5 @@ func collectGraphBranches(projPath, main string, commits []GraphCommit, wtByBran
 		}
 		return out[i].Name < out[j].Name
 	})
-	return out
+	return out, problems
 }

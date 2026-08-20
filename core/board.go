@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"fmt"
-	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -280,39 +279,8 @@ func sortBoardItems(items []BoardItem) {
 	})
 }
 
-// boardColumn remains for source compatibility while delegating the lifecycle
-// policy to the Specifications Module.
-func boardColumn(item BoardItem) string {
-	if len(item.Agents) > 0 {
-		return ColActive
-	}
-	lifecycle := specificationLifecycle(SpecificationProgress{Total: item.Total, Completed: item.Done}, true, false, false)
-	return string(lifecycle.Stage)
-}
-
 func matchesItem(agent agentCtx, reference SpecificationRef) bool {
 	return reference != "" && agent.specificationRef == reference
-}
-
-func parseTasks(path string) []BoardTask {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	tasks := parseSpecificationTasks(data)
-	result := make([]BoardTask, 0, len(tasks))
-	for _, task := range tasks {
-		result = append(result, BoardTask{Text: task.Text, Done: task.State == SpecificationTaskDone, Section: task.Section})
-	}
-	return result
-}
-
-func readDocHead(path string) (title, summary string) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", ""
-	}
-	return parseSpecificationDocumentHead(data)
 }
 
 func humanizeID(id string) string {

@@ -58,6 +58,7 @@ test('a stale request cannot overwrite a newer handoff after a forced reset', as
   assert.deepEqual(await requestB, { ok: true });
   assert.equal(coordinator.snapshot().kind, 'idle');
   assert.equal(coordinator.snapshot().feedback.kind, 'success');
+  assert.match(coordinator.snapshot().feedback.message, /Aufbereitungsauftrag.*zugestellt/);
   assert.deepEqual(requests, [['source', 'target-a'], ['source', 'target-b']]);
 });
 
@@ -155,14 +156,16 @@ class FakeElement extends FakeTarget {
     this.dataset = {};
     this.style = {};
     this.children = [];
+    this.attributes = new Map();
     this.isConnected = true;
     this.firstElementChild = null;
   }
   appendChild(child) { this.children.push(child); child.parent = this; return child; }
   remove() { this.isConnected = false; }
   replaceChildren(...children) { this.children = children; }
-  setAttribute() {}
-  removeAttribute() {}
+  setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  getAttribute(name) { return this.attributes.get(name) ?? null; }
+  removeAttribute(name) { this.attributes.delete(name); }
   focus() { this.focused = true; }
 }
 
@@ -192,12 +195,19 @@ test('lost pointer capture removes drag visuals and transient listeners', () => 
   button.hasPointerCapture = id => button.captures.has(id);
   button.releasePointerCapture = id => button.captures.delete(id);
 
+  const targetWrap = new FakeElement();
+  targetWrap.dataset.sessionId = 'target';
+  targetWrap.dataset.termName = 'Ziel';
+  const targetButton = new FakeElement();
+  targetButton.closest = selector => selector === '.hh-magnet' ? targetButton : (selector === '.term-wrap' ? targetWrap : null);
+  let submissions = 0;
+
   const controller = createHydraHandoff({
     root,
     statusElement: () => null,
-    submit: async () => {},
+    submit: async () => { submissions += 1; },
   });
-  controller.reconcile([agent('source', 'Quelle')]);
+  controller.reconcile([agent('source', 'Quelle'), agent('target', 'Ziel')]);
   root.emit('pointerdown', {
     target: button,
     button: 0,
@@ -224,5 +234,105 @@ test('lost pointer capture removes drag visuals and transient listeners', () => 
   assert.equal(fakeWindow.listenerCount('pointermove'), 0);
   assert.equal(fakeWindow.listenerCount('pointerup'), 0);
   assert.equal(fakeWindow.listenerCount('pointercancel'), 0);
+  assert.equal(button.focused, true);
+
+  root.emit('click', {
+    target: targetButton,
+    stopPropagation() {},
+    preventDefault() {},
+  });
+  assert.equal(submissions, 0, 'a cancelled drag must not leave the former source armed');
+  controller.dispose();
+});
+
+test('a pointer drop on nested terminal content submits the stable session IDs once', () => {
+  const fakeWindow = new FakeTarget();
+  fakeWindow.setTimeout = callback => { callback(); return 1; };
+  fakeWindow.clearTimeout = () => {};
+  const body = new FakeElement();
+  const nestedTerminalContent = new FakeElement();
+  const fakeDocument = {
+    defaultView: fakeWindow,
+    body,
+    createElement: () => new FakeElement(),
+    elementFromPoint: () => nestedTerminalContent,
+  };
+  const root = new FakeElement();
+  root.ownerDocument = fakeDocument;
+  root.contains = () => true;
+  root.querySelectorAll = () => [];
+
+  const sourceWrap = new FakeElement();
+  sourceWrap.dataset.sessionId = 'source-id';
+  sourceWrap.dataset.termName = 'Quelle';
+  const sourceButton = new FakeElement();
+  sourceButton.closest = selector => selector === '.hh-magnet' ? sourceButton : (selector === '.term-wrap' ? sourceWrap : null);
+  sourceButton.setPointerCapture = () => {};
+  sourceButton.hasPointerCapture = () => false;
+
+  const targetWrap = new FakeElement();
+  targetWrap.dataset.sessionId = 'target-id';
+  targetWrap.dataset.termName = 'Ziel';
+  nestedTerminalContent.closest = selector => selector === '.term-wrap' ? targetWrap : null;
+
+  const submissions = [];
+  const controller = createHydraHandoff({
+    root,
+    statusElement: () => null,
+    submit: async (...ids) => { submissions.push(ids); },
+  });
+  controller.reconcile([agent('source-id', 'Quelle'), agent('target-id', 'Ziel')]);
+
+  root.emit('pointerdown', {
+    target: sourceButton,
+    button: 0,
+    pointerId: 9,
+    clientX: 0,
+    clientY: 0,
+    stopPropagation() {},
+  });
+  fakeWindow.emit('pointermove', {
+    pointerId: 9,
+    pointerType: 'mouse',
+    buttons: 1,
+    clientX: 10,
+    clientY: 10,
+    preventDefault() {},
+  });
+  fakeWindow.emit('pointerup', { pointerId: 9 });
+
+  assert.deepEqual(submissions, [['source-id', 'target-id']]);
+  controller.dispose();
+});
+
+test('unavailable magnets remain focusable but expose disabled semantics', () => {
+  const fakeWindow = new FakeTarget();
+  fakeWindow.setTimeout = () => 1;
+  fakeWindow.clearTimeout = () => {};
+  const fakeDocument = {
+    defaultView: fakeWindow,
+    body: new FakeElement(),
+    createElement: () => new FakeElement(),
+  };
+  const root = new FakeElement();
+  root.ownerDocument = fakeDocument;
+  root.contains = () => true;
+
+  const wrap = new FakeElement();
+  wrap.dataset.sessionId = 'source';
+  wrap.dataset.termName = 'Quelle';
+  const button = new FakeElement();
+  wrap.querySelector = selector => selector === '.hh-magnet' ? button : null;
+  root.querySelectorAll = selector => selector === '.term-wrap' ? [wrap] : [];
+
+  const controller = createHydraHandoff({
+    root,
+    statusElement: () => null,
+    submit: async () => {},
+  });
+  controller.reconcile([agent('source', 'Quelle', { handoffSource: false })]);
+
+  assert.equal(button.disabled, false, 'the reason remains keyboard-discoverable');
+  assert.equal(button.getAttribute('aria-disabled'), 'true');
   controller.dispose();
 });

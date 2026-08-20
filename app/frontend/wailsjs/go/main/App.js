@@ -150,10 +150,6 @@ export function ResizeTerm(arg1, arg2, arg3) {
   return window['go']['main']['App']['ResizeTerm'](arg1, arg2, arg3);
 }
 
-export function RevealPath(arg1) {
-  return window['go']['main']['App']['RevealPath'](arg1);
-}
-
 export function SaveImage(arg1) {
   return window['go']['main']['App']['SaveImage'](arg1);
 }

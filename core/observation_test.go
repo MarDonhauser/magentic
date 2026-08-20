@@ -165,6 +165,49 @@ func TestObserveReturnsPartialResultsWhenOnePaneFails(t *testing.T) {
 	}
 }
 
+func TestPromptTargetActionsRejectUnknownOrUnavailableCapture(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	target := Session{ID: "target", Name: "target", RuntimeName: "mgt-target"}
+	tests := []struct {
+		name             string
+		run              func(context.Context, ...string) (string, error)
+		wantAvailability ObservationAvailability
+	}{
+		{
+			name: "list unavailable",
+			run: func(context.Context, ...string) (string, error) {
+				return "", errors.New("tmux unavailable")
+			},
+			wantAvailability: ObservationUnavailable,
+		},
+		{
+			name: "capture unavailable",
+			run: func(_ context.Context, args ...string) (string, error) {
+				if args[0] == "list-panes" {
+					return "mgt-target\t%7\tclaude\t1787227200\t1\n", nil
+				}
+				return "", errors.New("capture failed")
+			},
+			wantAvailability: ObservationPartial,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runner := &recordingObservationRunner{run: test.run}
+			snapshot := observeWithRunner(
+				context.Background(), []Session{target}, runner, testObservationConfig(now),
+			)
+			observed := promptTargetObservationFromSnapshot(target, snapshot)
+			if observed.Availability != test.wantAvailability || observed.ContentKnown || observed.Input != promptInputUnknown {
+				t.Fatalf("failed capture became a known prompt target: %#v", observed)
+			}
+			if err := validatePromptTargetObservation(target.Name, observed); err == nil {
+				t.Fatal("prompt action accepted unavailable capture facts")
+			}
+		})
+	}
+}
+
 func TestObserveNormalizesPaneFactsAndDoesNotMutateSessions(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	activity := now.Add(-time.Minute)
@@ -226,6 +269,13 @@ func TestObserveDoesNotApplyClaudeSemanticsToOtherProviders(t *testing.T) {
 			observed := got.Sessions[0]
 			if observed.Tool != tool || observed.Status != StatusUnknown || observed.Attention != AttentionUnknown || observed.Unread {
 				t.Fatalf("unsupported %s status semantics were fabricated: %#v", tool, observed)
+			}
+			promptTarget := promptTargetObservationFromSession(observed)
+			if promptTarget.Input != promptInputUnknown {
+				t.Fatalf("unsupported %s input readiness was fabricated: %#v", tool, promptTarget)
+			}
+			if err := validatePromptTargetObservation("one", promptTarget); err != nil {
+				t.Fatalf("known queued-input transport rejected truthful %s observation: %v", tool, err)
 			}
 		})
 	}

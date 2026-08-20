@@ -364,8 +364,9 @@ func statsWeekdayIndex(date string) int {
 var statsWeekdayNames = [7]string{"Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"}
 
 const (
-	statsCommitProblemIdentity = "identity-unavailable"
-	statsCommitProblemLog      = "log-unavailable"
+	statsCommitProblemIdentity  = "identity-unavailable"
+	statsCommitProblemLog       = "log-unavailable"
+	statsCommitProblemMalformed = "log-malformed"
 )
 
 type statsCommitRepositoryResult struct {
@@ -433,21 +434,36 @@ func commitsPerDayWithGit(project, dir, since string, run gitRunner) statsCommit
 		return result
 	}
 
-	result.Days = map[string]int{}
-	result.State = HistorySourceAvailable
+	days := map[string]int{}
+	malformed := 0
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
 		fields := strings.Split(line, "\x1f")
-		if len(fields) < 3 || !ownCommit(fields[1], fields[2], email, name) {
+		if len(fields) != 3 {
+			malformed++
 			continue
 		}
 		seconds, err := strconv.ParseInt(fields[0], 10, 64)
-		if err == nil {
-			result.Days[time.Unix(seconds, 0).In(time.Local).Format(statsDateLayout)]++
+		if err != nil {
+			malformed++
+			continue
 		}
+		if ownCommit(fields[1], fields[2], email, name) {
+			days[time.Unix(seconds, 0).In(time.Local).Format(statsDateLayout)]++
+		}
+	}
+	result.Days = days
+	result.State = HistorySourceAvailable
+	if malformed > 0 {
+		result.State = HistorySourcePartial
+		result.Problems = []StatsCommitProblem{{
+			Project: project,
+			Kind:    statsCommitProblemMalformed,
+			Message: fmt.Sprintf("Git-Verlauf enthält %d unlesbare Datensätze", malformed),
+		}}
 	}
 	return result
 }
@@ -704,10 +720,13 @@ func collectStatsCommitsWithGit(state *State, since string, run gitRunner) stats
 		}(project)
 	}
 
+	hasPartial := false
 	for range repositories {
 		result := <-results
 		if result.State == HistorySourceAvailable {
 			collection.Coverage.AvailableRepositories++
+		} else if result.State == HistorySourcePartial {
+			hasPartial = true
 		}
 		if previous, ok := collection.ProjectStates[result.Project]; ok {
 			collection.ProjectStates[result.Project] = mergeStatsCommitStates(previous, result.State)
@@ -727,11 +746,11 @@ func collectStatsCommitsWithGit(state *State, since string, run gitRunner) stats
 		collection.Coverage.Problems = append(collection.Coverage.Problems, result.Problems...)
 	}
 
-	switch collection.Coverage.AvailableRepositories {
-	case 0:
-		collection.Coverage.State = HistorySourceUnavailable
-	case collection.Coverage.Repositories:
+	switch {
+	case collection.Coverage.AvailableRepositories == collection.Coverage.Repositories:
 		collection.Coverage.State = HistorySourceAvailable
+	case collection.Coverage.AvailableRepositories == 0 && !hasPartial:
+		collection.Coverage.State = HistorySourceUnavailable
 	default:
 		collection.Coverage.State = HistorySourcePartial
 	}

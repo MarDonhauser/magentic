@@ -151,7 +151,7 @@ export function createHandoffCoordinator({
       }
       state = idleState(feedback(
         'success',
-        `Kontext von „${sourceSnapshot.name}“ an „${targetSnapshot.name}“ übergeben`,
+        `Aufbereitungsauftrag von „${sourceSnapshot.name}“ an „${targetSnapshot.name}“ zugestellt`,
         { source: sourceSnapshot, target: targetSnapshot },
       ));
       emit();
@@ -205,7 +205,7 @@ function statusPresentation(state, count) {
       active: true,
       busy: true,
       tone: '',
-      message: `${state.source?.name || 'Quelle'} → ${state.target?.name || 'Ziel'} wird übergeben …`,
+      message: `${state.source?.name || 'Quelle'} → ${state.target?.name || 'Ziel'} wird zugestellt …`,
     };
   }
   if (state.kind === 'armed') {
@@ -337,10 +337,11 @@ export function createHydraHandoff({
       else button.removeAttribute('aria-keyshortcuts');
       if (status?.id) button.setAttribute('aria-describedby', status.id);
       else button.removeAttribute('aria-describedby');
-      button.removeAttribute('aria-disabled');
+      if (unavailable || busy) button.setAttribute('aria-disabled', 'true');
+      else button.removeAttribute('aria-disabled');
 
       if (busy) {
-        const running = `${state.source?.name || 'Quelle'} → ${state.target?.name || 'Ziel'} wird übergeben`;
+        const running = `${state.source?.name || 'Quelle'} → ${state.target?.name || 'Ziel'} wird zugestellt`;
         button.setAttribute('aria-label', id === targetId ? running : `${name}: ${running}`);
         button.title = running;
       } else if (!sourceId) {
@@ -444,7 +445,8 @@ export function createHydraHandoff({
 
     event.preventDefault();
     drag.ghost.style.transform = `translate3d(${event.clientX + 12}px, ${event.clientY + 12}px, 0)`;
-    const wrap = doc.elementFromPoint(event.clientX, event.clientY)?.closest?.('#hydra-grid .term-wrap');
+    const candidate = doc.elementFromPoint(event.clientX, event.clientY)?.closest?.('.term-wrap');
+    const wrap = candidate && root.contains(candidate) ? candidate : null;
     const nextId = wrap?.dataset.sessionId || '';
     const validId = nextId && !coordinator.targetReason(drag.sourceId, nextId) ? nextId : '';
     if (validId !== drag.overId) {
@@ -472,11 +474,15 @@ export function createHydraHandoff({
 
   function onPointerCancelled(event) {
     if (!drag || (event?.pointerId != null && event.pointerId !== drag.pointerId)) return;
-    const wasActive = drag.active;
+    const completedDrag = drag;
+    const wasActive = completedDrag.active;
+    const restore = sourceTrigger || completedDrag.pointerTarget;
     cleanupPointer();
     if (wasActive) {
       suppressSyntheticClick();
-      render();
+      sourceTrigger = null;
+      coordinator.cancel();
+      if (restore?.isConnected) restore.focus();
     }
   }
 

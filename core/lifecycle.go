@@ -836,6 +836,19 @@ func (l *SessionLifecycle) advanceRunning(ctx context.Context, record LifecycleR
 	} else if state.Agents[idx].ID != record.Session.ID {
 		return l.failRecord(ctx, record, fmt.Errorf("Session name %q belongs to another SessionID", record.Session.Name))
 	} else {
+		registered := state.Agents[idx]
+		if record.Applied.BaselineKnown && registered.BaseCommit == "" {
+			// Resume can be the first operation to inspect a legacy Session's
+			// repository. Merge that newly known baseline into the latest
+			// Registry record before Reopen returns the registered Session to
+			// the lifecycle ledger. Otherwise the old Registry record would
+			// overwrite the captured baseline below.
+			registered.BaseCommit = record.Session.BaseCommit
+			registered.BaseDirty = append([]string(nil), record.Session.BaseDirty...)
+			if _, err = l.registry.Change(ctx, ReplaceSession(registered)); err != nil {
+				return l.failRecord(ctx, record, err)
+			}
+		}
 		// Running is a durable Registry intent as well as a runtime
 		// postcondition. Reopening through the semantic Interface clears
 		// LaterAt idempotently; merely observing the existing record would leave

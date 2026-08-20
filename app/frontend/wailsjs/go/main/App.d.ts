@@ -77,8 +77,6 @@ export function ReorderProjects(arg1:Array<string>):Promise<void>;
 
 export function ResizeTerm(arg1:string,arg2:number,arg3:number):Promise<void>;
 
-export function RevealPath(arg1:string):Promise<void>;
-
 export function SaveImage(arg1:string):Promise<string>;
 
 export function SearchTranscripts(arg1:string):Promise<main.SearchResult>;
