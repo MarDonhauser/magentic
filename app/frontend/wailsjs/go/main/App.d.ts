@@ -51,7 +51,9 @@ export function MarkSeen(arg1:string):Promise<void>;
 
 export function Merge(arg1:string,arg2:string,arg3:string):Promise<string>;
 
-export function NewDockSession(arg1:string):Promise<string>;
+export function MigrateDockSessions(arg1:Array<string>):Promise<Array<main.DockSessionRef>>;
+
+export function NewDockSession(arg1:string):Promise<main.DockSessionRef>;
 
 export function NewSession(arg1:string,arg2:boolean,arg3:string):Promise<string>;
 
@@ -64,8 +66,6 @@ export function OpenTerm(arg1:string,arg2:string,arg3:number,arg4:number):Promis
 export function Overview(arg1:boolean):Promise<core.Overview>;
 
 export function PickFolder():Promise<string>;
-
-export function Projects():Promise<Array<string>>;
 
 export function RemoveProject(arg1:string):Promise<void>;
 

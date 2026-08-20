@@ -689,7 +689,7 @@ func startSkillAgent(st *State, projectID ProjectID, dir, prompt, kind, nameHint
 			return "", fmt.Errorf("Verzeichnis gehört nicht zu ProjectID %q", projectID)
 		}
 	}
-	name := PickAgentName(st, nameHint)
+	name := registrySessionNameCandidate(st, nameHint)
 	purpose := SessionPurposeWork
 	switch kind {
 	case "cleanup":
@@ -969,12 +969,12 @@ func pickSessionName(st *State, name, hint, kind string) (string, error) {
 		if kind == KindTerm || kind == KindDock {
 			hint = "term " + hint
 		}
-		name = PickAgentName(st, hint)
+		name = registrySessionNameCandidate(st, hint)
 	} else {
 		name = SanitizeName(name)
 	}
-	if name == "" || st.HasAgent(name) || TmuxHasSession(SessionName(name)) {
-		return "", fmt.Errorf("Name %q ist ungültig oder schon vergeben", name)
+	if name == "" {
+		return "", fmt.Errorf("Name %q ist ungültig", name)
 	}
 	return name, nil
 }

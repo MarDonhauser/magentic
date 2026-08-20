@@ -98,6 +98,10 @@ export function Merge(arg1, arg2, arg3) {
   return window['go']['main']['App']['Merge'](arg1, arg2, arg3);
 }
 
+export function MigrateDockSessions(arg1) {
+  return window['go']['main']['App']['MigrateDockSessions'](arg1);
+}
+
 export function NewDockSession(arg1) {
   return window['go']['main']['App']['NewDockSession'](arg1);
 }
@@ -124,10 +128,6 @@ export function Overview(arg1) {
 
 export function PickFolder() {
   return window['go']['main']['App']['PickFolder']();
-}
-
-export function Projects() {
-  return window['go']['main']['App']['Projects']();
 }
 
 export function RemoveProject(arg1) {

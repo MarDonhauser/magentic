@@ -928,19 +928,6 @@ func (m model) createAgent(worktree bool, name, kind string) (tea.Model, tea.Cmd
 		m.setFlash(fmt.Sprintf("ProjectID %q existiert nicht mehr", m.pendingProject), true)
 		return m, nil
 	}
-	if name == "" {
-		hint := proj.Name
-		if kind == KindTerm {
-			hint = "term " + proj.Name
-		}
-		name = PickAgentName(m.state, hint)
-	} else {
-		name = sanitizeName(name)
-	}
-	if name == "" || m.state.HasAgent(name) || TmuxHasSession(tmuxSessionName(name)) {
-		m.setFlash(fmt.Sprintf("Name %q ist ungültig oder schon vergeben", name), true)
-		return m, nil
-	}
 	var (
 		created string
 		err     error

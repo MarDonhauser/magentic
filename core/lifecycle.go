@@ -149,6 +149,59 @@ type lifecycleRuntime interface {
 	DeliverInitial(context.Context, Session, string) (bool, error)
 }
 
+// exactLifecycleRuntime is the mandatory internal Adapter at the runtime
+// Seam. Durable RuntimeNames are opaque identities: no Lifecycle path may use
+// Session.TmuxName's legacy fallback or normalize malformed stored state before
+// addressing an external process.
+type exactLifecycleRuntime struct {
+	delegate lifecycleRuntime
+}
+
+func (r exactLifecycleRuntime) validate(session Session) error {
+	if !validRuntimeIdentity(session.RuntimeName) {
+		return fmt.Errorf("Session %q has no exact RuntimeName", session.Name)
+	}
+	return nil
+}
+
+func (r exactLifecycleRuntime) Exists(ctx context.Context, session Session) (bool, error) {
+	if err := r.validate(session); err != nil {
+		return false, err
+	}
+	return r.delegate.Exists(ctx, session)
+}
+
+func (r exactLifecycleRuntime) Start(ctx context.Context, session Session, mode string) error {
+	if err := r.validate(session); err != nil {
+		return err
+	}
+	return r.delegate.Start(ctx, session, mode)
+}
+
+func (r exactLifecycleRuntime) Stop(ctx context.Context, session Session) error {
+	if err := r.validate(session); err != nil {
+		return err
+	}
+	return r.delegate.Stop(ctx, session)
+}
+
+func (r exactLifecycleRuntime) Rename(ctx context.Context, session Session, targetRuntime string) error {
+	if err := r.validate(session); err != nil {
+		return err
+	}
+	if !validRuntimeIdentity(targetRuntime) {
+		return fmt.Errorf("Session %q has no exact target RuntimeName", session.Name)
+	}
+	return r.delegate.Rename(ctx, session, targetRuntime)
+}
+
+func (r exactLifecycleRuntime) DeliverInitial(ctx context.Context, session Session, prompt string) (bool, error) {
+	if err := r.validate(session); err != nil {
+		return false, err
+	}
+	return r.delegate.DeliverInitial(ctx, session, prompt)
+}
+
 type lifecycleRepositories interface {
 	Change(context.Context, ManagedWorktreeChange) (ManagedWorktreeChangeResult, error)
 	Inspect(context.Context, RepositoryInspectRequest) (RepositoryInspection, error)
@@ -160,6 +213,7 @@ type SessionLifecycle struct {
 	repositories lifecycleRepositories
 	projects     projectTransitionCoordinator
 	worktrees    worktreeTransitionCoordinator
+	runtimes     runtimeTransitionCoordinator
 	observe      func(context.Context, []Session) ObservationSnapshot
 	discover     func(context.Context, *State) RegistryDiscovery
 	ledgerPath   string
@@ -181,14 +235,16 @@ func OpenSessionLifecycle(config SessionLifecycleConfig) *SessionLifecycle {
 	)
 	lifecycle.worktrees = newWorktreeTransitionCoordinator(config.RegistryPath)
 	lifecycle.projects = newProjectTransitionCoordinator(config.RegistryPath)
+	lifecycle.runtimes = newRuntimeTransitionCoordinator(config.RegistryPath)
 	return lifecycle
 }
 
 func newSessionLifecycle(registry lifecycleRegistry, runtime lifecycleRuntime, repositories lifecycleRepositories, ledgerPath string) *SessionLifecycle {
 	return &SessionLifecycle{
-		registry: registry, runtime: runtime, repositories: repositories,
+		registry: registry, runtime: exactLifecycleRuntime{delegate: runtime}, repositories: repositories,
 		projects: newProjectTransitionCoordinator(ledgerPath), worktrees: newWorktreeTransitionCoordinator(ledgerPath),
-		observe: Observe, discover: DiscoverNew,
+		runtimes: newRuntimeTransitionCoordinator(ledgerPath),
+		observe:  Observe, discover: DiscoverNew,
 		ledgerPath: ledgerPath, now: time.Now,
 	}
 }
@@ -304,8 +360,9 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 		target, managed := l.provisionWorktreeTarget(freshProject, request, freshSession)
 		run := func() error {
 			return l.withSessionTransition(ctx, session.ID, session.Name, func() error {
-				// Re-resolve under Project -> Worktree -> Session coordination,
-				// immediately before the durable intent and external side effects.
+				// Re-resolve under Project -> Worktree -> Session coordination.
+				// The RuntimeName lock below then covers the final availability
+				// revalidation through runtime and Registry convergence.
 				resolved, resolveErr := l.resolveProject(ctx, request.ProjectID)
 				if resolveErr != nil {
 					return resolveErr
@@ -324,12 +381,17 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 				record.Project = resolved
 				record.Session = freshSession
 				advanced = record
-				if _, putErr := l.putRecord(ctx, record, false); putErr != nil {
-					return putErr
-				}
-				var advanceErr error
-				advanced, advanceErr = l.advanceRunning(ctx, record)
-				return advanceErr
+				return l.runtimes.with(ctx, []string{freshSession.RuntimeName}, func() error {
+					if availabilityErr := l.requireProvisionTargetAvailable(ctx, freshSession); availabilityErr != nil {
+						return availabilityErr
+					}
+					if _, putErr := l.putRecord(ctx, record, false); putErr != nil {
+						return putErr
+					}
+					var advanceErr error
+					advanced, advanceErr = l.advanceRunning(ctx, record)
+					return advanceErr
+				})
 			})
 		}
 		if managed {
@@ -362,6 +424,38 @@ func (l *SessionLifecycle) provisionWorktreeTarget(project Project, request Sess
 		return managedWorktreeTarget(project, session.Name)
 	}
 	return managedWorktreeForDirectory(project, session.Dir)
+}
+
+// requireProvisionTargetAvailable is the single authority for a new Session's
+// display-name and RuntimeName availability. Callers may suggest a friendly
+// name from a Registry snapshot, but only this fail-closed probe runs under the
+// Lifecycle transition locks immediately before the durable intent and every
+// Worktree, runtime, or Registry mutation.
+func (l *SessionLifecycle) requireProvisionTargetAvailable(ctx context.Context, candidate Session) error {
+	if !validRuntimeIdentity(candidate.RuntimeName) {
+		return fmt.Errorf("RuntimeName %q is not an exact runtime identity", candidate.RuntimeName)
+	}
+	snapshot, err := l.registry.Snapshot(ctx)
+	if err != nil {
+		return fmt.Errorf("verify Session provisioning target in Registry: %w", err)
+	}
+	state := snapshot.State()
+	for _, registered := range state.Agents {
+		if registered.Name == candidate.Name {
+			return fmt.Errorf("Session %q already exists", candidate.Name)
+		}
+		if registered.RuntimeName == candidate.RuntimeName {
+			return fmt.Errorf("RuntimeName %q is already registered", candidate.RuntimeName)
+		}
+	}
+	exists, err := l.runtime.Exists(ctx, candidate)
+	if err != nil {
+		return fmt.Errorf("RuntimeName %q availability is unavailable: %w", candidate.RuntimeName, err)
+	}
+	if exists {
+		return fmt.Errorf("RuntimeName %q is already occupied", candidate.RuntimeName)
+	}
+	return nil
 }
 
 func (l *SessionLifecycle) Park(ctx context.Context, id SessionID, name string) (SessionLifecycleResult, error) {
@@ -552,8 +646,10 @@ func (l *SessionLifecycle) Rename(ctx context.Context, id SessionID, name, newNa
 			}
 			if ok && latest.TransitionKind == LifecycleTransitionRename && latest.RenameTo == newName {
 				if latest.Phase != LifecycleConverged {
-					advanced, readErr = l.advanceRename(ctx, latest)
-					return readErr
+					return l.withRecordRuntimeTransition(ctx, latest, func() error {
+						advanced, readErr = l.advanceRename(ctx, latest)
+						return readErr
+					})
 				}
 				advanced = latest
 				return nil
@@ -578,11 +674,13 @@ func (l *SessionLifecycle) Rename(ctx context.Context, id SessionID, name, newNa
 			Applied:        LifecycleAppliedState{WorktreeReady: true},
 			CreatedAt:      now, UpdatedAt: now,
 		}
-		if _, putErr := l.putRecord(ctx, record, false); putErr != nil {
-			return putErr
-		}
-		advanced, snapshotErr = l.advanceRename(ctx, record)
-		return snapshotErr
+		return l.withRecordRuntimeTransition(ctx, record, func() error {
+			if _, putErr := l.putRecord(ctx, record, false); putErr != nil {
+				return putErr
+			}
+			advanced, snapshotErr = l.advanceRename(ctx, record)
+			return snapshotErr
+		})
 	})
 	return SessionLifecycleResult{Session: advanced.Session, Record: advanced}, err
 }
@@ -665,7 +763,10 @@ func (l *SessionLifecycle) settleCrossedRename(ctx context.Context, id SessionID
 	if !latest.MayHaveApplied && !latest.Applied.RuntimeRenameSettled {
 		return nil
 	}
-	_, err = l.advanceRename(ctx, latest)
+	err = l.withRecordRuntimeTransition(ctx, latest, func() error {
+		_, advanceErr := l.advanceRename(ctx, latest)
+		return advanceErr
+	})
 	if err != nil {
 		return fmt.Errorf("finish pending Session rename: %w", err)
 	}
@@ -675,6 +776,20 @@ func (l *SessionLifecycle) settleCrossedRename(ctx context.Context, id SessionID
 // planSessionLocked persists intent before calling either external
 // Implementation. The caller must hold this Session's transition lock.
 func (l *SessionLifecycle) planSessionLocked(ctx context.Context, state State, session Session, desired SessionDesiredState) (LifecycleRecord, error) {
+	record, err := l.newStateTransitionRecord(state, session, desired)
+	if err != nil {
+		return record, err
+	}
+	advanced := record
+	err = l.withRecordRuntimeTransition(ctx, record, func() error {
+		var advanceErr error
+		advanced, advanceErr = l.persistAndAdvanceStateTransition(ctx, record)
+		return advanceErr
+	})
+	return advanced, err
+}
+
+func (l *SessionLifecycle) newStateTransitionRecord(state State, session Session, desired SessionDesiredState) (LifecycleRecord, error) {
 	now := l.now()
 	record := LifecycleRecord{
 		TransitionID: NewUUID(), SessionID: session.ID, Desired: desired,
@@ -695,17 +810,29 @@ func (l *SessionLifecycle) planSessionLocked(ctx context.Context, state State, s
 		record.Session.ProjectID = project.ID
 		record.Session.Project = project.Name
 	}
+	return record, nil
+}
+
+// persistAndAdvanceStateTransition requires both the Session and RuntimeName
+// transition locks. Keeping the Registry decision, durable intent, runtime
+// crossing, and Registry convergence under one RuntimeName lock prevents a
+// different Project from adopting the same external process.
+func (l *SessionLifecycle) persistAndAdvanceStateTransition(ctx context.Context, record LifecycleRecord) (LifecycleRecord, error) {
 	if _, err := l.putRecord(ctx, record, false); err != nil {
 		return record, err
 	}
-	var advanced LifecycleRecord
-	var err error
-	if desired == SessionDesiredRunning {
-		advanced, err = l.advanceRunning(ctx, record)
-	} else {
-		advanced, err = l.advanceStopped(ctx, record)
+	if record.Desired == SessionDesiredRunning {
+		return l.advanceRunning(ctx, record)
 	}
-	return advanced, err
+	return l.advanceStopped(ctx, record)
+}
+
+func (l *SessionLifecycle) withRecordRuntimeTransition(ctx context.Context, record LifecycleRecord, fn func() error) error {
+	runtimeNames := []string{record.Session.RuntimeName}
+	if record.TransitionKind == LifecycleTransitionRename {
+		runtimeNames = append(runtimeNames, record.RenameRuntimeTo)
+	}
+	return l.runtimes.with(ctx, runtimeNames, fn)
 }
 
 func lifecycleProjectForSession(state State, session Session) (Project, error) {
@@ -831,15 +958,17 @@ func (l *SessionLifecycle) advanceSerialized(ctx context.Context, expected Lifec
 				advanced = latest
 				return nil
 			}
-			var advanceErr error
-			if latest.TransitionKind == LifecycleTransitionRename {
-				advanced, advanceErr = l.advanceRename(ctx, latest)
-			} else if latest.Desired == SessionDesiredRunning {
-				advanced, advanceErr = l.advanceRunning(ctx, latest)
-			} else {
-				advanced, advanceErr = l.advanceStopped(ctx, latest)
-			}
-			return advanceErr
+			return l.withRecordRuntimeTransition(ctx, latest, func() error {
+				var advanceErr error
+				if latest.TransitionKind == LifecycleTransitionRename {
+					advanced, advanceErr = l.advanceRename(ctx, latest)
+				} else if latest.Desired == SessionDesiredRunning {
+					advanced, advanceErr = l.advanceRunning(ctx, latest)
+				} else {
+					advanced, advanceErr = l.advanceStopped(ctx, latest)
+				}
+				return advanceErr
+			})
 		})
 	}
 	var err error
@@ -885,33 +1014,54 @@ func (l *SessionLifecycle) reconcileRegisteredSession(ctx context.Context, id Se
 				return nil
 			}
 			session := state.Agents[idx]
-			exists, observeErr := l.runtime.Exists(ctx, session)
-			if observeErr != nil {
-				return observeErr
-			}
-			desired := SessionDesiredRunning
-			if !session.LaterAt.IsZero() {
-				desired = SessionDesiredLater
-			}
-			latest, hasRecord, readErr := l.recordForSession(ctx, session.ID)
-			if readErr != nil {
-				return readErr
-			}
-			if hasRecord && latest.Phase != LifecycleConverged {
-				// The exact partial intent was already attempted in the first pass.
+			return l.runtimes.with(ctx, []string{session.RuntimeName}, func() error {
+				// Registry identity is revalidated after waiting for RuntimeName
+				// coordination so the observation and any repair share one fact.
+				freshSnapshot, freshErr := l.registry.Snapshot(ctx)
+				if freshErr != nil {
+					return freshErr
+				}
+				freshState := freshSnapshot.State()
+				freshIndex := sessionIndex(&freshState, id, name)
+				if freshIndex < 0 {
+					return nil
+				}
+				freshSession := freshState.Agents[freshIndex]
+				if freshSession.RuntimeName != session.RuntimeName {
+					return errors.New("Session RuntimeName changed during Lifecycle reconciliation")
+				}
+				exists, observeErr := l.runtime.Exists(ctx, freshSession)
+				if observeErr != nil {
+					return observeErr
+				}
+				desired := SessionDesiredRunning
+				if !freshSession.LaterAt.IsZero() {
+					desired = SessionDesiredLater
+				}
+				latest, hasRecord, readErr := l.recordForSession(ctx, freshSession.ID)
+				if readErr != nil {
+					return readErr
+				}
+				if hasRecord && latest.Phase != LifecycleConverged {
+					// The exact partial intent was already attempted in the first pass.
+					return nil
+				}
+				consistent := (desired == SessionDesiredRunning && exists) || (desired == SessionDesiredLater && !exists)
+				if consistent {
+					return nil
+				}
+				examined = true
+				record, recordErr := l.newStateTransitionRecord(freshState, freshSession, desired)
+				if recordErr != nil {
+					return recordErr
+				}
+				advanced, advanceErr := l.persistAndAdvanceStateTransition(ctx, record)
+				if advanceErr != nil {
+					return advanceErr
+				}
+				restored = advanced.Desired == SessionDesiredRunning && advanced.Applied.RuntimePresent
 				return nil
-			}
-			consistent := (desired == SessionDesiredRunning && exists) || (desired == SessionDesiredLater && !exists)
-			if consistent {
-				return nil
-			}
-			examined = true
-			advanced, advanceErr := l.planSessionLocked(ctx, state, session, desired)
-			if advanceErr != nil {
-				return advanceErr
-			}
-			restored = advanced.Desired == SessionDesiredRunning && advanced.Applied.RuntimePresent
-			return nil
+			})
 		})
 	}
 	err = l.withRunningWorktreeTransition(ctx, project, initialSession, false, run)

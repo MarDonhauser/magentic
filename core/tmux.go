@@ -29,11 +29,6 @@ func Tmux(args ...string) (string, error) {
 	return string(out), err
 }
 
-func TmuxHasSession(session string) bool {
-	err := exec.Command("tmux", "has-session", "-t", TargetSession(session)).Run()
-	return err == nil
-}
-
 // Ohne Maus-Modus ist die tmux-Historie aus xterm.js unerreichbar, und die
 // xterm-Selektion überlebt Claudes ständige Redraws nicht. Mit Maus übernimmt
 // tmux beides: Rad scrollt in den Copy-Mode, Auswahl landet beim Loslassen

@@ -263,7 +263,7 @@ func observeWithRunner(ctx context.Context, sessions []Session, runner observati
 			Worktree:     session.Worktree,
 			Occupancy:    OccupancyUnknown,
 		}
-		runtimeNames[i] = session.TmuxName()
+		runtimeNames[i] = session.RuntimeName
 	}
 	idCounts := make(map[SessionID]int, len(sessions))
 	runtimeCounts := make(map[string]int, len(sessions))

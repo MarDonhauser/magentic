@@ -83,17 +83,21 @@ func SessionNameHint(dir, fallback string) string {
 	return branch
 }
 
-func PickAgentName(s *State, hint string) string {
+// registrySessionNameCandidate suggests a display name that is not present in
+// the caller's Registry snapshot. It deliberately makes no claim about the
+// external RuntimeName: SessionLifecycle.Provision owns that authoritative,
+// fail-closed availability decision immediately before side effects.
+func registrySessionNameCandidate(s *State, hint string) string {
 	base := Slugify(hint)
 	if base == "" {
 		base = "session"
 	}
-	if !s.HasAgent(base) && !TmuxHasSession(SessionName(base)) {
+	if !s.HasAgent(base) {
 		return base
 	}
 	for i := 2; ; i++ {
 		candidate := fmt.Sprintf("%s-%d", base, i)
-		if !s.HasAgent(candidate) && !TmuxHasSession(SessionName(candidate)) {
+		if !s.HasAgent(candidate) {
 			return candidate
 		}
 	}

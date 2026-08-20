@@ -89,16 +89,24 @@ func (f *fakeLifecycleRuntime) DeliverInitial(_ context.Context, _ Session, _ st
 
 type fakeLifecycleRepositories struct {
 	worktreePath string
+	changeCalls  *int
+	inspectCalls *int
 }
 
 func (f fakeLifecycleRepositories) Change(_ context.Context, change ManagedWorktreeChange) (ManagedWorktreeChangeResult, error) {
+	if f.changeCalls != nil {
+		*f.changeCalls++
+	}
 	return ManagedWorktreeChangeResult{
 		Kind: change.Kind, Project: change.Project.Name, Path: f.worktreePath,
 		Branch: "agent/" + change.Name, State: RepositoryKnown, Changed: true,
 	}, nil
 }
 
-func (fakeLifecycleRepositories) Inspect(_ context.Context, request RepositoryInspectRequest) (RepositoryInspection, error) {
+func (f fakeLifecycleRepositories) Inspect(_ context.Context, request RepositoryInspectRequest) (RepositoryInspection, error) {
+	if f.inspectCalls != nil {
+		*f.inspectCalls++
+	}
 	return RepositoryInspection{
 		Directory: request.Directory, Presence: RepositoryKnown,
 		Baseline: repositoryKnownFact(RepositoryBaseline{Directory: request.Directory, Head: "abc123"}),
@@ -146,6 +154,139 @@ func registerLifecycleSession(t *testing.T, registry *Registry, runtime *fakeLif
 		runtime.runtimeNames[registered.RuntimeName] = true
 	}
 	return *registered
+}
+
+func TestLifecycleProvisionRequiresKnownFreeExactRuntimeBeforeSideEffects(t *testing.T) {
+	tests := []struct {
+		name      string
+		collision bool
+		probeErr  error
+	}{
+		{name: "occupied RuntimeName", collision: true},
+		{name: "unavailable probe", probeErr: errors.New("tmux socket unavailable")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			lifecycle, runtime, registry, ledgerPath := lifecycleHarness(t)
+			project := registerLifecycleProject(t, registry)
+			before, err := registry.Snapshot(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			changeCalls := 0
+			inspectCalls := 0
+			lifecycle.repositories = fakeLifecycleRepositories{
+				worktreePath: filepath.Join(filepath.Dir(ledgerPath), "project-agents", "hera"),
+				changeCalls:  &changeCalls, inspectCalls: &inspectCalls,
+			}
+			startCalls := 0
+			runtime.onStart = func(Session) { startCalls++ }
+			runtime.existsErr = test.probeErr
+			if test.collision {
+				runtime.runtimeNames[SessionName("hera")] = true
+			}
+
+			_, err = lifecycle.Provision(context.Background(), SessionProvision{
+				ProjectID: project.ID, Name: "hera", CreateWorktree: true,
+			})
+			if err == nil {
+				t.Fatal("Provision accepted a RuntimeName without known availability")
+			}
+			if len(runtime.existsCalls) != 1 || runtime.existsCalls[0] != SessionName("hera") {
+				t.Fatalf("availability probes = %q, want exact candidate %q", runtime.existsCalls, SessionName("hera"))
+			}
+			if changeCalls != 0 || inspectCalls != 0 || startCalls != 0 {
+				t.Fatalf("failed availability crossed an Adapter: repository change=%d inspect=%d runtime start=%d", changeCalls, inspectCalls, startCalls)
+			}
+			after, snapshotErr := registry.Snapshot(context.Background())
+			if snapshotErr != nil {
+				t.Fatal(snapshotErr)
+			}
+			if after.Revision() != before.Revision() || len(after.State().Agents) != 0 {
+				t.Fatalf("failed availability mutated Registry revision %d -> %d: %#v", before.Revision(), after.Revision(), after.State().Agents)
+			}
+			if _, statErr := os.Stat(ledgerPath); !os.IsNotExist(statErr) {
+				t.Fatalf("failed availability wrote Lifecycle intent: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestLifecycleRuntimeSeamRejectsMalformedIdentityBeforeDelegate(t *testing.T) {
+	lifecycle, runtime, _, _ := lifecycleHarness(t)
+	malformed := Session{ID: "malformed", Name: "source", RuntimeName: " mgt-source"}
+	startCalls := 0
+	stopCalls := 0
+	runtime.onStart = func(Session) { startCalls++ }
+	runtime.onStop = func(Session) { stopCalls++ }
+
+	if _, err := lifecycle.runtime.Exists(context.Background(), malformed); err == nil {
+		t.Fatal("Exists accepted a malformed RuntimeName")
+	}
+	if err := lifecycle.runtime.Start(context.Background(), malformed, "new"); err == nil {
+		t.Fatal("Start accepted a malformed RuntimeName")
+	}
+	if err := lifecycle.runtime.Stop(context.Background(), malformed); err == nil {
+		t.Fatal("Stop accepted a malformed RuntimeName")
+	}
+	if err := lifecycle.runtime.Rename(context.Background(), malformed, "mgt-target"); err == nil {
+		t.Fatal("Rename accepted a malformed RuntimeName")
+	}
+	if _, err := lifecycle.runtime.DeliverInitial(context.Background(), malformed, "prompt"); err == nil {
+		t.Fatal("DeliverInitial accepted a malformed RuntimeName")
+	}
+	if len(runtime.existsCalls) != 0 || startCalls != 0 || stopCalls != 0 || runtime.renameCalls != 0 || runtime.deliverCalls != 0 {
+		t.Fatalf("malformed RuntimeName crossed delegate: exists=%q start=%d stop=%d rename=%d deliver=%d",
+			runtime.existsCalls, startCalls, stopCalls, runtime.renameCalls, runtime.deliverCalls)
+	}
+}
+
+func TestLifecycleReconcileDoesNotReconstructMalformedRegisteredRuntime(t *testing.T) {
+	lifecycle, runtime, registry, _ := lifecycleHarness(t)
+	registered := registerLifecycleSession(t, registry, runtime, Session{
+		ID: "malformed-registered", Name: "source", RuntimeName: " mgt-source",
+	}, false)
+	runtime.runtimeNames[SessionName(registered.Name)] = true
+
+	result, err := lifecycle.Reconcile(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Problems) != 1 {
+		t.Fatalf("Reconcile problems = %#v, want malformed RuntimeName", result.Problems)
+	}
+	if len(runtime.existsCalls) != 0 || !runtime.runtimeNames[SessionName(registered.Name)] {
+		t.Fatalf("Reconcile addressed trim-equivalent foreign runtime: calls=%q runtimes=%#v", runtime.existsCalls, runtime.runtimeNames)
+	}
+}
+
+func TestLifecycleLedgerDoesNotReconstructEmptyRuntime(t *testing.T) {
+	lifecycle, runtime, _, _ := lifecycleHarness(t)
+	foreignRuntime := SessionName("source")
+	runtime.runtimeNames[foreignRuntime] = true
+	now := time.Now().UTC()
+	record := LifecycleRecord{
+		TransitionID: "malformed-ledger", SessionID: "malformed-ledger",
+		Desired: SessionDesiredLater, Phase: LifecyclePlanned,
+		Session:        Session{ID: "malformed-ledger", Name: "source", RuntimeName: "", Dir: "/workspace/project"},
+		PromptDelivery: InitialPromptNotRequested,
+		Applied:        LifecycleAppliedState{WorktreeReady: true},
+		CreatedAt:      now, UpdatedAt: now,
+	}
+	if _, err := lifecycle.putRecord(context.Background(), record, false); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := lifecycle.Reconcile(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Problems) != 1 {
+		t.Fatalf("Reconcile problems = %#v, want empty RuntimeName", result.Problems)
+	}
+	if len(runtime.existsCalls) != 0 || !runtime.runtimeNames[foreignRuntime] {
+		t.Fatalf("ledger fallback addressed foreign runtime: calls=%q runtimes=%#v", runtime.existsCalls, runtime.runtimeNames)
+	}
 }
 
 type responseLostLifecycleRegistry struct {

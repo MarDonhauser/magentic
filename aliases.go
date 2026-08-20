@@ -30,11 +30,9 @@ const (
 var (
 	sessionPrefix = core.SessionPrefix
 
-	tmux            = core.Tmux
-	tmuxSessionName = core.SessionName
-	targetSession   = core.TargetSession
-	targetPane      = core.TargetPane
-	TmuxHasSession  = core.TmuxHasSession
+	tmux          = core.Tmux
+	targetSession = core.TargetSession
+	targetPane    = core.TargetPane
 
 	LoadState       = core.LoadState
 	StatePath       = core.StatePath
@@ -49,8 +47,7 @@ var (
 	backgroundShellCount = core.BackgroundShellCount
 	shellDetail          = core.ShellDetail
 
-	CachedUsage   = core.CachedUsage
-	PickAgentName = core.PickAgentName
+	CachedUsage = core.CachedUsage
 
 	zeitgeistInfo   = core.ZeitgeistInfo
 	zeitgeistStart  = core.ZeitgeistStart

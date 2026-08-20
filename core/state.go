@@ -119,10 +119,10 @@ func (a Session) IsDock() bool {
 }
 
 func (a Session) TmuxName() string {
-	if a.RuntimeName != "" {
-		return a.RuntimeName
-	}
-	return SessionName(a.Name)
+	// RuntimeName is an opaque durable identity. Legacy reconstruction belongs
+	// exclusively to Registry migration; process-facing callers must never
+	// derive an address from the mutable display name.
+	return a.RuntimeName
 }
 
 func (a Session) AgentRun(vendor AgentVendor) (AgentRunRef, bool) {

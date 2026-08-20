@@ -33,8 +33,8 @@ func TestOverviewCarriesDetectedAgentTool(t *testing.T) {
 	s := &State{
 		Projects: []Project{{Name: "NAVI", Path: "/work/navi", MainBranch: "main"}},
 		Agents: []Agent{
-			{ID: "term-navi", Name: "term-navi", Project: "NAVI", Dir: "/work/navi", Kind: KindTerm, CreatedAt: time.Now()},
-			{ID: "shell-navi", Name: "shell-navi", Project: "NAVI", Dir: "/work/navi", Kind: KindTerm, CreatedAt: time.Now()},
+			{ID: "term-navi", Name: "term-navi", RuntimeName: "mgt-term-navi", Project: "NAVI", Dir: "/work/navi", Kind: KindTerm, CreatedAt: time.Now()},
+			{ID: "shell-navi", Name: "shell-navi", RuntimeName: "mgt-shell-navi", Project: "NAVI", Dir: "/work/navi", Kind: KindTerm, CreatedAt: time.Now()},
 		},
 	}
 	snapshot := ObservationSnapshot{

@@ -88,3 +88,10 @@ func TestDockIstTerminalAberKeineSitzung(t *testing.T) {
 		t.Error("Claude-Session ist weder Terminal noch Dock")
 	}
 }
+
+func TestSessionRuntimeNameIsNeverReconstructedFromDisplayName(t *testing.T) {
+	session := Session{Name: "display-only"}
+	if got := session.TmuxName(); got != "" {
+		t.Fatalf("TmuxName() reconstructed mutable display identity: %q", got)
+	}
+}

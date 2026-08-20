@@ -126,6 +126,24 @@ func TestObserveMalformedListDoesNotProveMissingSessionAbsent(t *testing.T) {
 	}
 }
 
+func TestObserveDoesNotReconstructMissingRuntimeName(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	runner := &recordingObservationRunner{run: func(_ context.Context, args ...string) (string, error) {
+		t.Fatalf("missing RuntimeName crossed Observation Adapter: %v", args)
+		return "", nil
+	}}
+	got := observeWithRunner(context.Background(), []Session{{
+		ID: "session-1", Name: "display-only", RuntimeName: "",
+	}}, runner, testObservationConfig(now))
+	if len(runner.Calls()) != 0 || got.Availability != ObservationUnavailable || len(got.Problems) != 1 {
+		t.Fatalf("missing RuntimeName was not rejected before probing: %#v calls=%v", got, runner.Calls())
+	}
+	observed := got.Sessions[0]
+	if observed.Presence != SessionPresenceUnknown || observed.Status != StatusUnknown || observed.Attention != AttentionUnknown {
+		t.Fatalf("missing RuntimeName fabricated runtime facts: %#v", observed)
+	}
+}
+
 func TestObserveReturnsPartialResultsWhenOnePaneFails(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	activity := now.Add(-time.Minute).Unix()

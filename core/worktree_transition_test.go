@@ -18,6 +18,8 @@ type transitionTestRuntime struct {
 	startRelease chan struct{}
 	startOnce    sync.Once
 	adapterCalls int
+	startCalls   int
+	started      []Session
 }
 
 func (r *transitionTestRuntime) Exists(context.Context, Session) (bool, error) {
@@ -35,6 +37,8 @@ func (r *transitionTestRuntime) Exists(context.Context, Session) (bool, error) {
 func (r *transitionTestRuntime) Start(ctx context.Context, session Session, _ string) error {
 	r.mu.Lock()
 	r.adapterCalls++
+	r.startCalls++
+	r.started = append(r.started, session)
 	r.mu.Unlock()
 	if r.startEntered != nil {
 		r.startOnce.Do(func() { close(r.startEntered) })
@@ -81,6 +85,12 @@ func (r *transitionTestRuntime) calls() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.adapterCalls
+}
+
+func (r *transitionTestRuntime) starts() (int, []Session) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.startCalls, append([]Session(nil), r.started...)
 }
 
 type transitionTestRepositories struct {
@@ -205,6 +215,93 @@ func TestConcurrentProvisionWinsBeforeManagedWorktreeRemoval(t *testing.T) {
 	}
 	if _, removeCalls, _ := repositories.calls(); removeCalls != 0 {
 		t.Fatalf("git Worktree removal calls = %d, want 0", removeCalls)
+	}
+}
+
+func TestRuntimeNameLockSerializesProvisionAcrossProjects(t *testing.T) {
+	dir := t.TempDir()
+	registryPath := filepath.Join(dir, "state.json")
+	ledgerPath := filepath.Join(dir, "lifecycle.json")
+	registry := OpenRegistry(registryPath)
+	projectA := Project{ID: "project-a", Name: "alpha", Path: filepath.Join(dir, "alpha"), MainBranch: "main"}
+	projectB := Project{ID: "project-b", Name: "beta", Path: filepath.Join(dir, "beta"), MainBranch: "main"}
+	for _, project := range []Project{projectA, projectB} {
+		if _, err := registry.Change(context.Background(), RegisterProject(project)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	targetA, _ := managedWorktreeTarget(projectA, "topic")
+	repositories := &transitionTestRepositories{target: targetA}
+	runtime := &transitionTestRuntime{
+		present: make(map[SessionID]bool), startEntered: make(chan struct{}), startRelease: make(chan struct{}),
+	}
+	lifecycleA := newSessionLifecycle(registry, runtime, repositories, ledgerPath)
+	lifecycleB := newSessionLifecycle(registry, runtime, repositories, ledgerPath)
+	var acquisitions atomic.Int32
+	secondQueued := make(chan struct{})
+	hook := func(runtimeName string) {
+		if runtimeName != SessionName("topic") {
+			t.Errorf("RuntimeName lock used %q, want %q", runtimeName, SessionName("topic"))
+		}
+		if acquisitions.Add(1) == 2 {
+			close(secondQueued)
+		}
+	}
+	lifecycleA.runtimes.beforeAcquire = hook
+	lifecycleB.runtimes.beforeAcquire = hook
+
+	type provisionOutcome struct {
+		result SessionLifecycleResult
+		err    error
+	}
+	firstDone := make(chan provisionOutcome, 1)
+	go func() {
+		result, err := lifecycleA.Provision(context.Background(), SessionProvision{
+			ProjectID: projectA.ID, Name: "topic", CreateWorktree: true,
+		})
+		firstDone <- provisionOutcome{result: result, err: err}
+	}()
+	<-runtime.startEntered
+
+	secondDone := make(chan provisionOutcome, 1)
+	go func() {
+		result, err := lifecycleB.Provision(context.Background(), SessionProvision{
+			ProjectID: projectB.ID, Name: "topic", CreateWorktree: true,
+		})
+		secondDone <- provisionOutcome{result: result, err: err}
+	}()
+	<-secondQueued
+	if create, _, inspect := repositories.calls(); create != 1 || inspect != 1 {
+		t.Fatalf("losing Project crossed repository Adapter while RuntimeName was locked: create=%d inspect=%d", create, inspect)
+	}
+	if starts, _ := runtime.starts(); starts != 1 {
+		t.Fatalf("runtime starts while second Provision was queued = %d, want 1", starts)
+	}
+
+	close(runtime.startRelease)
+	first := <-firstDone
+	second := <-secondDone
+	if first.err != nil {
+		t.Fatalf("first Provision() error = %v", first.err)
+	}
+	if second.err == nil {
+		t.Fatal("second Project adopted an already-claimed RuntimeName")
+	}
+	if create, _, inspect := repositories.calls(); create != 1 || inspect != 1 {
+		t.Fatalf("external provisioning paths = create:%d inspect:%d, want exactly one", create, inspect)
+	}
+	starts, started := runtime.starts()
+	if starts != 1 || len(started) != 1 || started[0].ProjectID != projectA.ID || started[0].Dir != targetA {
+		t.Fatalf("runtime start was not coherent with winning Project: starts=%d %#v", starts, started)
+	}
+	snapshot, err := registry.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := snapshot.State()
+	if len(state.Agents) != 1 || state.Agents[0].ID != first.result.Session.ID ||
+		state.Agents[0].ProjectID != projectA.ID || state.Agents[0].RuntimeName != SessionName("topic") || state.Agents[0].Dir != targetA {
+		t.Fatalf("Registry winner is incoherent: %#v", state.Agents)
 	}
 }
 

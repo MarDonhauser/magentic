@@ -71,8 +71,8 @@ func resolveHandoffSource(session Session, observed SessionObservation) (resolve
 	if session.ID == "" {
 		return resolvedHandoffSource{}, fmt.Errorf("Quell-Session %q besitzt keine stabile SessionID", session.Name)
 	}
-	if strings.TrimSpace(session.TmuxName()) == "" {
-		return resolvedHandoffSource{}, fmt.Errorf("Quell-Session %q besitzt keinen RuntimeName", session.Name)
+	if !validRuntimeIdentity(session.RuntimeName) {
+		return resolvedHandoffSource{}, fmt.Errorf("Quell-Session %q besitzt keinen exakten RuntimeName", session.Name)
 	}
 
 	if observed.Availability != ObservationUnavailable && observed.Presence == SessionPresencePresent {
@@ -226,8 +226,8 @@ func validateHandoffTarget(session Session, observed SessionObservation) (string
 	if session.ID == "" {
 		return "", false, fmt.Errorf("Ziel-Session %q besitzt keine stabile SessionID", session.Name)
 	}
-	if strings.TrimSpace(session.TmuxName()) == "" {
-		return "", false, fmt.Errorf("Ziel-Session %q besitzt keinen RuntimeName", session.Name)
+	if !validRuntimeIdentity(session.RuntimeName) {
+		return "", false, fmt.Errorf("Ziel-Session %q besitzt keinen exakten RuntimeName", session.Name)
 	}
 	if observed.Availability != ObservationAvailable {
 		return "", false, fmt.Errorf("Observation der Ziel-Session %q ist nicht vollständig verfügbar", session.Name)
