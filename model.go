@@ -628,16 +628,15 @@ func (m model) sendSkillToSelected(cmd string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) startSkillSession(p *Project, cmd string) (tea.Model, tea.Cmd) {
-	name := PickAgentName(m.state, cmd+" "+p.Name)
-	session := tmuxSessionName(name)
-	if err := TmuxNewClaudeSession(session, p.Path, ""); err != nil {
-		m.setFlash("tmux: "+err.Error(), true)
+	kind := ""
+	if strings.TrimSpace(cmd) == "/deploy" {
+		kind = "deploy"
+	}
+	name, err := startSkillAgent(m.state, p.Path, cmd, kind, cmd+" "+p.Name)
+	if err != nil {
+		m.setFlash(err.Error(), true)
 		return m, nil
 	}
-	baseCommit, baseDirty := CaptureBaseline(p.Path)
-	m.state.AddAgent(Agent{Name: name, Project: p.Name, Dir: p.Path, CreatedAt: time.Now(), BaseCommit: baseCommit, BaseDirty: baseDirty})
-	m.state.Save()
-	go sendPromptWhenReady(session, cmd, true)
 	m.collapsed[p.Name] = false
 	m.selectAgent(name)
 	m.setFlash(fmt.Sprintf("Session %q gestartet — %s wird getippt", name, strings.TrimSpace(cmd)), false)
@@ -754,28 +753,20 @@ func (m model) createAgent(worktree bool, name, kind string) (tea.Model, tea.Cmd
 		m.setFlash(fmt.Sprintf("Name %q ist ungültig oder schon vergeben", name), true)
 		return m, nil
 	}
-	dir := proj.Path
-	if worktree {
-		wt, err := CreateWorktree(proj.Path, name)
-		if err != nil {
-			m.setFlash(err.Error(), true)
-			return m, nil
-		}
-		dir = wt
-	}
-	var err error
+	var (
+		created string
+		err     error
+	)
 	if kind == KindTerm {
-		err = TmuxNewShellSession(tmuxSessionName(name), dir)
+		created, err = createTermSession(m.state, proj.Name, worktree, name)
 	} else {
-		err = TmuxNewClaudeSession(tmuxSessionName(name), dir, "")
+		created, err = createAgentSession(m.state, proj.Name, worktree, name)
 	}
 	if err != nil {
-		m.setFlash("tmux: "+err.Error(), true)
+		m.setFlash(err.Error(), true)
 		return m, nil
 	}
-	baseCommit, baseDirty := CaptureBaseline(dir)
-	m.state.AddAgent(Agent{Name: name, Project: proj.Name, Dir: dir, Worktree: worktree, Kind: kind, CreatedAt: time.Now(), BaseCommit: baseCommit, BaseDirty: baseDirty})
-	m.state.Save()
+	name = created
 	m.collapsed[proj.Name] = false
 	m.selectAgent(name)
 	label := "Session"
@@ -811,8 +802,12 @@ func (m model) addProject(path string) (tea.Model, tea.Cmd) {
 		m.setFlash(fmt.Sprintf("Projekt %q existiert schon", name), true)
 		return m, nil
 	}
-	m.state.Projects = append(m.state.Projects, Project{Name: name, Path: path})
-	m.state.Save()
+	changed, err := OpenRegistry(StatePath()).Change(context.Background(), RegisterProject(Project{Name: name, Path: path}))
+	if err != nil {
+		m.setFlash(err.Error(), true)
+		return m, nil
+	}
+	m.state = changed.Snapshot.MutableState()
 	for i, r := range m.rows() {
 		if r.kind == rowProject && r.project != nil && r.project.Name == name {
 			m.cursor = i
@@ -838,8 +833,19 @@ func (m model) renameAgent(newName string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
-	m.state.RenameAgent(m.renameFrom, newName)
-	m.state.Save()
+	session := m.state.AgentByName(m.renameFrom)
+	if session == nil {
+		m.setFlash("Session nicht gefunden", true)
+		return m, nil
+	}
+	changed, err := OpenRegistry(StatePath()).Change(context.Background(), RenameRegisteredSession(session.ID, session.Name, newName))
+	if err != nil {
+		// The external rename may already have applied. Keep that explicit to
+		// the user; a later Registry retry is safer than silently reverting it.
+		m.setFlash("Registry nach tmux rename: "+err.Error(), true)
+		return m, nil
+	}
+	m.state = changed.Snapshot.MutableState()
 	delete(m.poll.statuses, m.renameFrom)
 	m.setFlash(fmt.Sprintf("%s → %s", m.renameFrom, newName), false)
 	return m, m.pollNow()
@@ -856,16 +862,14 @@ func (m model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if a == nil {
 			return m, nil
 		}
-		sn := tmuxSessionName(a.Name)
-		if TmuxHasSession(sn) {
-			TmuxKillSession(sn)
-		}
 		note := ""
 		if a.Worktree {
 			note = " — Worktree bleibt unter " + shortPath(a.Dir)
 		}
-		m.state.RemoveAgent(a.Name)
-		m.state.Save()
+		if err := removeSession(m.state, a.Name); err != nil {
+			m.setFlash(err.Error(), true)
+			return m, nil
+		}
 		delete(m.poll.statuses, a.Name)
 		m.ensureSelectable()
 		m.setFlash(fmt.Sprintf("Agent %q beendet%s", a.Name, note), false)
@@ -885,14 +889,12 @@ func (m model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setFlash("Projekt hat noch Agents — erst alle beenden (x)", true)
 			return m, nil
 		}
-		out := m.state.Projects[:0]
-		for _, pr := range m.state.Projects {
-			if pr.Name != p.Name {
-				out = append(out, pr)
-			}
+		changed, err := OpenRegistry(StatePath()).Change(context.Background(), RemoveProject(p.ID, p.Name))
+		if err != nil {
+			m.setFlash(err.Error(), true)
+			return m, nil
 		}
-		m.state.Projects = out
-		m.state.Save()
+		m.state = changed.Snapshot.MutableState()
 		m.ensureSelectable()
 		m.setFlash(fmt.Sprintf("Projekt %q entfernt (Dateien bleiben unberührt)", p.Name), false)
 		return m, m.pollNow()

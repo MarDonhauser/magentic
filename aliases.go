@@ -46,13 +46,13 @@ var (
 	TmuxPaneInfos        = core.TmuxPaneInfos
 	TmuxListSessions     = core.TmuxListSessions
 
-	LoadState = core.LoadState
-	StatePath = core.StatePath
-	OpenRegistry = core.OpenRegistry
-	RegisterProject = core.RegisterProject
-	RemoveProject = core.RemoveProject
+	LoadState               = core.LoadState
+	StatePath               = core.StatePath
+	OpenRegistry            = core.OpenRegistry
+	RegisterProject         = core.RegisterProject
+	RemoveProject           = core.RemoveProject
 	RenameRegisteredSession = core.RenameRegisteredSession
-	AddDiscoveredSessions = core.AddDiscoveredSessions
+	AddDiscoveredSessions   = core.AddDiscoveredSessions
 
 	CollectStatuses      = core.CollectStatuses
 	DetectClaudeStatus   = core.DetectClaudeStatus

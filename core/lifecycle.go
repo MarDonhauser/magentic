@@ -500,6 +500,9 @@ func (l *SessionLifecycle) advanceRunning(ctx context.Context, record LifecycleR
 			return record, err
 		}
 		confirmed, deliverErr := l.runtime.DeliverInitial(ctx, record.Session, record.InitialPrompt)
+		// The prompt is no longer actionable after crossing the delivery Seam.
+		// Retain only the outcome, not durable prompt content.
+		record.InitialPrompt = ""
 		if deliverErr != nil {
 			record.PromptDelivery = InitialPromptFailed
 			return l.failRecord(ctx, record, deliverErr)
@@ -608,6 +611,7 @@ func (l *SessionLifecycle) putRecord(ctx context.Context, record LifecycleRecord
 		}
 		record.UpdatedAt = l.now()
 		ledger.Records[key] = record
+		compactLifecycleLedger(ledger)
 		ledger.Revision++
 		if err := writeLifecycleLedger(l.ledgerPath, ledger); err != nil {
 			return err
@@ -616,6 +620,28 @@ func (l *SessionLifecycle) putRecord(ctx context.Context, record LifecycleRecord
 		return nil
 	})
 	return saved, err
+}
+
+const maxConvergedRemovedLifecycleRecords = 256
+
+func compactLifecycleLedger(ledger *lifecycleLedger) {
+	type removedRecord struct {
+		key string
+		at  time.Time
+	}
+	var removed []removedRecord
+	for key, record := range ledger.Records {
+		if record.Desired == SessionDesiredRemoved && record.Phase == LifecycleConverged {
+			removed = append(removed, removedRecord{key: key, at: record.UpdatedAt})
+		}
+	}
+	if len(removed) <= maxConvergedRemovedLifecycleRecords {
+		return
+	}
+	sort.Slice(removed, func(i, j int) bool { return removed[i].at.Before(removed[j].at) })
+	for _, old := range removed[:len(removed)-maxConvergedRemovedLifecycleRecords] {
+		delete(ledger.Records, old.key)
+	}
 }
 
 const lifecycleLedgerVersion = 1

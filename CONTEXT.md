@@ -17,6 +17,10 @@ _Avoid_: Project name, Project path
 A Git working directory associated with a Project and available as a Session's place of work.
 _Avoid_: Branch, checkout, folder
 
+**RepositoryKnowledge**:
+The known, unknown, or inapplicable result of observing Git facts for a Project or Worktree.
+_Avoid_: Empty value, false, clean
+
 ## Sessions
 
 **Session**:
@@ -51,6 +55,24 @@ _Avoid_: SessionKind, SessionPresentation, mode
 A time-bounded account of an external Session runtime's availability, activity, content, and attention needs.
 _Avoid_: Status, Registry state
 
+**LifecycleTransition**:
+A uniquely identified durable intent to move a Session toward a desired state, together with the applied progress needed to reconcile it.
+_Avoid_: Event, log entry, command
+
+**DesiredState**:
+The durable outcome sought for a Session independently of the currently observed runtime state.
+_Avoid_: Observation, phase, action
+
+## Work History
+
+**WorkHistory**:
+The normalized local history of developer and coding-agent activity across supported agent vendors.
+_Avoid_: Transcript, statistics cache, quota
+
+**HistoryEvent**:
+A provider-neutral prompt, output, or usage fact attributed to a Project and Session when that association is known.
+_Avoid_: Raw envelope, transcript line, message blob
+
 ## Specifications
 
 **Specification**:
@@ -60,3 +82,7 @@ _Avoid_: Change, Board item, card
 **SpecificationRef**:
 A Project- and source-qualified reference to a Specification using that source's native identity.
 _Avoid_: Specification path, title, bare ID
+
+**SpecificationState**:
+The source-derived position of a Specification as backlog, active, review, or terminally done.
+_Avoid_: Task completion percentage, Board column guess

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,94 +28,132 @@ func TestExtractURLs(t *testing.T) {
 	}
 }
 
-func TestScanCodexPrompts(t *testing.T) {
-	tmp := t.TempDir()
-	path := filepath.Join(tmp, "rollout.jsonl")
-	data := "" +
-		`{"type":"session_meta","timestamp":"2026-08-20T08:00:00Z","payload":{"cwd":"/work/reqpilot","session_id":"codex-1"}}` + "\n" +
-		`{"type":"response_item","timestamp":"2026-08-20T08:01:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions\\n\\n<INSTRUCTIONS>…</INSTRUCTIONS>"},{"type":"input_text","text":"<environment_context>…</environment_context>"}]}}` + "\n" +
-		`{"type":"response_item","timestamp":"2026-08-20T08:02:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<image name=x>"},{"type":"input_text","text":"</image>"},{"type":"input_text","text":"[Image #1] Bitte Codex ergänzen"}]}}` + "\n" +
-		`{"type":"event_msg","timestamp":"2026-08-20T08:02:00Z","payload":{"type":"user_message","message":"[Image #1] Bitte Codex ergänzen"}}` + "\n"
-	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
-		t.Fatal(err)
+func TestTimelineUsesNormalizedWorkHistoryForAllProviders(t *testing.T) {
+	home, codexHome, projectPath, statePath := configureHistoryAppTest(t)
+	state := core.State{
+		Projects: []core.Project{{ID: core.ProjectID("project-id"), Name: "Stable project", Path: projectPath}},
+		Agents: []core.Session{
+			{ID: core.SessionID("claude-session"), Name: "Claude agent", ProjectID: core.ProjectID("project-id"), Project: "stale", Dir: projectPath, AgentRuns: []core.AgentRunRef{{Vendor: core.AgentVendorClaude, ExternalID: "claude-run"}}},
+			{ID: core.SessionID("codex-session"), Name: "Codex agent", ProjectID: core.ProjectID("project-id"), Project: "stale", Dir: projectPath, AgentRuns: []core.AgentRunRef{{Vendor: core.AgentVendorCodex, ExternalID: "codex-run"}}},
+			{ID: core.SessionID("gemini-session"), Name: "Gemini agent", ProjectID: core.ProjectID("project-id"), Project: "stale", Dir: projectPath, AgentRuns: []core.AgentRunRef{{Vendor: core.AgentVendorGemini, ExternalID: "gemini-run"}}},
+			{ID: core.SessionID("copilot-session"), Name: "Copilot agent", ProjectID: core.ProjectID("project-id"), Project: "stale", Dir: projectPath, AgentRuns: []core.AgentRunRef{{Vendor: core.AgentVendorCopilot, ExternalID: "copilot-run"}}},
+		},
 	}
-	ctx := newTimelineContext(&core.State{
-		Projects: []core.Project{{Name: "ReqPilot", Path: "/work/reqpilot"}},
-		Agents:   []core.Agent{{Name: "codex-agent", Project: "ReqPilot", Dir: "/work/reqpilot", SessionID: "codex-1"}},
-	})
-	got := scanCodexPrompts(path, ctx, time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC))
-	if len(got) != 1 {
-		t.Fatalf("got %d entries, want 1: %#v", len(got), got)
-	}
-	if got[0].Source != timelineSourceCodex || got[0].Project != "ReqPilot" || got[0].Agent != "codex-agent" || got[0].Text != "Bitte Codex ergänzen" {
-		t.Fatalf("unexpected entry: %#v", got[0])
-	}
-}
+	writeAppState(t, statePath, state)
 
-func TestScanGeminiPrompts(t *testing.T) {
-	root := t.TempDir()
-	projectDir := filepath.Join(root, sha256Path("/work/gemini-project"), "chats")
-	if err := os.MkdirAll(projectDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(projectDir, "session-test.json")
-	data := `{"sessionId":"gemini-1","messages":[` +
-		`{"type":"user","timestamp":"2026-08-20T09:00:00Z","content":"Gemini-Aufgabe"},` +
-		`{"type":"gemini","timestamp":"2026-08-20T09:00:01Z","content":"Antwort"}]}`
-	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	ctx := newTimelineContext(&core.State{Projects: []core.Project{{Name: "Gemini-Projekt", Path: "/work/gemini-project"}}})
-	got := scanGeminiPrompts(path, root, ctx, time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC))
-	if len(got) != 1 || got[0].Source != timelineSourceGemini || got[0].Project != "Gemini-Projekt" || got[0].Text != "Gemini-Aufgabe" {
-		t.Fatalf("unexpected entries: %#v", got)
-	}
-}
-
-func TestScanCopilotPromptsSkipsChildAgents(t *testing.T) {
-	sessionDir := filepath.Join(t.TempDir(), "copilot-1")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "workspace.yaml"), []byte("cwd: /work/copilot-project\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	data := "" +
-		`{"type":"user.message","timestamp":"2026-08-20T10:00:00Z","data":{"content":"Subagent-Auftrag","parentAgentTaskId":"child-1"}}` + "\n" +
-		`{"type":"user.message","timestamp":"2026-08-20T10:01:00Z","data":{"content":"","transformedContent":"Copilot-Aufgabe\n<system_reminder>interne Hinweise</system_reminder>"}}` + "\n"
-	path := filepath.Join(sessionDir, "events.jsonl")
-	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	ctx := newTimelineContext(&core.State{Projects: []core.Project{{Name: "Copilot-Projekt", Path: "/work/copilot-project"}}})
-	got := scanCopilotPrompts(path, ctx, time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC))
-	if len(got) != 1 || got[0].Source != timelineSourceCopilot || got[0].Project != "Copilot-Projekt" || got[0].Text != "Copilot-Aufgabe" {
-		t.Fatalf("unexpected entries: %#v", got)
-	}
-}
-
-func TestTimelineCollectsConfiguredCodexHome(t *testing.T) {
-	home := t.TempDir()
-	codexHome := filepath.Join(home, "custom-codex")
-	sessionDir := filepath.Join(codexHome, "sessions", "recent")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	now := time.Now().UTC()
-	data := `{"type":"session_meta","timestamp":"` + now.Add(-time.Minute).Format(time.RFC3339Nano) + `","payload":{"cwd":"/work/codex"}}` + "\n" +
-		`{"type":"event_msg","timestamp":"` + now.Format(time.RFC3339Nano) + `","payload":{"type":"user_message","message":"Prompt aus Codex"}}` + "\n"
-	if err := os.WriteFile(filepath.Join(sessionDir, "rollout.jsonl"), []byte(data), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", home)
-	t.Setenv("CODEX_HOME", codexHome)
-	t.Setenv("MAGENTIC_STATE", filepath.Join(home, "state.json"))
+	claudeAt := now.Add(-4 * time.Minute).Format(time.RFC3339Nano)
+	codexAt := now.Add(-3 * time.Minute).Format(time.RFC3339Nano)
+	geminiAt := now.Add(-2 * time.Minute).Format(time.RFC3339Nano)
+	copilotAt := now.Add(-time.Minute).Format(time.RFC3339Nano)
+	writeAppFixture(t, filepath.Join(home, ".claude", "projects", "stable", "claude-run.jsonl"), "{malformed}\n"+`{"type":"user","timestamp":"`+claudeAt+`","cwd":"`+projectPath+`","sessionId":"claude-run","message":{"content":"Claude prompt"}}`+"\n")
+	writeAppFixture(t, filepath.Join(codexHome, "sessions", "recent", "codex-run.jsonl"), strings.Join([]string{
+		`{"type":"session_meta","timestamp":"` + codexAt + `","payload":{"id":"codex-run","cwd":"` + projectPath + `"}}`,
+		`{"type":"event_msg","timestamp":"` + codexAt + `","payload":{"type":"user_message","message":"[Image #1] Codex prompt"}}`,
+		`{"type":"response_item","timestamp":"` + codexAt + `","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"[Image #1] Codex prompt"}]}}`,
+	}, "\n")+"\n")
+	writeAppFixture(t, filepath.Join(home, ".gemini", "tmp", "stable", "chats", "session-gemini-run.json"), `{"sessionId":"gemini-run","messages":[{"type":"user","timestamp":"`+geminiAt+`","content":"Gemini prompt"}]}`)
+	copilotDir := filepath.Join(home, ".copilot", "session-state", "copilot-run")
+	writeAppFixture(t, filepath.Join(copilotDir, "workspace.yaml"), "cwd: "+projectPath+"\n")
+	writeAppFixture(t, filepath.Join(copilotDir, "events.jsonl"), strings.Join([]string{
+		`{"id":"child","type":"user.message","timestamp":"` + copilotAt + `","data":{"content":"delegated prompt","parentAgentTaskId":"child-run"}}`,
+		`{"id":"primary","type":"user.message","timestamp":"` + copilotAt + `","data":{"content":"Copilot prompt"}}`,
+	}, "\n")+"\n")
 
 	got, err := (&App{}).Timeline()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Source != timelineSourceCodex || got[0].Text != "Prompt aus Codex" {
-		t.Fatalf("unexpected entries: %#v", got)
+	if len(got) != 4 {
+		t.Fatalf("Timeline entries = %d, want four normalized primary prompts: %#v", len(got), got)
+	}
+	bySource := map[string]TimelineEntry{}
+	for _, entry := range got {
+		bySource[entry.Source] = entry
+		if entry.Project != "Stable project" {
+			t.Fatalf("Timeline used stale name/path inference: %#v", entry)
+		}
+	}
+	want := map[string]struct{ agent, text string }{
+		timelineSourceClaude:  {"Claude agent", "Claude prompt"},
+		timelineSourceCodex:   {"Codex agent", "Codex prompt"},
+		timelineSourceGemini:  {"Gemini agent", "Gemini prompt"},
+		timelineSourceCopilot: {"Copilot agent", "Copilot prompt"},
+	}
+	for source, expected := range want {
+		entry, ok := bySource[source]
+		if !ok || entry.Agent != expected.agent || entry.Text != expected.text {
+			t.Fatalf("%s entry = %#v", source, entry)
+		}
+	}
+	if strings.Contains(strings.Join([]string{got[0].Text, got[1].Text, got[2].Text, got[3].Text}, "|"), "delegated") {
+		t.Fatalf("Timeline included delegated coding-agent work: %#v", got)
+	}
+}
+
+func TestStoredLinksAndSearchUseWorkHistory(t *testing.T) {
+	home, _, projectPath, statePath := configureHistoryAppTest(t)
+	state := core.State{
+		Projects: []core.Project{{ID: core.ProjectID("project-id"), Name: "Search project", Path: projectPath}},
+		Agents: []core.Session{{
+			ID: core.SessionID("session-id"), Name: "history-cutover-test-session", ProjectID: core.ProjectID("project-id"), Project: "stale", Dir: projectPath,
+			AgentRuns: []core.AgentRunRef{{Vendor: core.AgentVendorClaude, ExternalID: "claude-run"}},
+		}},
+	}
+	writeAppState(t, statePath, state)
+	now := time.Now().UTC()
+	writeAppFixture(t, filepath.Join(home, ".claude", "projects", "stable", "claude-run.jsonl"), strings.Join([]string{
+		`{"type":"user","timestamp":"` + now.Add(-time.Minute).Format(time.RFC3339Nano) + `","cwd":"` + projectPath + `","sessionId":"claude-run","message":{"content":"find this normalized phrase"}}`,
+		`{"type":"assistant","timestamp":"` + now.Format(time.RFC3339Nano) + `","cwd":"` + projectPath + `","sessionId":"claude-run","message":{"content":"See https://example.test/result"}}`,
+	}, "\n")+"\n")
+
+	hits, err := (&App{}).SearchTranscripts("normalized phrase")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || hits[0].Project != "Search project" || hits[0].Role != "user" || !strings.Contains(hits[0].Full, "normalized phrase") {
+		t.Fatalf("normalized search hits = %#v", hits)
+	}
+	links, err := (&App{}).SessionLinks("history-cutover-test-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(links) != 1 || links[0].URL != "https://example.test/result" || links[0].Time == "" {
+		t.Fatalf("normalized stored links = %#v", links)
+	}
+}
+
+func configureHistoryAppTest(t *testing.T) (home, codexHome, projectPath, statePath string) {
+	t.Helper()
+	root := t.TempDir()
+	home = filepath.Join(root, "home")
+	codexHome = filepath.Join(root, "configured-codex")
+	projectPath = filepath.Join(root, "project")
+	statePath = filepath.Join(root, "config", "state.json")
+	if err := os.MkdirAll(projectPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", codexHome)
+	t.Setenv("MAGENTIC_STATE", statePath)
+	return home, codexHome, projectPath, statePath
+}
+
+func writeAppState(t *testing.T, path string, state core.State) {
+	t.Helper()
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAppFixture(t, path, string(data))
+}
+
+func writeAppFixture(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

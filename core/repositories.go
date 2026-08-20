@@ -83,6 +83,7 @@ type RepositoryWorktree struct {
 }
 
 type RepositoryProjectSurvey struct {
+	ID         ProjectID                            `json:"id"`
 	Name       string                               `json:"name"`
 	Path       string                               `json:"path"`
 	Presence   RepositoryKnowledge                  `json:"presence"`
@@ -249,7 +250,7 @@ func (r *Repositories) Survey(ctx context.Context, projects []Project) (Reposito
 }
 
 func (r *Repositories) surveyProject(ctx context.Context, project Project) (RepositoryProjectSurvey, error) {
-	result := RepositoryProjectSurvey{Name: project.Name, Path: filepath.Clean(project.Path)}
+	result := RepositoryProjectSurvey{ID: project.ID, Name: project.Name, Path: filepath.Clean(project.Path)}
 	topology, err := r.loadTopology(ctx, project.Path)
 	if err != nil {
 		if ctxErr := repositoryContextError(ctx, err); ctxErr != nil {

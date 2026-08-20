@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -559,17 +558,17 @@ func (h *WorkHistory) refresh(ctx context.Context) (*historyIndex, HistoryMeta, 
 	if err := ensurePrivateHistoryDir(h.config.IndexDir); err != nil {
 		return nil, HistoryMeta{}, err
 	}
-	lock, err := os.OpenFile(h.lockPath(), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, HistoryMeta{}, fmt.Errorf("open work history lock: %w", err)
-	}
-	defer lock.Close()
-	_ = os.Chmod(h.lockPath(), 0o600)
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return nil, HistoryMeta{}, fmt.Errorf("lock work history index: %w", err)
-	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck
+	var index *historyIndex
+	var meta HistoryMeta
+	err := withWorkHistoryFileLock(ctx, h.lockPath(), func() error {
+		var refreshErr error
+		index, meta, refreshErr = h.refreshIndex(ctx)
+		return refreshErr
+	})
+	return index, meta, err
+}
 
+func (h *WorkHistory) refreshIndex(ctx context.Context) (*historyIndex, HistoryMeta, error) {
 	index, existed, err := loadHistoryIndex(h.indexPath())
 	if err != nil {
 		return nil, HistoryMeta{}, err
@@ -1229,7 +1228,9 @@ func summarizeHistory(events []HistoryEvent, location *time.Location, meta Histo
 				}{provider: event.Provider, model: model}
 				modelAcc[key] = ma
 			}
-			ma.turns++
+			if event.Kind == HistoryEventOutput {
+				ma.turns++
+			}
 			ma.usage.add(event.Usage)
 		}
 		if event.OccurredAt.State != HistoryFactKnown {

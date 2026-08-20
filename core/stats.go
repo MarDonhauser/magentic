@@ -1,13 +1,8 @@
 package core
 
 import (
-	"bufio"
-	"bytes"
-	"encoding/json"
-	"io/fs"
-	"os"
-	"path/filepath"
-	"runtime"
+	"context"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,12 +36,26 @@ type StatsProject struct {
 
 type StatsModel struct {
 	Model      string  `json:"model"`
+	Source     string  `json:"source,omitempty"`
 	Turns      int     `json:"turns"`
 	Input      int64   `json:"input"`
 	Output     int64   `json:"output"`
 	CacheRead  int64   `json:"cacheRead"`
 	CacheWrite int64   `json:"cacheWrite"`
 	Cost       float64 `json:"cost"`
+}
+
+// StatsProvider exposes source coverage alongside the known activity subtotal.
+// A partial source is therefore distinguishable from a provider with no work.
+type StatsProvider struct {
+	Provider string              `json:"provider"`
+	Source   string              `json:"source"`
+	State    HistorySourceState  `json:"state"`
+	Prompts  int                 `json:"prompts"`
+	Turns    int                 `json:"turns"`
+	Tokens   int64               `json:"tokens"`
+	Usage    HistoryUsageSummary `json:"usage"`
+	Problems []HistoryProblem    `json:"problems,omitempty"`
 }
 
 type StatsTotals struct {
@@ -67,20 +76,19 @@ type StatsTotals struct {
 }
 
 type Stats struct {
-	Range    int            `json:"range"`
-	Days     []StatsDay     `json:"days"`
-	Projects []StatsProject `json:"projects"`
-	Models   []StatsModel   `json:"models"`
-	Heatmap  [][]int        `json:"heatmap"`
-	Hours    []int          `json:"hours"`
-	Totals   StatsTotals    `json:"totals"`
-	Err      string         `json:"err,omitempty"`
+	Range     int             `json:"range"`
+	Days      []StatsDay      `json:"days"`
+	Projects  []StatsProject  `json:"projects"`
+	Models    []StatsModel    `json:"models"`
+	Providers []StatsProvider `json:"providers"`
+	Heatmap   [][]int         `json:"heatmap"`
+	Hours     []int           `json:"hours"`
+	Totals    StatsTotals     `json:"totals"`
+	Err       string          `json:"err,omitempty"`
 }
 
 const (
-	statsDateLayout = "2006-01-02"
-	// 2: Slash-Kommando-Zeilen zählen nicht mehr als Prompt.
-	statsCacheVersion = 2
+	statsDateLayout   = "2006-01-02"
 	statsOtherProject = "sonstige"
 )
 
@@ -107,9 +115,9 @@ const (
 )
 
 func modelPrice(model string) (float64, float64) {
-	for _, p := range modelPrices {
-		if strings.HasPrefix(model, p.prefix) {
-			return p.in, p.out
+	for _, price := range modelPrices {
+		if strings.HasPrefix(model, price.prefix) {
+			return price.in, price.out
 		}
 	}
 	return defaultPriceIn, defaultPriceOut
@@ -125,234 +133,27 @@ func modelCost(model string, input, output, cacheRead, cacheWrite int64) float64
 }
 
 type statsAgg struct {
-	Prompts    int     `json:"p,omitempty"`
-	Turns      int     `json:"t,omitempty"`
-	Input      int64   `json:"i,omitempty"`
-	Output     int64   `json:"o,omitempty"`
-	CacheRead  int64   `json:"r,omitempty"`
-	CacheWrite int64   `json:"w,omitempty"`
-	Cost       float64 `json:"c,omitempty"`
+	Prompts    int
+	Turns      int
+	Input      int64
+	Output     int64
+	CacheRead  int64
+	CacheWrite int64
+	Cost       float64
 }
 
-func (a *statsAgg) add(b *statsAgg) {
-	a.Prompts += b.Prompts
-	a.Turns += b.Turns
-	a.Input += b.Input
-	a.Output += b.Output
-	a.CacheRead += b.CacheRead
-	a.CacheWrite += b.CacheWrite
-	a.Cost += b.Cost
+func (a *statsAgg) add(other statsAgg) {
+	a.Prompts += other.Prompts
+	a.Turns += other.Turns
+	a.Input += other.Input
+	a.Output += other.Output
+	a.CacheRead += other.CacheRead
+	a.CacheWrite += other.CacheWrite
+	a.Cost += other.Cost
 }
 
-func (a *statsAgg) tokens() int64 {
+func (a statsAgg) tokens() int64 {
 	return a.Input + a.Output + a.CacheRead + a.CacheWrite
-}
-
-type statsFileDay struct {
-	Hours    [24]int              `json:"h"`
-	Cwds     map[string]*statsAgg `json:"w,omitempty"`
-	Models   map[string]*statsAgg `json:"m,omitempty"`
-	Sessions map[string][]string  `json:"s,omitempty"`
-}
-
-func (d *statsFileDay) cwd(path string) *statsAgg {
-	if d.Cwds == nil {
-		d.Cwds = map[string]*statsAgg{}
-	}
-	a := d.Cwds[path]
-	if a == nil {
-		a = &statsAgg{}
-		d.Cwds[path] = a
-	}
-	return a
-}
-
-func (d *statsFileDay) model(name string) *statsAgg {
-	if d.Models == nil {
-		d.Models = map[string]*statsAgg{}
-	}
-	a := d.Models[name]
-	if a == nil {
-		a = &statsAgg{}
-		d.Models[name] = a
-	}
-	return a
-}
-
-func (d *statsFileDay) session(cwd, id string) {
-	if id == "" {
-		return
-	}
-	if d.Sessions == nil {
-		d.Sessions = map[string][]string{}
-	}
-	for _, s := range d.Sessions[cwd] {
-		if s == id {
-			return
-		}
-	}
-	d.Sessions[cwd] = append(d.Sessions[cwd], id)
-}
-
-type statsCacheFile struct {
-	ModTime int64                    `json:"mt"`
-	Size    int64                    `json:"size"`
-	Days    map[string]*statsFileDay `json:"days,omitempty"`
-}
-
-type statsCache struct {
-	Version int                        `json:"version"`
-	Files   map[string]*statsCacheFile `json:"files"`
-}
-
-func statsCachePath() string {
-	return filepath.Join(filepath.Dir(StatePath()), "stats-cache.json")
-}
-
-func loadStatsCache() *statsCache {
-	c := &statsCache{Version: statsCacheVersion, Files: map[string]*statsCacheFile{}}
-	data, err := os.ReadFile(statsCachePath())
-	if err != nil {
-		return c
-	}
-	var loaded statsCache
-	if json.Unmarshal(data, &loaded) != nil || loaded.Version != statsCacheVersion || loaded.Files == nil {
-		return c
-	}
-	return &loaded
-}
-
-func saveStatsCache(c *statsCache) {
-	p := statsCachePath()
-	if os.MkdirAll(filepath.Dir(p), 0o755) != nil {
-		return
-	}
-	data, err := json.Marshal(c)
-	if err != nil {
-		return
-	}
-	tmp := p + ".tmp"
-	if os.WriteFile(tmp, data, 0o644) != nil {
-		return
-	}
-	os.Rename(tmp, p)
-}
-
-type transcriptLine struct {
-	Type          string          `json:"type"`
-	Timestamp     string          `json:"timestamp"`
-	Cwd           string          `json:"cwd"`
-	SessionID     string          `json:"sessionId"`
-	IsMeta        bool            `json:"isMeta"`
-	IsSidechain   bool            `json:"isSidechain"`
-	ToolUseResult json.RawMessage `json:"toolUseResult"`
-	Message       struct {
-		Model string `json:"model"`
-		Usage struct {
-			Input      int64 `json:"input_tokens"`
-			Output     int64 `json:"output_tokens"`
-			CacheWrite int64 `json:"cache_creation_input_tokens"`
-			CacheRead  int64 `json:"cache_read_input_tokens"`
-		} `json:"usage"`
-	} `json:"message"`
-}
-
-var (
-	keyUsage         = []byte(`"usage"`)
-	keyTypeUser      = []byte(`"type":"user"`)
-	keyToolUseResult = []byte(`"toolUseResult"`)
-)
-
-// Claude Code legt ausgeführte Slash-Kommandos und deren Ausgabe als
-// user-Zeilen ab. Das sind keine Prompts — ohne diesen Filter zählt jedes
-// `/model` doppelt und jede Kommandoausgabe als weiterer Prompt.
-var commandNoise = [][]byte{
-	[]byte("<command-name>"),
-	[]byte("<command-message>"),
-	[]byte("<local-command-stdout>"),
-	[]byte("<local-command-stderr>"),
-}
-
-func isCommandNoise(line []byte) bool {
-	for _, m := range commandNoise {
-		if bytes.Contains(line, m) {
-			return true
-		}
-	}
-	return false
-}
-
-func parseTranscriptFile(path string) map[string]*statsFileDay {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-
-	fallbackSession := strings.TrimSuffix(filepath.Base(path), ".jsonl")
-	out := map[string]*statsFileDay{}
-	sc := bufio.NewScanner(f)
-	// Einzelne Transkript-Zeilen enthalten komplette Dateiinhalte und sprengen den Default-Buffer (64 KB).
-	sc.Buffer(make([]byte, 0, 1<<20), 16<<20)
-
-	for sc.Scan() {
-		line := sc.Bytes()
-		if !bytes.Contains(line, keyUsage) {
-			if !bytes.Contains(line, keyTypeUser) || bytes.Contains(line, keyToolUseResult) {
-				continue
-			}
-		}
-		var rec transcriptLine
-		if json.Unmarshal(line, &rec) != nil {
-			continue
-		}
-		u := rec.Message.Usage
-		isTurn := rec.Type == "assistant" && (u.Input|u.Output|u.CacheRead|u.CacheWrite) != 0
-		isPrompt := rec.Type == "user" && !rec.IsMeta && !rec.IsSidechain &&
-			len(rec.ToolUseResult) == 0 && !isCommandNoise(line)
-		if !isTurn && !isPrompt {
-			continue
-		}
-		ts, err := time.Parse(time.RFC3339, rec.Timestamp)
-		if err != nil {
-			continue
-		}
-		local := ts.In(time.Local)
-		key := local.Format(statsDateLayout)
-		day := out[key]
-		if day == nil {
-			day = &statsFileDay{}
-			out[key] = day
-		}
-		session := rec.SessionID
-		if session == "" {
-			session = fallbackSession
-		}
-		day.session(rec.Cwd, session)
-
-		if isPrompt {
-			day.Hours[local.Hour()]++
-			day.cwd(rec.Cwd).Prompts++
-			continue
-		}
-
-		cost := modelCost(rec.Message.Model, u.Input, u.Output, u.CacheRead, u.CacheWrite)
-		turn := statsAgg{
-			Turns:      1,
-			Input:      u.Input,
-			Output:     u.Output,
-			CacheRead:  u.CacheRead,
-			CacheWrite: u.CacheWrite,
-			Cost:       cost,
-		}
-		day.cwd(rec.Cwd).add(&turn)
-		model := rec.Message.Model
-		if model == "" {
-			model = "unbekannt"
-		}
-		day.model(model).add(&turn)
-	}
-	return out
 }
 
 type statsSlot struct {
@@ -360,157 +161,105 @@ type statsSlot struct {
 	sessions map[string]bool
 }
 
-func newStatsSlot() *statsSlot {
-	return &statsSlot{sessions: map[string]bool{}}
-}
+func newStatsSlot() *statsSlot { return &statsSlot{sessions: map[string]bool{}} }
 
 type statsAcc struct {
 	days     map[string]*statsSlot
 	projects map[string]*statsSlot
-	models   map[string]*statsAgg
-	sessions map[string]bool
 	hours    [24]int
 	heatmap  [7][24]int
 }
 
 func newStatsAcc() *statsAcc {
-	return &statsAcc{
-		days:     map[string]*statsSlot{},
-		projects: map[string]*statsSlot{},
-		models:   map[string]*statsAgg{},
-		sessions: map[string]bool{},
-	}
+	return &statsAcc{days: map[string]*statsSlot{}, projects: map[string]*statsSlot{}}
 }
 
-func statsSlotFor(m map[string]*statsSlot, key string) *statsSlot {
-	s := m[key]
-	if s == nil {
-		s = newStatsSlot()
-		m[key] = s
+func statsSlotFor(slots map[string]*statsSlot, key string) *statsSlot {
+	slot := slots[key]
+	if slot == nil {
+		slot = newStatsSlot()
+		slots[key] = slot
 	}
-	return s
+	return slot
 }
 
-func (a *statsAcc) merge(fileDays map[string]*statsFileDay, from, to string, resolve func(string) string) {
-	for date, fd := range fileDays {
-		if date < from || date > to {
-			continue
-		}
-		day := statsSlotFor(a.days, date)
-		weekday := statsWeekdayIndex(date)
-		for h, n := range fd.Hours {
-			if n == 0 {
-				continue
-			}
-			a.hours[h] += n
-			if weekday >= 0 {
-				a.heatmap[weekday][h] += n
-			}
-		}
-		for cwd, agg := range fd.Cwds {
-			day.add(agg)
-			project := statsSlotFor(a.projects, resolve(cwd))
-			project.add(agg)
-			for _, id := range fd.Sessions[cwd] {
-				project.sessions[id] = true
-				day.sessions[id] = true
-				a.sessions[id] = true
-			}
-		}
-		for name, agg := range fd.Models {
-			m := a.models[name]
-			if m == nil {
-				m = &statsAgg{}
-				a.models[name] = m
-			}
-			m.add(agg)
-		}
+func (a *statsAcc) addEvent(event HistoryEvent) {
+	if event.OccurredAt.State != HistoryFactKnown {
+		return
 	}
+	local := event.OccurredAt.Value.In(time.Local)
+	date := local.Format(statsDateLayout)
+	day := statsSlotFor(a.days, date)
+	project := statsEventProject(event)
+	projectSlot := statsSlotFor(a.projects, project)
+	if session := statsEventSession(event); session != "" {
+		day.sessions[session] = true
+		projectSlot.sessions[session] = true
+	}
+
+	var activity statsAgg
+	switch event.Kind {
+	case HistoryEventPrompt:
+		activity.Prompts = 1
+		a.hours[local.Hour()]++
+		weekday := (int(local.Weekday()) + 6) % 7
+		a.heatmap[weekday][local.Hour()]++
+	case HistoryEventOutput:
+		activity.Turns = 1
+		fallthrough
+	case HistoryEventUsage:
+		activity.Input = knownHistoryValue(event.Usage.InputTokens)
+		activity.Output = knownHistoryValue(event.Usage.OutputTokens)
+		activity.CacheRead = knownHistoryValue(event.Usage.CacheReadTokens)
+		activity.CacheWrite = knownHistoryValue(event.Usage.CacheWriteTokens)
+		model := ""
+		if event.Model.State == HistoryFactKnown {
+			model = event.Model.Value
+		}
+		activity.Cost = modelCost(model, activity.Input, activity.Output, activity.CacheRead, activity.CacheWrite)
+	default:
+		return
+	}
+	day.add(activity)
+	projectSlot.add(activity)
+}
+
+func statsEventProject(event HistoryEvent) string {
+	if event.Attribution.ProjectName.State == HistoryFactKnown && event.Attribution.ProjectName.Value != "" {
+		return event.Attribution.ProjectName.Value
+	}
+	return statsOtherProject
+}
+
+func statsEventSession(event HistoryEvent) string {
+	if event.Attribution.SessionKey.State == HistoryFactKnown {
+		return event.Attribution.SessionKey.Value
+	}
+	if event.ConversationID.State == HistoryFactKnown {
+		return string(event.Provider) + "\x00" + event.ConversationID.Value
+	}
+	return ""
+}
+
+func knownHistoryValue(fact HistoryFact[int64]) int64 {
+	if fact.State == HistoryFactKnown {
+		return fact.Value
+	}
+	return 0
 }
 
 func statsWeekdayIndex(date string) int {
-	t, err := time.ParseInLocation(statsDateLayout, date, time.Local)
+	parsed, err := time.ParseInLocation(statsDateLayout, date, time.Local)
 	if err != nil {
 		return -1
 	}
-	return (int(t.Weekday()) + 6) % 7
+	return (int(parsed.Weekday()) + 6) % 7
 }
 
 var statsWeekdayNames = [7]string{"Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"}
 
-func projectResolver(s *State) func(string) string {
-	type entry struct{ path, name string }
-	entries := make([]entry, 0, len(s.Projects))
-	for _, p := range s.Projects {
-		if p.Path == "" {
-			continue
-		}
-		entries = append(entries, entry{filepath.Clean(p.Path), p.Name})
-	}
-	sort.Slice(entries, func(i, j int) bool { return len(entries[i].path) > len(entries[j].path) })
-	cache := map[string]string{}
-	var mu sync.Mutex
-	return func(cwd string) string {
-		if cwd == "" {
-			return ""
-		}
-		mu.Lock()
-		defer mu.Unlock()
-		if name, ok := cache[cwd]; ok {
-			return name
-		}
-		clean := filepath.Clean(cwd)
-		name := ""
-		for _, e := range entries {
-			if clean == e.path || strings.HasPrefix(clean, e.path+string(filepath.Separator)) {
-				name = e.name
-				break
-			}
-		}
-		cache[cwd] = name
-		return name
-	}
-}
-
-type statsFileRef struct {
-	path    string
-	modTime time.Time
-	size    int64
-}
-
-func transcriptFiles() ([]statsFileRef, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-	root := filepath.Join(home, ".claude", "projects")
-	var refs []statsFileRef
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			if path == root {
-				return err
-			}
-			return nil
-		}
-		if d.IsDir() || !strings.HasSuffix(d.Name(), ".jsonl") {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-		refs = append(refs, statsFileRef{path: path, modTime: info.ModTime(), size: info.Size()})
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return refs, nil
-}
-
-// gitIdentity liefert, als wen dieses Repository committet. In geteilten
-// Repositories stammt sonst der Großteil der Commits von anderen und die
-// Statistik zählt fremde Arbeit als eigene mit.
+// gitIdentity returns the identity used by this repository. Without the
+// filter, shared repositories would attribute other people's commits here.
 func gitIdentity(dir string) (email, name string) {
 	if out, err := GitCmd(dir, "config", "user.email"); err == nil {
 		email = strings.ToLower(strings.TrimSpace(out))
@@ -533,18 +282,14 @@ func commitsPerDay(dir, since string) map[string]int {
 		if line == "" {
 			continue
 		}
-		f := strings.Split(line, "\x1f")
-		if len(f) < 3 {
+		fields := strings.Split(line, "\x1f")
+		if len(fields) < 3 || !ownCommit(fields[1], fields[2], email, name) {
 			continue
 		}
-		if !ownCommit(f[1], f[2], email, name) {
-			continue
+		seconds, err := strconv.ParseInt(fields[0], 10, 64)
+		if err == nil {
+			days[time.Unix(seconds, 0).In(time.Local).Format(statsDateLayout)]++
 		}
-		sec, err := strconv.ParseInt(f[0], 10, 64)
-		if err != nil {
-			continue
-		}
-		days[time.Unix(sec, 0).In(time.Local).Format(statsDateLayout)]++
 	}
 	return days
 }
@@ -559,151 +304,76 @@ func ownCommit(commitEmail, commitName, email, name string) bool {
 	return name != "" && strings.EqualFold(strings.TrimSpace(commitName), name)
 }
 
-func BuildStats(s *State, days int) Stats {
+// BuildStats is the compatibility Interface used by the TUI and desktop.
+// WorkHistory owns all coding-agent history semantics; this function combines
+// its normalized facts with the independent Git commit metrics. Quota remains
+// a separate concept and is intentionally not read here.
+func BuildStats(state *State, days int) Stats {
+	history, openErr := OpenWorkHistory(WorkHistoryConfig{})
+	return buildStats(context.Background(), state, days, history, time.Now(), openErr)
+}
+
+func buildStats(ctx context.Context, state *State, days int, history *WorkHistory, now time.Time, historyErr error) Stats {
 	if days <= 0 || days > 365 {
 		days = 30
 	}
-	if s == nil {
+	if state == nil {
 		loaded, err := LoadState()
 		if err != nil || loaded == nil {
 			loaded = &State{}
 		}
-		s = loaded
+		state = loaded
 	}
 
-	st := Stats{Range: days}
-	now := time.Now().In(time.Local)
-	last := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
+	result := Stats{Range: days}
+	localNow := now.In(time.Local)
+	last := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, time.Local)
 	first := last.AddDate(0, 0, -(days - 1))
+	before := last.AddDate(0, 0, 1)
 	fromKey, toKey := first.Format(statsDateLayout), last.Format(statsDateLayout)
 
+	commits := collectStatsCommits(state, fromKey)
+	commitsByDay, commitsByProject := selectStatsCommits(commits, fromKey, toKey)
+
+	var summary HistorySummary
+	var events []HistoryEvent
+	if historyErr == nil && history != nil {
+		query := HistoryEventQuery{Since: first, Before: before}
+		summary, events, historyErr = coherentStatsHistory(ctx, history, HistoryAssociationsFromState(state), query)
+	}
+	if historyErr != nil {
+		result.Err = "Arbeitsverlauf nicht lesbar: " + historyErr.Error()
+	}
+
 	acc := newStatsAcc()
-	resolve := projectResolver(s)
-
-	commits := map[string]map[string]int{}
-	var commitMu sync.Mutex
-	var commitWg sync.WaitGroup
-	for _, p := range s.Projects {
-		if p.Path == "" {
-			continue
-		}
-		commitWg.Add(1)
-		go func(p Project) {
-			defer commitWg.Done()
-			byDay := commitsPerDay(p.Path, fromKey)
-			if len(byDay) == 0 {
-				return
-			}
-			commitMu.Lock()
-			commits[p.Name] = byDay
-			commitMu.Unlock()
-		}(p)
+	for _, event := range events {
+		acc.addEvent(event)
 	}
-
-	refs, err := transcriptFiles()
-	if err != nil {
-		st.Err = "Transkripte nicht lesbar: " + err.Error()
-	}
-
-	cache := loadStatsCache()
-	fresh := &statsCache{Version: statsCacheVersion, Files: make(map[string]*statsCacheFile, len(refs))}
-	var mu sync.Mutex
-
-	jobs := make(chan statsFileRef, 64)
-	var wg sync.WaitGroup
-	workers := runtime.NumCPU()
-	if workers < 1 {
-		workers = 1
-	}
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for ref := range jobs {
-				entry := &statsCacheFile{ModTime: ref.modTime.UnixNano(), Size: ref.size}
-				if old := cache.Files[ref.path]; old != nil && old.ModTime == entry.ModTime && old.Size == ref.size {
-					entry.Days = old.Days
-				} else {
-					entry.Days = parseTranscriptFile(ref.path)
-				}
-				mu.Lock()
-				fresh.Files[ref.path] = entry
-				acc.merge(entry.Days, fromKey, toKey, resolve)
-				mu.Unlock()
-			}
-		}()
-	}
-	for _, ref := range refs {
-		if ref.modTime.Before(first) {
-			if old := cache.Files[ref.path]; old != nil && old.ModTime == ref.modTime.UnixNano() && old.Size == ref.size {
-				mu.Lock()
-				fresh.Files[ref.path] = old
-				mu.Unlock()
-			}
-			continue
-		}
-		jobs <- ref
-	}
-	close(jobs)
-	wg.Wait()
-	saveStatsCache(fresh)
-
-	commitWg.Wait()
-
-	commitsByDay := map[string]int{}
-	commitsByProject := map[string]int{}
-	for name, byDay := range commits {
-		for date, n := range byDay {
-			if date < fromKey || date > toKey {
-				continue
-			}
-			commitsByDay[date] += n
-			commitsByProject[name] += n
-		}
-	}
-
-	active := map[string]int{}
-	for _, a := range s.Agents {
-		active[a.Project]++
-	}
+	active := activeStatsProjects(state)
 
 	var totals StatsTotals
 	busiestScore := [2]int{-1, -1}
 	activeDays := map[string]bool{}
-	for d := first; !d.After(last); d = d.AddDate(0, 0, 1) {
-		key := d.Format(statsDateLayout)
+	for day := first; !day.After(last); day = day.AddDate(0, 0, 1) {
+		key := day.Format(statsDateLayout)
 		slot := acc.days[key]
 		if slot == nil {
 			slot = newStatsSlot()
 		}
-		day := StatsDay{
-			Date:       key,
-			Weekday:    statsWeekdayNames[(int(d.Weekday())+6)%7],
-			Prompts:    slot.Prompts,
-			Turns:      slot.Turns,
-			Input:      slot.Input,
-			Output:     slot.Output,
-			CacheRead:  slot.CacheRead,
-			CacheWrite: slot.CacheWrite,
-			Cost:       slot.Cost,
-			Sessions:   len(slot.sessions),
-			Commits:    commitsByDay[key],
+		item := StatsDay{
+			Date: key, Weekday: statsWeekdayNames[(int(day.Weekday())+6)%7],
+			Prompts: slot.Prompts, Turns: slot.Turns,
+			Input: slot.Input, Output: slot.Output, CacheRead: slot.CacheRead, CacheWrite: slot.CacheWrite,
+			Cost: slot.Cost, Sessions: len(slot.sessions), Commits: commitsByDay[key],
 		}
-		st.Days = append(st.Days, day)
-
-		totals.Prompts += day.Prompts
-		totals.Turns += day.Turns
-		totals.Input += day.Input
-		totals.Output += day.Output
-		totals.CacheRead += day.CacheRead
-		totals.CacheWrite += day.CacheWrite
-		totals.Cost += day.Cost
-		totals.Commits += day.Commits
-		if day.Prompts > 0 || day.Turns > 0 || day.Commits > 0 {
+		result.Days = append(result.Days, item)
+		totals.Cost += item.Cost
+		totals.Commits += item.Commits
+		if item.Prompts > 0 || item.Turns > 0 || item.Commits > 0 {
 			totals.Days++
 			activeDays[key] = true
 		}
-		if score := [2]int{day.Prompts, day.Turns}; score[0] > busiestScore[0] || (score[0] == busiestScore[0] && score[1] > busiestScore[1]) {
+		if score := [2]int{item.Prompts, item.Turns}; score[0] > busiestScore[0] || score[0] == busiestScore[0] && score[1] > busiestScore[1] {
 			busiestScore = score
 			if score[0] > 0 || score[1] > 0 {
 				totals.BusiestDay = key
@@ -711,12 +381,19 @@ func BuildStats(s *State, days int) Stats {
 		}
 	}
 
-	totals.Sessions = len(acc.sessions)
+	// These totals come from WorkHistory.Summarize so every consumer shares
+	// prompt, output, Session, and usage semantics, including explicit unknowns.
+	totals.Prompts = summary.Totals.Prompts
+	totals.Turns = summary.Totals.Outputs
+	totals.Sessions = summary.Totals.Sessions
+	totals.Input = summary.Totals.Usage.InputTokens.Value
+	totals.Output = summary.Totals.Usage.OutputTokens.Value
+	totals.CacheRead = summary.Totals.Usage.CacheReadTokens.Value
+	totals.CacheWrite = summary.Totals.Usage.CacheWriteTokens.Value
 	totals.Tokens = totals.Input + totals.Output + totals.CacheRead + totals.CacheWrite
 	if base := totals.CacheRead + totals.Input + totals.CacheWrite; base > 0 {
 		totals.CacheHit = float64(totals.CacheRead) / float64(base) * 100
 	}
-
 	cursor := last
 	if !activeDays[cursor.Format(statsDateLayout)] {
 		cursor = cursor.AddDate(0, 0, -1)
@@ -725,78 +402,190 @@ func BuildStats(s *State, days int) Stats {
 		totals.Streak++
 		cursor = cursor.AddDate(0, 0, -1)
 	}
-	st.Totals = totals
+	result.Totals = totals
 
+	result.Projects = buildStatsProjects(acc, state, active, commitsByProject)
+	result.Models = buildStatsModels(summary)
+	result.Providers = buildStatsProviders(summary)
+	result.Heatmap = make([][]int, 7)
+	for i := range result.Heatmap {
+		result.Heatmap[i] = append([]int(nil), acc.heatmap[i][:]...)
+	}
+	result.Hours = append([]int(nil), acc.hours[:]...)
+	if result.Projects == nil {
+		result.Projects = []StatsProject{}
+	}
+	if result.Models == nil {
+		result.Models = []StatsModel{}
+	}
+	if result.Providers == nil {
+		result.Providers = []StatsProvider{}
+	}
+	return result
+}
+
+func coherentStatsHistory(ctx context.Context, history *WorkHistory, associations HistoryAssociations, query HistoryEventQuery) (HistorySummary, []HistoryEvent, error) {
+	for attempt := 0; attempt < 3; attempt++ {
+		summary, err := history.Summarize(ctx, associations, HistorySummaryQuery{Events: query, Location: time.Local})
+		if err != nil {
+			return HistorySummary{}, nil, err
+		}
+		events, revision, err := pagedStatsHistory(ctx, history, associations, query)
+		if err != nil {
+			return HistorySummary{}, nil, err
+		}
+		if revision == summary.Meta.Revision {
+			return summary, events, nil
+		}
+	}
+	return HistorySummary{}, nil, fmt.Errorf("work history changed repeatedly while statistics were read")
+}
+
+func pagedStatsHistory(ctx context.Context, history *WorkHistory, associations HistoryAssociations, query HistoryEventQuery) ([]HistoryEvent, uint64, error) {
+	query.Limit = 1000
+	query.Offset = 0
+	var events []HistoryEvent
+	var revision uint64
+	for {
+		page, err := history.Events(ctx, associations, query)
+		if err != nil {
+			return nil, 0, err
+		}
+		if revision == 0 {
+			revision = page.Meta.Revision
+		} else if page.Meta.Revision != revision {
+			return nil, page.Meta.Revision, nil
+		}
+		events = append(events, page.Events...)
+		if len(events) >= page.Total {
+			return events, revision, nil
+		}
+		if len(page.Events) == 0 {
+			return nil, 0, fmt.Errorf("work history pagination made no progress")
+		}
+		query.Offset += len(page.Events)
+	}
+}
+
+func collectStatsCommits(state *State, since string) map[string]map[string]int {
+	commits := map[string]map[string]int{}
+	var mu sync.Mutex
+	var wait sync.WaitGroup
+	for _, project := range state.Projects {
+		if project.Path == "" {
+			continue
+		}
+		wait.Add(1)
+		go func(project Project) {
+			defer wait.Done()
+			byDay := commitsPerDay(project.Path, since)
+			if len(byDay) == 0 {
+				return
+			}
+			mu.Lock()
+			commits[project.Name] = byDay
+			mu.Unlock()
+		}(project)
+	}
+	wait.Wait()
+	return commits
+}
+
+func selectStatsCommits(commits map[string]map[string]int, from, to string) (map[string]int, map[string]int) {
+	byDay, byProject := map[string]int{}, map[string]int{}
+	for project, days := range commits {
+		for date, count := range days {
+			if date >= from && date <= to {
+				byDay[date] += count
+				byProject[project] += count
+			}
+		}
+	}
+	return byDay, byProject
+}
+
+func activeStatsProjects(state *State) map[string]int {
+	active := map[string]int{}
+	for _, session := range state.Agents {
+		name := session.Project
+		if session.ProjectID != "" {
+			if project := state.ProjectByID(session.ProjectID); project != nil {
+				name = project.Name
+			}
+		}
+		active[name]++
+	}
+	return active
+}
+
+func buildStatsProjects(acc *statsAcc, state *State, active, commits map[string]int) []StatsProject {
 	seen := map[string]bool{}
+	var projects []StatsProject
 	for name, slot := range acc.projects {
 		seen[name] = true
-		label := name
-		if label == "" {
-			label = statsOtherProject
-		}
-		st.Projects = append(st.Projects, StatsProject{
-			Name:     label,
-			Tokens:   slot.tokens(),
-			Cost:     slot.Cost,
-			Prompts:  slot.Prompts,
-			Sessions: len(slot.sessions),
-			Commits:  commitsByProject[name],
-			Active:   active[name],
+		projects = append(projects, StatsProject{
+			Name: name, Tokens: slot.tokens(), Cost: slot.Cost, Prompts: slot.Prompts,
+			Sessions: len(slot.sessions), Commits: commits[name], Active: active[name],
 		})
 	}
-	for _, p := range s.Projects {
-		if seen[p.Name] {
+	for _, project := range state.Projects {
+		if seen[project.Name] || commits[project.Name] == 0 && active[project.Name] == 0 {
 			continue
 		}
-		if commitsByProject[p.Name] == 0 && active[p.Name] == 0 {
-			continue
+		projects = append(projects, StatsProject{Name: project.Name, Commits: commits[project.Name], Active: active[project.Name]})
+	}
+	sort.Slice(projects, func(i, j int) bool {
+		if projects[i].Tokens != projects[j].Tokens {
+			return projects[i].Tokens > projects[j].Tokens
 		}
-		seen[p.Name] = true
-		st.Projects = append(st.Projects, StatsProject{
-			Name:    p.Name,
-			Commits: commitsByProject[p.Name],
-			Active:  active[p.Name],
+		return projects[i].Name < projects[j].Name
+	})
+	return projects
+}
+
+func buildStatsModels(summary HistorySummary) []StatsModel {
+	models := make([]StatsModel, 0, len(summary.Models))
+	for _, model := range summary.Models {
+		name := model.Model
+		if name == "unknown" || name == "" {
+			name = "unbekannt"
+		}
+		input := model.Usage.InputTokens.Value
+		output := model.Usage.OutputTokens.Value
+		cacheRead := model.Usage.CacheReadTokens.Value
+		cacheWrite := model.Usage.CacheWriteTokens.Value
+		models = append(models, StatsModel{
+			Model: name, Source: model.Provider.Label(), Turns: model.Turns,
+			Input: input, Output: output, CacheRead: cacheRead, CacheWrite: cacheWrite,
+			Cost: modelCost(name, input, output, cacheRead, cacheWrite),
 		})
 	}
-	sort.Slice(st.Projects, func(i, j int) bool {
-		if st.Projects[i].Tokens != st.Projects[j].Tokens {
-			return st.Projects[i].Tokens > st.Projects[j].Tokens
+	sort.Slice(models, func(i, j int) bool {
+		if models[i].Cost != models[j].Cost {
+			return models[i].Cost > models[j].Cost
 		}
-		return st.Projects[i].Name < st.Projects[j].Name
+		if models[i].Source != models[j].Source {
+			return models[i].Source < models[j].Source
+		}
+		return models[i].Model < models[j].Model
 	})
+	return models
+}
 
-	for name, agg := range acc.models {
-		st.Models = append(st.Models, StatsModel{
-			Model:      name,
-			Turns:      agg.Turns,
-			Input:      agg.Input,
-			Output:     agg.Output,
-			CacheRead:  agg.CacheRead,
-			CacheWrite: agg.CacheWrite,
-			Cost:       agg.Cost,
+func buildStatsProviders(summary HistorySummary) []StatsProvider {
+	problems := map[HistoryProvider][]HistoryProblem{}
+	for _, coverage := range summary.Meta.Coverage {
+		problems[coverage.Provider] = append([]HistoryProblem(nil), coverage.Problems...)
+	}
+	providers := make([]StatsProvider, 0, len(summary.Providers))
+	for _, provider := range summary.Providers {
+		usage := provider.Usage
+		providers = append(providers, StatsProvider{
+			Provider: string(provider.Provider), Source: provider.Provider.Label(), State: provider.State,
+			Prompts: provider.Prompts, Turns: provider.Outputs,
+			Tokens: usage.InputTokens.Value + usage.OutputTokens.Value + usage.CacheReadTokens.Value + usage.CacheWriteTokens.Value,
+			Usage:  usage, Problems: problems[provider.Provider],
 		})
 	}
-	sort.Slice(st.Models, func(i, j int) bool {
-		if st.Models[i].Cost != st.Models[j].Cost {
-			return st.Models[i].Cost > st.Models[j].Cost
-		}
-		return st.Models[i].Model < st.Models[j].Model
-	})
-
-	st.Heatmap = make([][]int, 7)
-	for i := range st.Heatmap {
-		row := make([]int, 24)
-		copy(row, acc.heatmap[i][:])
-		st.Heatmap[i] = row
-	}
-	st.Hours = make([]int, 24)
-	copy(st.Hours, acc.hours[:])
-
-	if st.Projects == nil {
-		st.Projects = []StatsProject{}
-	}
-	if st.Models == nil {
-		st.Models = []StatsModel{}
-	}
-	return st
+	return providers
 }

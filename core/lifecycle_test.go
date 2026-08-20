@@ -118,6 +118,9 @@ func TestLifecyclePersistsIntentBeforeRuntimeAndConverges(t *testing.T) {
 	if result.Record.PromptDelivery != InitialPromptUnknown {
 		t.Fatalf("asynchronous prompt delivery must remain explicit, got %q", result.Record.PromptDelivery)
 	}
+	if result.Record.InitialPrompt != "" {
+		t.Fatal("prompt content must not remain in the durable ledger after delivery was attempted")
+	}
 	if runtime.deliverCalls != 1 {
 		t.Fatalf("initial prompt delivered %d times", runtime.deliverCalls)
 	}

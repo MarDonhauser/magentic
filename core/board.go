@@ -1,12 +1,13 @@
 package core
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
-	"time"
 )
 
 type BoardTask struct {
@@ -31,14 +32,17 @@ type BoardItem struct {
 	Tasks    []BoardTask `json:"tasks,omitempty"`
 	Agents   []string    `json:"agents,omitempty"`
 	Branches []string    `json:"branches,omitempty"`
+	Problems []string    `json:"problems,omitempty"`
 }
 
 type BoardSource struct {
-	Kind     string `json:"kind"`
-	Root     string `json:"root"`
-	Items    int    `json:"items"`
-	Archived int    `json:"archived"`
-	Specs    int    `json:"specs"`
+	Kind         string   `json:"kind"`
+	Root         string   `json:"root"`
+	Items        int      `json:"items"`
+	Archived     int      `json:"archived"`
+	Specs        int      `json:"specs"`
+	Availability string   `json:"availability,omitempty"`
+	Problems     []string `json:"problems,omitempty"`
 }
 
 type Board struct {
@@ -62,59 +66,114 @@ const (
 var taskLineRe = regexp.MustCompile(`^\s*[-*]\s+\[([ xX~/-])\]\s+(.*)$`)
 var sectionRe = regexp.MustCompile(`^#{2,3}\s+(.*)$`)
 
-type specLayout struct {
-	kind    string
-	dir     []string
-	specs   []string
-	archive string
-}
-
-var specLayouts = []specLayout{
-	{kind: "openspec", dir: []string{"openspec", "changes"}, specs: []string{"openspec", "specs"}, archive: "archive"},
-	{kind: "speckit", dir: []string{"specs"}},
-	{kind: "kiro", dir: []string{".kiro", "specs"}},
-	{kind: "agent-os", dir: []string{".agent-os", "specs"}},
-}
-
-func BuildBoard(s *State, projName string) Board {
-	b := Board{Project: projName}
-	proj := s.ProjectByName(projName)
-	if proj == nil {
-		b.Err = "Projekt nicht gefunden"
-		return b
+// BuildBoard is the compatibility Adapter for the current TUI and desktop
+// transport. New callers consume Specifications.Discover and hand its opaque
+// start token to Specifications.ResolveStart before invoking Session Lifecycle.
+func BuildBoard(state *State, projectName string) Board {
+	board := Board{Project: projectName}
+	if state == nil {
+		board.Err = "Projekt nicht gefunden"
+		return board
 	}
-	agents := liveAgentContext(s, projName)
+	project := state.ProjectByName(projectName)
+	if project == nil {
+		board.Err = "Projekt nicht gefunden"
+		return board
+	}
 
-	for _, l := range specLayouts {
-		root := filepath.Join(append([]string{proj.Path}, l.dir...)...)
-		if !isDir(root) {
+	ctx := context.Background()
+	specifications := NewSpecifications()
+	discovery, err := specifications.Discover(ctx, *project, SpecificationQuery{})
+	if err != nil {
+		board.Kind = "none"
+		board.Err = err.Error()
+		return board
+	}
+	agents, repositoryProblems := liveAgentContext(ctx, state, *project)
+	problems := append(formatSpecificationProblems(discovery.Problems), repositoryProblems...)
+
+	itemsBySource := make(map[SpecificationSourceKind]int)
+	for _, specification := range discovery.Specifications {
+		intent, resolveErr := specifications.ResolveStart(ctx, *project, specification.StartToken)
+		if resolveErr != nil {
+			problems = append(problems, fmt.Sprintf("%s/%s: %v", specification.Source, specification.ID, resolveErr))
 			continue
 		}
-		items := collectBoardItems(root, l.kind, agents)
-		if len(items) == 0 {
-			continue
-		}
-		src := BoardSource{Kind: l.kind, Root: root, Items: len(items)}
-		if l.archive != "" {
-			src.Archived = countDirs(filepath.Join(root, l.archive))
-		}
-		if len(l.specs) > 0 {
-			src.Specs = countDirs(filepath.Join(append([]string{proj.Path}, l.specs...)...))
-		}
-		b.Sources = append(b.Sources, src)
-		b.Items = append(b.Items, items...)
-		b.Archived += src.Archived
-		b.Specs += src.Specs
+		item := boardItemFromSpecification(specification, intent.SpecificationDirectory, agents)
+		board.Items = append(board.Items, item)
+		itemsBySource[specification.Source]++
 	}
 
-	if len(b.Sources) == 0 {
-		b.Kind = "none"
-		return b
+	for _, source := range discovery.Sources {
+		items := itemsBySource[source.Source]
+		if source.Current == 0 && items == 0 {
+			continue
+		}
+		root := filepath.Join(project.Path, filepath.FromSlash(source.Location))
+		boardSource := BoardSource{
+			Kind:         string(source.Source),
+			Root:         root,
+			Items:        items,
+			Archived:     source.Archived,
+			Specs:        source.ReferenceSpecifications,
+			Availability: string(source.Availability),
+			Problems:     formatSpecificationProblems(source.Problems),
+		}
+		board.Sources = append(board.Sources, boardSource)
+		board.Archived += source.Archived
+		board.Specs += source.ReferenceSpecifications
 	}
-	b.Kind = b.Sources[0].Kind
-	b.Root = b.Sources[0].Root
-	sortBoardItems(b.Items)
-	return b
+
+	if len(board.Sources) == 0 {
+		board.Kind = "none"
+	} else {
+		board.Kind = board.Sources[0].Kind
+		board.Root = board.Sources[0].Root
+	}
+	sortBoardItems(board.Items)
+	board.Err = strings.Join(appendUniqueStrings(nil, problems...), "; ")
+	return board
+}
+
+func boardItemFromSpecification(specification Specification, directory string, agents []agentCtx) BoardItem {
+	item := BoardItem{
+		Key:      string(specification.Reference),
+		ID:       specification.ID,
+		Title:    specification.Title,
+		Summary:  specification.Summary,
+		Path:     directory,
+		Kind:     string(specification.Source),
+		Column:   string(specification.Lifecycle.Stage),
+		Total:    specification.Progress.Total,
+		Done:     specification.Progress.Completed,
+		Specs:    specificationDocumentCount(specification),
+		HasPlan:  specificationHasPlan(specification),
+		Updated:  specificationUpdatedString(specification.UpdatedAt),
+		Problems: formatSpecificationProblems(specification.Problems),
+	}
+	if specification.Lifecycle.Stage == SpecificationStageUnknown {
+		item.Column = ColBacklog
+	}
+	for _, task := range specification.Tasks {
+		item.Tasks = append(item.Tasks, BoardTask{
+			Text:    task.Text,
+			Done:    task.State == SpecificationTaskDone,
+			Section: task.Section,
+		})
+	}
+	for _, agent := range agents {
+		if !matchesItem(agent, specification.ID, directory) {
+			continue
+		}
+		item.Agents = append(item.Agents, agent.name)
+		if agent.branch != "" {
+			item.Branches = appendUnique(item.Branches, agent.branch)
+		}
+	}
+	if len(item.Agents) > 0 {
+		item.Column = ColActive
+	}
+	return item
 }
 
 type agentCtx struct {
@@ -123,35 +182,59 @@ type agentCtx struct {
 	dir    string
 }
 
-func liveAgentContext(s *State, projName string) []agentCtx {
-	var out []agentCtx
-	for _, a := range s.AgentsFor(projName) {
-		if !a.LaterAt.IsZero() {
-			continue
+func liveAgentContext(ctx context.Context, state *State, project Project) ([]agentCtx, []string) {
+	var sessions []Session
+	for _, session := range state.AgentsFor(project.Name) {
+		if session.LaterAt.IsZero() {
+			sessions = append(sessions, session)
 		}
-		branch := ""
-		if o, err := GitCmdCached(a.Dir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
-			branch = strings.TrimSpace(o)
-		}
-		out = append(out, agentCtx{name: a.Name, branch: branch, dir: a.Dir})
 	}
-	return out
+	if len(sessions) == 0 {
+		return nil, nil
+	}
+
+	survey, err := NewRepositories().Survey(ctx, []Project{project})
+	if err != nil {
+		return agentContextWithoutBranches(sessions), []string{"Worktree-Zuordnung: " + err.Error()}
+	}
+	if len(survey.Projects) != 1 {
+		return agentContextWithoutBranches(sessions), []string{"Worktree-Zuordnung: Repository-Ergebnis fehlt"}
+	}
+	observed := survey.Projects[0]
+	if observed.Presence != RepositoryKnown || !observed.Worktrees.Known() {
+		message := "Repository-Kenntnis nicht verfügbar"
+		if observed.Problem != nil {
+			message = observed.Problem.Message
+		}
+		return agentContextWithoutBranches(sessions), []string{"Worktree-Zuordnung: " + message}
+	}
+
+	var result []agentCtx
+	var problems []string
+	for _, session := range sessions {
+		agent := agentCtx{name: session.Name, dir: session.Dir}
+		for _, worktree := range observed.Worktrees.Value {
+			if !sameRepositoryPath(worktree.Path, session.Dir) {
+				continue
+			}
+			if worktree.Checkout.Known() && worktree.Checkout.Value.Kind == RepositoryBranchCheckout {
+				agent.branch = worktree.Checkout.Value.Branch
+			} else {
+				problems = append(problems, "Worktree-Zuordnung für "+session.Name+": Branch unbekannt")
+			}
+			break
+		}
+		result = append(result, agent)
+	}
+	return result, problems
 }
 
-func collectBoardItems(root, kind string, agents []agentCtx) []BoardItem {
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return nil
+func agentContextWithoutBranches(sessions []Session) []agentCtx {
+	result := make([]agentCtx, 0, len(sessions))
+	for _, session := range sessions {
+		result = append(result, agentCtx{name: session.Name, dir: session.Dir})
 	}
-	var items []BoardItem
-	for _, e := range entries {
-		if !e.IsDir() || e.Name() == "archive" || strings.HasPrefix(e.Name(), ".") {
-			continue
-		}
-		items = append(items, readBoardItem(filepath.Join(root, e.Name()), e.Name(), kind, agents))
-	}
-	sortBoardItems(items)
-	return items
+	return result
 }
 
 func sortBoardItems(items []BoardItem) {
@@ -163,89 +246,38 @@ func sortBoardItems(items []BoardItem) {
 	})
 }
 
-func readBoardItem(dir, id, kind string, agents []agentCtx) BoardItem {
-	it := BoardItem{Key: kind + "/" + id, ID: id, Title: humanizeID(id), Path: dir, Kind: kind}
-	docs := []string{"proposal.md", "spec.md", "requirements.md", "design.md", "plan.md", "README.md"}
-	for _, d := range docs {
-		p := filepath.Join(dir, d)
-		if !fileExists(p) {
-			continue
-		}
-		if d == "plan.md" || d == "design.md" {
-			it.HasPlan = true
-		}
-		if it.Summary == "" {
-			title, summary := readDocHead(p)
-			if title != "" {
-				it.Title = title
-			}
-			it.Summary = summary
-		}
-	}
-	it.Tasks = parseTasks(filepath.Join(dir, "tasks.md"))
-	for _, t := range it.Tasks {
-		it.Total++
-		if t.Done {
-			it.Done++
-		}
-	}
-	it.Specs = countFilesRec(filepath.Join(dir, "specs"), ".md")
-	if it.Specs == 0 {
-		it.Specs = countSpecDocs(dir)
-	}
-	if info, err := newestMTime(dir); err == nil {
-		it.Updated = info.Format(time.RFC3339)
-	}
-	for _, a := range agents {
-		if matchesItem(a, id, dir) {
-			it.Agents = append(it.Agents, a.name)
-			if a.branch != "" {
-				it.Branches = appendUnique(it.Branches, a.branch)
-			}
-		}
-	}
-	it.Column = boardColumn(it)
-	return it
-}
-
-func boardColumn(it BoardItem) string {
-	if len(it.Agents) > 0 {
+// boardColumn remains for source compatibility while delegating the lifecycle
+// policy to the Specifications Module.
+func boardColumn(item BoardItem) string {
+	if len(item.Agents) > 0 {
 		return ColActive
 	}
-	switch {
-	case it.Total == 0:
-		return ColBacklog
-	case it.Done == 0:
-		return ColBacklog
-	case it.Done >= it.Total:
-		return ColReview
-	default:
-		return ColActive
-	}
+	lifecycle := specificationLifecycle(SpecificationProgress{Total: item.Total, Completed: item.Done}, true, false, false)
+	return string(lifecycle.Stage)
 }
 
-func matchesItem(a agentCtx, id, dir string) bool {
+func matchesItem(agent agentCtx, id, _ string) bool {
 	slug := normalizeSlug(id)
 	if slug == "" {
 		return false
 	}
-	if normalizeSlug(a.branch) == slug || strings.Contains(normalizeSlug(a.branch), slug) {
+	if normalizeSlug(agent.branch) == slug || strings.Contains(normalizeSlug(agent.branch), slug) {
 		return true
 	}
-	if normalizeSlug(filepath.Base(a.dir)) == slug {
+	if normalizeSlug(filepath.Base(agent.dir)) == slug {
 		return true
 	}
-	return normalizeSlug(a.name) == slug
+	return normalizeSlug(agent.name) == slug
 }
 
-func normalizeSlug(s string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(s) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
+func normalizeSlug(value string) string {
+	var builder strings.Builder
+	for _, character := range strings.ToLower(value) {
+		if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') {
+			builder.WriteRune(character)
 		}
 	}
-	return b.String()
+	return builder.String()
 }
 
 func parseTasks(path string) []BoardTask {
@@ -253,28 +285,12 @@ func parseTasks(path string) []BoardTask {
 	if err != nil {
 		return nil
 	}
-	var out []BoardTask
-	section := ""
-	for _, line := range strings.Split(string(data), "\n") {
-		if m := sectionRe.FindStringSubmatch(line); m != nil {
-			section = strings.TrimSpace(m[1])
-			continue
-		}
-		m := taskLineRe.FindStringSubmatch(line)
-		if m == nil {
-			continue
-		}
-		text := strings.TrimSpace(m[2])
-		if len(text) > 160 {
-			text = text[:159] + "…"
-		}
-		out = append(out, BoardTask{
-			Text:    text,
-			Done:    m[1] == "x" || m[1] == "X",
-			Section: section,
-		})
+	tasks := parseSpecificationTasks(data)
+	result := make([]BoardTask, 0, len(tasks))
+	for _, task := range tasks {
+		result = append(result, BoardTask{Text: task.Text, Done: task.State == SpecificationTaskDone, Section: task.Section})
 	}
-	return out
+	return result
 }
 
 func readDocHead(path string) (title, summary string) {
@@ -282,122 +298,48 @@ func readDocHead(path string) (title, summary string) {
 	if err != nil {
 		return "", ""
 	}
-	lines := strings.Split(string(data), "\n")
-	var body []string
-	inWhy := false
-	for _, l := range lines {
-		t := strings.TrimSpace(l)
-		if title == "" && strings.HasPrefix(t, "# ") {
-			title = strings.TrimSpace(strings.TrimPrefix(t, "# "))
-			continue
-		}
-		if strings.HasPrefix(t, "## ") {
-			lower := strings.ToLower(t)
-			inWhy = strings.Contains(lower, "why") || strings.Contains(lower, "warum") ||
-				strings.Contains(lower, "summary") || strings.Contains(lower, "overview")
-			continue
-		}
-		if !inWhy && len(body) > 0 {
-			break
-		}
-		if t == "" || strings.HasPrefix(t, "<!--") {
-			continue
-		}
-		body = append(body, t)
-		if len(body) >= 4 {
-			break
-		}
-	}
-	summary = strings.Join(body, " ")
-	if len(summary) > 320 {
-		summary = summary[:319] + "…"
-	}
-	return title, summary
+	return parseSpecificationDocumentHead(data)
 }
 
 func humanizeID(id string) string {
-	s := strings.NewReplacer("-", " ", "_", " ").Replace(id)
-	parts := strings.Fields(s)
-	for i, p := range parts {
-		if i == 0 && len(p) > 0 {
-			parts[i] = strings.ToUpper(p[:1]) + p[1:]
+	value := strings.NewReplacer("-", " ", "_", " ").Replace(id)
+	parts := strings.Fields(value)
+	for index, part := range parts {
+		if index == 0 && len(part) > 0 {
+			parts[index] = strings.ToUpper(part[:1]) + part[1:]
 		}
 	}
 	return strings.Join(parts, " ")
 }
 
-func appendUnique(list []string, v string) []string {
-	for _, x := range list {
-		if x == v {
+func appendUnique(list []string, value string) []string {
+	for _, existing := range list {
+		if existing == value {
 			return list
 		}
 	}
-	return append(list, v)
+	return append(list, value)
 }
 
-func isDir(p string) bool {
-	info, err := os.Stat(p)
-	return err == nil && info.IsDir()
-}
-
-func fileExists(p string) bool {
-	info, err := os.Stat(p)
-	return err == nil && !info.IsDir()
-}
-
-func countDirs(p string) int {
-	entries, err := os.ReadDir(p)
-	if err != nil {
-		return 0
-	}
-	n := 0
-	for _, e := range entries {
-		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
-			n++
+func appendUniqueStrings(list []string, values ...string) []string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			list = appendUnique(list, value)
 		}
 	}
-	return n
+	return list
 }
 
-func countSpecDocs(dir string) int {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return 0
+func formatSpecificationProblems(problems []SpecificationProblem) []string {
+	result := make([]string, 0, len(problems))
+	for _, problem := range problems {
+		prefix := string(problem.Source)
+		if problem.Reference != "" {
+			if parts, err := parseSpecificationRef(problem.Reference); err == nil {
+				prefix += "/" + parts.id
+			}
+		}
+		result = append(result, fmt.Sprintf("%s (%s): %s", prefix, problem.Operation, problem.Message))
 	}
-	n := 0
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") || e.Name() == "tasks.md" {
-			continue
-		}
-		n++
-	}
-	return n
-}
-
-func countFilesRec(root, ext string) int {
-	n := 0
-	filepath.WalkDir(root, func(_ string, d os.DirEntry, err error) error {
-		if err == nil && !d.IsDir() && strings.HasSuffix(d.Name(), ext) {
-			n++
-		}
-		return nil
-	})
-	return n
-}
-
-func newestMTime(dir string) (time.Time, error) {
-	var newest time.Time
-	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		if info, e := d.Info(); e == nil && info.ModTime().After(newest) {
-			newest = info.ModTime()
-		}
-		return nil
-	})
-	if newest.IsZero() {
-		return newest, os.ErrNotExist
-	}
-	return newest, err
+	return result
 }

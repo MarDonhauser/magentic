@@ -302,7 +302,7 @@ func StartSkillAgent(st *State, dir, prompt, kind, nameHint string) (string, err
 	result, err := lifecycleForState(st).Provision(context.Background(), SessionProvision{
 		Project: project, Name: name, Directory: dir,
 		Worktree: project.Path != "" && filepath.Clean(dir) != filepath.Clean(project.Path),
-		Kind: SessionKindCodingAgent, Purpose: purpose, InitialPrompt: prompt,
+		Kind:     SessionKindCodingAgent, Purpose: purpose, InitialPrompt: prompt,
 	})
 	if err != nil {
 		return "", err
@@ -542,50 +542,72 @@ func StartDeploy(st *State, projPath string) (string, error) {
 }
 
 func RemoveWorktree(st *State, proj *Project, path string) error {
-	if path == proj.Path {
-		return fmt.Errorf("Haupt-Worktree kann nicht entfernt werden")
+	ctx := context.Background()
+	repositories := NewRepositories()
+	survey, err := repositories.Survey(ctx, []Project{*proj})
+	if err != nil {
+		return err
 	}
-	wts := CollectWorktrees(proj.Path)
-	if len(wts) > 0 && wts[0].Path == path {
-		return fmt.Errorf("Haupt-Worktree kann nicht entfernt werden")
+	if len(survey.Projects) != 1 || !survey.Projects[0].Worktrees.Known() {
+		return fmt.Errorf("Worktree-Status ist derzeit nicht verlässlich verfügbar")
 	}
-	valid := false
-	for _, wt := range wts {
-		if wt.Path == path {
-			valid = true
+	var target *RepositoryWorktree
+	for i := range survey.Projects[0].Worktrees.Value {
+		worktree := &survey.Projects[0].Worktrees.Value[i]
+		if sameRepositoryPath(worktree.Path, path) {
+			target = worktree
+			break
 		}
 	}
-	if !valid {
+	if target == nil {
 		return fmt.Errorf("Pfad gehört nicht zu diesem Projekt")
 	}
-	for _, a := range DiscoverNew(st) {
-		st.AddAgent(a)
+	if target.Main {
+		return fmt.Errorf("Haupt-Worktree kann nicht entfernt werden")
+	}
+	if !target.Changes.Known() {
+		return fmt.Errorf("Worktree-Änderungen sind derzeit nicht verlässlich verfügbar")
+	}
+	if !target.Changes.Value.Clean() {
+		return fmt.Errorf("Worktree hat uncommittete Änderungen — erst aufräumen")
+	}
+	if err := registerDiscovered(st); err != nil {
+		return err
 	}
 	var onPath []Agent
 	for _, a := range st.Agents {
-		if a.Dir == path {
+		if sameRepositoryPath(a.Dir, path) {
 			onPath = append(onPath, a)
 		}
 	}
-	statuses, _, _ := CollectStatuses(onPath)
+	observations := Observe(ctx, onPath)
+	if observations.Availability == ObservationUnavailable && len(onPath) > 0 {
+		return fmt.Errorf("Session-Runtimes sind derzeit nicht verlässlich beobachtbar")
+	}
+	byID := make(map[SessionID]SessionObservation, len(observations.Sessions))
+	for _, observation := range observations.Sessions {
+		byID[observation.SessionID] = observation
+	}
 	for _, a := range onPath {
-		if statuses[a.Name] == StatusRunning || statuses[a.Name] == StatusBlocked {
+		observation := byID[a.ID]
+		if observation.Presence == SessionPresenceUnknown || observation.Availability == ObservationUnavailable {
+			return fmt.Errorf("Session %q kann derzeit nicht verlässlich geprüft werden", a.Name)
+		}
+		switch observation.Status {
+		case StatusRunning, StatusAgents, StatusShell, StatusBlocked:
 			return fmt.Errorf("Agent %q arbeitet gerade in diesem Worktree", a.Name)
 		}
 	}
-	if gi := CollectGitInfo(path); !gi.Clean() {
-		return fmt.Errorf("Worktree hat uncommittete Änderungen — erst aufräumen")
-	}
+	lifecycle := lifecycleForState(st)
 	for _, a := range onPath {
-		sn := SessionName(a.Name)
-		if TmuxHasSession(sn) {
-			TmuxKillSession(sn)
+		if _, err := lifecycle.Remove(ctx, a.ID, a.Name); err != nil {
+			return err
 		}
 	}
-	if _, err := GitCmd(proj.Path, "worktree", "remove", path); err != nil {
-		return fmt.Errorf("git worktree remove: %w", err)
+	if _, err := repositories.Change(ctx, RemoveManagedWorktreeChange(*proj, path)); err != nil {
+		return err
 	}
-	return nil
+	return refreshState(st)
 }
 
 func CreateAgentSession(st *State, projName string, worktree bool, name string) (string, error) {
