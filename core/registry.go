@@ -108,10 +108,6 @@ func MarkSessionLater(sessionID SessionID, name string, at time.Time) RegistryCh
 	return RegistryChange{kind: registryMarkLater, sessionID: sessionID, sessionName: name, at: at}
 }
 
-func ReopenRegisteredSession(sessionID SessionID, name string) RegistryChange {
-	return RegistryChange{kind: registryReopenSession, sessionID: sessionID, sessionName: name}
-}
-
 // ReopenRegisteredSessionWithBaseline atomically records a newly-observed
 // repository baseline and clears the durable Later intent. Existing baseline
 // truth is validated rather than overwritten, so retries cannot clobber a
@@ -125,10 +121,6 @@ func ReopenRegisteredSessionWithBaseline(sessionID SessionID, name, baseCommit s
 
 func MarkSessionDeploy(sessionID SessionID, name string, at time.Time) RegistryChange {
 	return RegistryChange{kind: registryMarkDeploy, sessionID: sessionID, sessionName: name, at: at}
-}
-
-func RenameRegisteredSession(sessionID SessionID, oldName, newName string) RegistryChange {
-	return RegistryChange{kind: registryRenameSession, sessionID: sessionID, sessionName: oldName, newName: newName}
 }
 
 // RenameRegisteredSessionRuntime records the runtime rename already applied by

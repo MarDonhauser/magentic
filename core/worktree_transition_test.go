@@ -309,12 +309,12 @@ func TestDiscoveredAdoptionWaitsForManagedWorktreeTransition(t *testing.T) {
 		Name: "external", RuntimeName: "mgt-external", ProjectID: project.ID,
 		Project: project.Name, Dir: target, Worktree: true, CreatedAt: time.Now(),
 	}})
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("adoption did not wait on Worktree transition: %v", err)
-	}
 	close(release)
 	if err := <-holderDone; err != nil {
 		t.Fatal(err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("adoption did not wait on Worktree transition: %v", err)
 	}
 	snapshot, err := registry.Snapshot(context.Background())
 	if err != nil {

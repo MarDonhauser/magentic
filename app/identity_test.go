@@ -119,6 +119,7 @@ func TestSessionReadsRejectStaleIDWhenNameIsReused(t *testing.T) {
 
 func TestOpenTermDoesNotReuseConnectionAfterNameReuse(t *testing.T) {
 	installHandoffFakeTmux(t, "Ready\nshift+tab to cycle", "claude", "claude")
+	t.Setenv("MAGENTIC_HANDOFF_SOURCE_RUNTIME", "opaque-current-runtime")
 	project := core.Project{ID: "project-current", Name: "project", Path: t.TempDir(), MainBranch: "main"}
 	replacement := core.Session{
 		ID: "session-current", Name: "reused", RuntimeName: "opaque-current-runtime",

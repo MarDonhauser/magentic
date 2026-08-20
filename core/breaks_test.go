@@ -11,6 +11,32 @@ import (
 
 var breakStart = time.Date(2026, 8, 3, 9, 0, 0, 0, time.Local)
 
+func breakStatusFromFacts(state *State, statuses map[string]AgentStatus, activity map[string]time.Time) BreakAdvice {
+	copyOfState := *state
+	copyOfState.Agents = append([]Session(nil), state.Agents...)
+	snapshot := ObservationSnapshot{Availability: ObservationAvailable}
+	for i := range copyOfState.Agents {
+		session := &copyOfState.Agents[i]
+		if session.ID == "" {
+			session.ID = SessionID("break-test:" + session.Name)
+		}
+		status, found := statuses[session.Name]
+		if !found {
+			continue
+		}
+		observed := SessionObservation{
+			SessionID: session.ID, Availability: ObservationAvailable,
+			Presence: SessionPresencePresent, Status: status,
+		}
+		if at, known := activity[session.Name]; known {
+			observed.Activity = at
+			observed.ActivityKnown = true
+		}
+		snapshot.Sessions = append(snapshot.Sessions, observed)
+	}
+	return BreakStatusFromObservation(&copyOfState, snapshot)
+}
+
 func useTempBreaks(t *testing.T) string {
 	t.Helper()
 	sp := useTempState(t)
@@ -249,7 +275,7 @@ func TestGoodMomentConstellations(t *testing.T) {
 		{"Hintergrund-Shell zählt als beschäftigt", map[string]AgentStatus{"hera": StatusShell}, true, 1, 0},
 	}
 	for _, c := range cases {
-		a := BreakStatus(st, c.statuses, nil)
+		a := breakStatusFromFacts(st, c.statuses, nil)
 		if a.GoodMoment != c.good || a.Busy != c.busy || a.Waiting != c.waiting {
 			t.Fatalf("%s: good=%v busy=%d waiting=%d, erwartet good=%v busy=%d waiting=%d",
 				c.name, a.GoodMoment, a.Busy, a.Waiting, c.good, c.busy, c.waiting)
@@ -261,7 +287,7 @@ func TestGoodMomentIgnoresUnbekannteSessions(t *testing.T) {
 	useTempBreaks(t)
 	fakeNow(t, breakStart)
 	st := &State{Agents: []Agent{{Name: "hera"}}}
-	a := BreakStatus(st, map[string]AgentStatus{"hera": StatusRunning, "verwaist": StatusBlocked}, nil)
+	a := breakStatusFromFacts(st, map[string]AgentStatus{"hera": StatusRunning, "verwaist": StatusBlocked}, nil)
 	if !a.GoodMoment || a.Waiting != 0 {
 		t.Fatalf("Sessions ohne Agent im State dürfen nicht zählen: good=%v waiting=%d", a.GoodMoment, a.Waiting)
 	}
@@ -333,10 +359,10 @@ func TestAgentComputeIsNoUserActivity(t *testing.T) {
 
 	for m := 1; m <= 5; m++ {
 		*clk = breakStart.Add(time.Duration(m) * time.Minute)
-		BreakStatus(st, running, map[string]time.Time{"hera": *clk})
+		breakStatusFromFacts(st, running, map[string]time.Time{"hera": *clk})
 	}
 	*clk = breakStart.Add(7 * time.Minute)
-	a := BreakStatus(st, running, map[string]time.Time{"hera": *clk})
+	a := breakStatusFromFacts(st, running, map[string]time.Time{"hera": *clk})
 	if a.Level != BreakLevelResting || a.WorkedSecs != 0 {
 		t.Fatalf("rechnende Agents halten den Arbeitsblock am Leben: Level %s, %d s", a.Level, a.WorkedSecs)
 	}
@@ -353,9 +379,9 @@ func TestWaitingSessionActivityCountsAsUser(t *testing.T) {
 
 	for m := 1; m <= 7; m++ {
 		*clk = breakStart.Add(time.Duration(m) * time.Minute)
-		BreakStatus(st, blocked, map[string]time.Time{"hera": *clk})
+		breakStatusFromFacts(st, blocked, map[string]time.Time{"hera": *clk})
 	}
-	a := BreakStatus(st, blocked, map[string]time.Time{"hera": *clk})
+	a := breakStatusFromFacts(st, blocked, map[string]time.Time{"hera": *clk})
 	if a.WorkedSecs != 7*60 {
 		t.Fatalf("Tippen in einer wartenden Session muss den Block halten: %d s", a.WorkedSecs)
 	}
@@ -372,7 +398,7 @@ func TestFirstSightingOfSessionIsNoActivity(t *testing.T) {
 	*clk = breakStart
 	BreakHeartbeat(true)
 	*clk = breakStart.Add(7 * time.Minute)
-	a := BreakStatus(st, map[string]AgentStatus{"hera": StatusBlocked},
+	a := breakStatusFromFacts(st, map[string]AgentStatus{"hera": StatusBlocked},
 		map[string]time.Time{"hera": breakStart.Add(6 * time.Minute)})
 	if a.Level != BreakLevelResting {
 		t.Fatalf("die erste beobachtete Aktivität ist nur ein Ausgangswert, Level %s", a.Level)
@@ -625,7 +651,7 @@ func TestNachrichtenPassenZurLage(t *testing.T) {
 		BreakHeartbeat(true)
 	}
 
-	good := BreakStatus(st, running, nil)
+	good := breakStatusFromFacts(st, running, nil)
 	if good.Level != BreakLevelDue || !good.GoodMoment {
 		t.Fatalf("Ausgangslage falsch: %s / %v", good.Level, good.GoodMoment)
 	}
@@ -633,7 +659,7 @@ func TestNachrichtenPassenZurLage(t *testing.T) {
 		t.Fatalf("Meldung bei gutem Moment: %q", good.Message)
 	}
 
-	busy := BreakStatus(st, waiting, nil)
+	busy := breakStatusFromFacts(st, waiting, nil)
 	if busy.GoodMoment {
 		t.Fatal("wartende Session verhindert den guten Moment nicht")
 	}

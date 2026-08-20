@@ -353,10 +353,6 @@ func breakLevel(workedSecs int, cfg BreakConfig) string {
 	return BreakLevelNone
 }
 
-func BreakStatus(s *State, statuses map[string]AgentStatus, activity map[string]time.Time) BreakAdvice {
-	return evaluateBreak(false, s, statuses, activity)
-}
-
 // BreakStatusFromObservation derives break timing and "good moment" policy
 // from one coherent Observation cycle. Stable SessionIDs also keep activity
 // continuity when a Session's display name changes.
