@@ -95,6 +95,28 @@ func TestSessionFacadeRejectsStaleIDWhenNameIsReused(t *testing.T) {
 	}
 }
 
+func TestSessionReadsRejectStaleIDWhenNameIsReused(t *testing.T) {
+	logPath := installHandoffFakeTmux(t, "replacement content https://replacement.test", "claude", "claude")
+	project := core.Project{ID: "project-current", Name: "project", Path: t.TempDir(), MainBranch: "main"}
+	replacement := core.Session{
+		ID: "session-current", Name: "reused", RuntimeName: handoffSourceRuntime,
+		ProjectID: project.ID, Project: project.Name, Dir: project.Path,
+		AgentRuns: []core.AgentRunRef{{Vendor: core.AgentVendorClaude, ExternalID: "current-run"}},
+	}
+	registerFacadeIdentityFixture(t, project, &replacement)
+	app := NewApp()
+
+	if preview := app.SessionPreview("session-stale"); preview != "" {
+		t.Fatalf("stale SessionPreview exposed replacement content: %q", preview)
+	}
+	if links, err := app.SessionLinks("session-stale"); err == nil || !strings.Contains(err.Error(), "SessionID") || len(links) != 0 {
+		t.Fatalf("stale SessionLinks = %#v, %v", links, err)
+	}
+	if calls := parseFakeTmuxCalls(t, logPath); len(calls) != 0 {
+		t.Fatalf("stale Session read crossed tmux Seam: %#v", calls)
+	}
+}
+
 func TestProjectFacadeRejectsStaleIDWhenNameIsReused(t *testing.T) {
 	actions := []struct {
 		name string

@@ -48,7 +48,7 @@ func TestSendSkillTargetsRegisteredRuntimeName(t *testing.T) {
 	source, target := customRuntimeAgents()
 	handoffTestState(t, source, target)
 
-	if err := core.SendSkill(source.Name, "/review "); err != nil {
+	if err := core.SendSkillByID(source.ID, "/review "); err != nil {
 		t.Fatal(err)
 	}
 	assertLiteralTmuxTarget(t, logPath, core.TargetPane(customSourceRuntime))

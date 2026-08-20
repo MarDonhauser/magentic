@@ -22,6 +22,7 @@ type RepositoryKnowledge string
 
 const (
 	RepositoryKnown         RepositoryKnowledge = "known"
+	RepositoryPartial       RepositoryKnowledge = "partial"
 	RepositoryUnknown       RepositoryKnowledge = "unknown"
 	RepositoryNotRepository RepositoryKnowledge = "not_repository"
 )
@@ -111,6 +112,50 @@ type RepositoryWorktreeTarget struct {
 	Project    Project
 	Worktree   RepositoryWorktree
 	MainBranch RepositoryFact[string]
+}
+
+// RemoteURL reads one named fetch remote without turning command failure or
+// malformed successful output into an absent remote. Remote URLs may be HTTP,
+// SSH, scp-like, file URLs, or local paths, so this Adapter validates the
+// porcelain shape rather than imposing a transport scheme.
+func (r *Repositories) RemoteURL(ctx context.Context, dir, remote string) RepositoryFact[string] {
+	if r == nil || r.runner == nil {
+		return repositoryUnknownFact[string]("remote_url", errors.New("Repositories is unavailable"))
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	dir = strings.TrimSpace(dir)
+	remote = strings.TrimSpace(remote)
+	if dir == "" || remote == "" {
+		return repositoryUnknownFact[string]("remote_url", errors.New("repository directory and remote name are required"))
+	}
+	out, err := r.runner.Run(ctx, dir, "remote", "get-url", remote)
+	if err != nil {
+		return repositoryFactForError[string]("remote_url", err)
+	}
+	url, err := parseRepositoryRemoteURL(out)
+	if err != nil {
+		return repositoryUnknownFact[string]("remote_url", err)
+	}
+	return repositoryKnownFact(url)
+}
+
+func parseRepositoryRemoteURL(out string) (string, error) {
+	normalized := strings.ReplaceAll(out, "\r\n", "\n")
+	if strings.Contains(normalized, "\r") || !strings.HasSuffix(normalized, "\n") {
+		return "", errors.New("git returned a truncated or malformed remote URL")
+	}
+	value := strings.TrimSuffix(normalized, "\n")
+	if value == "" || strings.Contains(value, "\n") || strings.TrimSpace(value) != value {
+		return "", errors.New("git returned an empty or ambiguous remote URL")
+	}
+	for _, char := range value {
+		if char == '\x00' || (char < ' ' && char != '\t') {
+			return "", errors.New("git returned a remote URL with control characters")
+		}
+	}
+	return value, nil
 }
 
 // WorktreeDiff reports a human-readable checkout diff without collapsing
@@ -267,6 +312,10 @@ func repositoryKnownFact[T any](value T) RepositoryFact[T] {
 
 func repositoryUnknownFact[T any](operation string, err error) RepositoryFact[T] {
 	return RepositoryFact[T]{State: RepositoryUnknown, Problem: repositoryProblem(operation, err)}
+}
+
+func repositoryPartialFact[T any](value T, operation string, err error) RepositoryFact[T] {
+	return RepositoryFact[T]{State: RepositoryPartial, Value: value, Problem: repositoryProblem(operation, err)}
 }
 
 func repositoryNotRepositoryFact[T any](operation string, err error) RepositoryFact[T] {

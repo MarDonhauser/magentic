@@ -411,10 +411,6 @@ func enqueuePromptForObservedTarget(session, prompt string, observed promptTarge
 	return enqueuePrompt(session, prompt, true, observed.Tool, !ready, false, ready, nil)
 }
 
-func SendSlashCommand(session, cmd string) {
-	_ = SendPromptToSession(session, cmd)
-}
-
 func StartSkillAgent(st *State, dir, prompt, kind, nameHint string) (string, error) {
 	return startSkillAgent(st, dir, prompt, kind, nameHint, "")
 }
@@ -457,20 +453,8 @@ func startSkillAgent(st *State, dir, prompt, kind, nameHint string, specificatio
 	return name, nil
 }
 
-func SendSkill(name, cmd string) error {
-	st, err := LoadState()
-	if err != nil {
-		return err
-	}
-	session := st.AgentByName(name)
-	if session == nil {
-		return fmt.Errorf("unbekannte Session: %s", name)
-	}
-	return sendSkillToSession(*session, cmd)
-}
-
 // SendSkillByID resolves the action target through its durable Registry
-// identity. Name-based SendSkill remains a compatibility Adapter for the TUI.
+// identity.
 func SendSkillByID(id SessionID, cmd string) error {
 	st, err := LoadState()
 	if err != nil {
@@ -494,10 +478,6 @@ func sendSkillToSession(session Session, cmd string) error {
 		return err
 	}
 	return enqueuePromptForObservedTarget(sn, cmd, observed)
-}
-
-func DoneAgent(name string) error {
-	return SendSkill(name, "/done ")
 }
 
 func DoneSession(id SessionID) error {

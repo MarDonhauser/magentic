@@ -203,6 +203,68 @@ func TestRepositoriesWorktreeDiffKeepsFailureDistinctFromClean(t *testing.T) {
 	})
 }
 
+func TestRepositoriesRemoteURLReturnsExplicitFacts(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "project")
+	t.Run("known", func(t *testing.T) {
+		runner := &repositoriesRecordingRunner{t: t, steps: []repositoriesRunnerStep{{
+			dir: dir, args: []string{"remote", "get-url", "origin"},
+			output: "git@ssh.dev.azure.com:v3/org/project/repository\n",
+		}}}
+		fact := newRepositories(runner).RemoteURL(context.Background(), dir, "origin")
+		runner.assertDone()
+		if !fact.Known() || fact.Value != "git@ssh.dev.azure.com:v3/org/project/repository" || fact.Problem != nil {
+			t.Fatalf("RemoteURL() = %#v", fact)
+		}
+	})
+
+	t.Run("command unavailable", func(t *testing.T) {
+		runner := &repositoriesRecordingRunner{t: t, steps: []repositoriesRunnerStep{{
+			dir: dir, args: []string{"remote", "get-url", "origin"}, err: errors.New("git unavailable"),
+		}}}
+		fact := newRepositories(runner).RemoteURL(context.Background(), dir, "origin")
+		runner.assertDone()
+		if fact.Known() || fact.State != RepositoryUnknown || fact.Problem == nil || fact.Value != "" {
+			t.Fatalf("unavailable RemoteURL() = %#v", fact)
+		}
+	})
+
+	t.Run("not repository", func(t *testing.T) {
+		runner := &repositoriesRecordingRunner{t: t, steps: []repositoriesRunnerStep{{
+			dir: dir, args: []string{"remote", "get-url", "origin"}, err: fmt.Errorf("%w: missing .git", errRepositoriesNotRepository),
+		}}}
+		fact := newRepositories(runner).RemoteURL(context.Background(), dir, "origin")
+		runner.assertDone()
+		if fact.State != RepositoryNotRepository || fact.Problem == nil {
+			t.Fatalf("non-repository RemoteURL() = %#v", fact)
+		}
+	})
+}
+
+func TestRepositoryRemoteURLRejectsMalformedSuccessfulOutput(t *testing.T) {
+	for _, malformed := range []string{
+		"",
+		"\n",
+		"https://example.test/repo",
+		" https://example.test/repo\n",
+		"https://one.test/repo\nhttps://two.test/repo\n",
+		"https://example.test/repo\x00suffix\n",
+	} {
+		if got, err := parseRepositoryRemoteURL(malformed); err == nil {
+			t.Fatalf("malformed successful remote output became known: input=%q value=%q", malformed, got)
+		}
+	}
+
+	dir := filepath.Join(t.TempDir(), "project")
+	runner := &repositoriesRecordingRunner{t: t, steps: []repositoriesRunnerStep{{
+		dir: dir, args: []string{"remote", "get-url", "origin"}, output: "\n",
+	}}}
+	fact := newRepositories(runner).RemoteURL(context.Background(), dir, "origin")
+	runner.assertDone()
+	if fact.Known() || fact.State != RepositoryUnknown || fact.Problem == nil {
+		t.Fatalf("malformed RemoteURL() = %#v", fact)
+	}
+}
+
 func TestRepositoriesSurveyDistinguishesUnknownFromNotRepository(t *testing.T) {
 	projectPath := filepath.Join(t.TempDir(), "project")
 	tests := []struct {

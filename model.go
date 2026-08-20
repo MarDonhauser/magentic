@@ -791,21 +791,10 @@ func (m model) sendSkillToSelected(cmd string) (tea.Model, tea.Cmd) {
 		m.setFlash("Erst einen Agent auswählen ("+label+" läuft in dessen Session)", true)
 		return m, nil
 	}
-	if a.IsTerm() {
-		m.setFlash(a.Name+" ist eine Terminal-Session — dort läuft kein Claude", true)
+	if err := sendSkillByID(a.ID, cmd); err != nil {
+		m.setFlash(err.Error(), true)
 		return m, nil
 	}
-	sn := a.TmuxName()
-	st := m.statusFor(*a)
-	if !TmuxHasSession(sn) || st == StatusExited || st == StatusDead {
-		m.setFlash("Claude läuft in dieser Session nicht mehr", true)
-		return m, nil
-	}
-	if st == StatusBlocked {
-		m.setFlash(a.Name+" wartet auf eine Antwort — erst den Dialog beantworten (⏎)", true)
-		return m, nil
-	}
-	sendSlashCommand(sn, cmd)
 	m.setFlash(label+" an "+a.Name+" gesendet", false)
 	return m, m.pollNow()
 }

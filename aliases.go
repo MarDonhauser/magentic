@@ -77,7 +77,7 @@ var (
 	removeSession        = core.RemoveRegisteredSession
 	startSkillAgent      = core.StartSkillAgent
 	sendPromptWhenReady  = core.SendPromptWhenReady
-	sendSlashCommand     = core.SendSlashCommand
+	sendSkillByID        = core.SendSkillByID
 
 	shortPath     = core.ShortPath
 	formatAge     = core.FormatAge

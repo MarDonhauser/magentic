@@ -2085,7 +2085,7 @@ function hideMenu() {
 
 function showMenu(x, y, sessionID, name, status) {
   menuFor = { id: sessionID, name };
-  const session = agentInfo(name) || (ov?.later || []).find(item => item.name === name);
+  const session = agentInfo(name, sessionID) || (ov?.later || []).find(item => item.id === sessionID);
   if (status === 'later') {
     menuEl.innerHTML =
       `<div class="mi-head">${sessionToolMark(session)}${esc(name)}</div>` +
