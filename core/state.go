@@ -186,61 +186,6 @@ func (s *State) AgentsFor(project string) []Agent {
 	return out
 }
 
-func (s *State) AddAgent(a Agent) {
-	s.Agents = append(s.Agents, a)
-}
-
-func (s *State) RemoveAgent(name string) {
-	out := s.Agents[:0]
-	for _, a := range s.Agents {
-		if a.Name != name {
-			out = append(out, a)
-		}
-	}
-	s.Agents = out
-}
-
-func (s *State) MarkDeploy(name string) {
-	for i := range s.Agents {
-		if s.Agents[i].Name == name {
-			s.Agents[i].DeployAt = time.Now()
-		}
-	}
-}
-
-// MarkSeen liefert nur dann true, wenn sich der Wert lohnt zu speichern —
-// sonst schreibt jeder Ansichtswechsel den State neu.
-func (s *State) MarkSeen(name string) bool {
-	for i := range s.Agents {
-		if s.Agents[i].Name != name {
-			continue
-		}
-		now := time.Now()
-		if now.Sub(s.Agents[i].SeenAt) < 5*time.Second {
-			return false
-		}
-		s.Agents[i].SeenAt = now
-		return true
-	}
-	return false
-}
-
-func (s *State) MarkLater(name string) {
-	for i := range s.Agents {
-		if s.Agents[i].Name == name {
-			s.Agents[i].LaterAt = time.Now()
-		}
-	}
-}
-
-func (s *State) RenameAgent(oldName, newName string) {
-	for i := range s.Agents {
-		if s.Agents[i].Name == oldName {
-			s.Agents[i].Name = newName
-		}
-	}
-}
-
 func (s *State) HasAgent(name string) bool {
 	for _, a := range s.Agents {
 		if a.Name == name {

@@ -161,6 +161,9 @@ func TestProjectFacadeRejectsStaleIDWhenNameIsReused(t *testing.T) {
 		{name: "new session", call: func(app *App, id string) error { _, err := app.NewSession(id, false, ""); return err }},
 		{name: "new terminal", call: func(app *App, id string) error { _, err := app.NewTermSession(id, false, ""); return err }},
 		{name: "new dock", call: func(app *App, id string) error { _, err := app.NewDockSession(id); return err }},
+		{name: "git graph", call: func(app *App, id string) error { _, err := app.GitGraph(id, 10); return err }},
+		{name: "board", call: func(app *App, id string) error { _, err := app.Board(id); return err }},
+		{name: "board archive", call: func(app *App, id string) error { _, err := app.BoardArchive(id, 10); return err }},
 		{name: "start board item", call: func(app *App, id string) error { _, err := app.StartBoardItem(id, "stale-token"); return err }},
 		{name: "cleanup", call: func(app *App, id string) error { _, err := app.Cleanup(id, "stale-worktree"); return err }},
 		{name: "merge", call: func(app *App, id string) error { _, err := app.Merge(id, "feature", "main"); return err }},
@@ -204,5 +207,32 @@ func TestProjectFacadeRejectsStaleIDWhenNameIsReused(t *testing.T) {
 				t.Fatalf("stale action changed replacement Project: revision %d -> %d, Projects=%+v", before.Revision(), after.Revision(), state.Projects)
 			}
 		})
+	}
+}
+
+func TestMigrateDockSessionsReturnsStableDockIdentitiesOnly(t *testing.T) {
+	project := core.Project{ID: "project-current", Name: "project", Path: t.TempDir(), MainBranch: "main"}
+	dock := core.Session{
+		ID: "session-dock", Name: "term project", RuntimeName: "opaque-dock-runtime",
+		ProjectID: project.ID, Project: project.Name, Dir: project.Path,
+		SessionKind: core.SessionKindTerminal, Presentation: core.SessionPresentationDock,
+	}
+	registry, _ := registerFacadeIdentityFixture(t, project, &dock)
+	listed := core.Session{
+		ID: "session-listed", Name: "listed terminal", RuntimeName: "opaque-listed-runtime",
+		ProjectID: project.ID, Project: project.Name, Dir: project.Path,
+		SessionKind: core.SessionKindTerminal, Presentation: core.SessionPresentationListed,
+	}
+	if _, err := registry.Change(context.Background(), core.RegisterSession(listed)); err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp()
+	refs, err := app.MigrateDockSessions([]string{dock.Name, listed.Name, "missing", dock.Name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 1 || refs[0].ID != dock.ID || refs[0].Name != dock.Name {
+		t.Fatalf("MigrateDockSessions() = %#v, want stable Dock identity only", refs)
 	}
 }

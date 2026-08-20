@@ -400,7 +400,7 @@ func TestSpecificationReferenceSurvivesLifecycleAndRegistry(t *testing.T) {
 	project := registerLifecycleProject(t, registry)
 	reference := makeSpecificationRef(Project{ID: "project-1"}, SpecificationSpecKit, "001-login", false)
 	result, err := lifecycle.Provision(context.Background(), SessionProvision{
-		Project: project, Name: "spec-worker", Directory: project.Path,
+		ProjectID: project.ID, Name: "spec-worker", Directory: project.Path,
 		SpecificationRef: reference,
 	})
 	if err != nil {

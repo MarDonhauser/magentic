@@ -10,6 +10,7 @@ import (
 )
 
 func TestObservationCacheRequiresTheSameDurableSessions(t *testing.T) {
+	sessions := []core.Session{{ID: "two", RuntimeName: "runtime-two"}, {ID: "one", RuntimeName: "runtime-one"}}
 	snapshot := core.ObservationSnapshot{
 		Availability: core.ObservationAvailable,
 		ObservedAt:   time.Now(),
@@ -18,14 +19,25 @@ func TestObservationCacheRequiresTheSameDurableSessions(t *testing.T) {
 			{SessionID: "two"},
 		},
 	}
-	if !observationCovers(snapshot, []core.Session{{ID: "two"}, {ID: "one"}}) {
+	inputs := observationFingerprints(sessions)
+	if !observationCovers(snapshot, inputs, sessions) {
 		t.Fatal("cache rejected the same durable Session set")
 	}
-	if observationCovers(snapshot, []core.Session{{ID: "one"}, {ID: "other"}}) {
+	if observationCovers(snapshot, inputs, []core.Session{{ID: "one"}, {ID: "other"}}) {
 		t.Fatal("cache accepted a different durable Session set")
 	}
-	if observationCovers(snapshot, []core.Session{{Name: "legacy"}, {ID: "two"}}) {
+	if observationCovers(snapshot, inputs, []core.Session{{Name: "legacy"}, {ID: "two"}}) {
 		t.Fatal("cache matched a mutable display name as identity")
+	}
+	renamed := append([]core.Session(nil), sessions...)
+	renamed[0].RuntimeName = "runtime-two-renamed"
+	if observationCovers(snapshot, inputs, renamed) {
+		t.Fatal("cache accepted a changed opaque RuntimeName for the same SessionID")
+	}
+	seen := append([]core.Session(nil), sessions...)
+	seen[1].SeenAt = time.Now()
+	if observationCovers(snapshot, inputs, seen) {
+		t.Fatal("cache accepted changed unread input facts")
 	}
 }
 
@@ -36,7 +48,7 @@ func TestStoreObservationKeepsAnImmutableSnapshot(t *testing.T) {
 		Sessions:     []core.SessionObservation{{SessionID: "one", Attention: core.AttentionNeedsInput}},
 		Problems:     []core.ObservationProblem{{Operation: "capture", Message: "partial"}},
 	}
-	app.storeObservation(original)
+	app.storeObservation(original, []core.Session{{ID: "one", RuntimeName: "runtime-one"}})
 	original.Sessions[0].Attention = core.AttentionWorking
 	original.Problems[0].Message = "changed"
 
@@ -45,6 +57,27 @@ func TestStoreObservationKeepsAnImmutableSnapshot(t *testing.T) {
 	app.observationMu.Unlock()
 	if cached.Sessions[0].Attention != core.AttentionNeedsInput || cached.Problems[0].Message != "partial" {
 		t.Fatalf("cached Observation was mutated through caller slices: %#v", cached)
+	}
+}
+
+func TestObservationCacheRefreshesAfterRuntimeRename(t *testing.T) {
+	app := &App{}
+	calls := 0
+	app.observeSessions = func(_ context.Context, sessions []core.Session) core.ObservationSnapshot {
+		calls++
+		observed := make([]core.SessionObservation, 0, len(sessions))
+		for _, session := range sessions {
+			observed = append(observed, core.SessionObservation{SessionID: session.ID})
+		}
+		return core.ObservationSnapshot{Availability: core.ObservationAvailable, Sessions: observed}
+	}
+	original := []core.Session{{ID: "session-one", Name: "one", RuntimeName: "opaque-old"}}
+	app.observationFor(original, false)
+	app.observationFor(original, false)
+	renamed := []core.Session{{ID: "session-one", Name: "one", RuntimeName: "opaque-new"}}
+	app.observationFor(renamed, false)
+	if calls != 2 {
+		t.Fatalf("observer calls = %d, want initial probe plus RuntimeName refresh", calls)
 	}
 }
 

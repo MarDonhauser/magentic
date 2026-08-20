@@ -94,7 +94,7 @@ type LifecycleSnapshot struct {
 }
 
 type SessionProvision struct {
-	Project          Project
+	ProjectID        ProjectID
 	Name             string
 	Directory        string
 	Worktree         bool
@@ -158,6 +158,8 @@ type SessionLifecycle struct {
 	registry     lifecycleRegistry
 	runtime      lifecycleRuntime
 	repositories lifecycleRepositories
+	worktrees    worktreeTransitionCoordinator
+	observe      func(context.Context, []Session) ObservationSnapshot
 	ledgerPath   string
 	now          func() time.Time
 }
@@ -169,17 +171,20 @@ func OpenSessionLifecycle(config SessionLifecycleConfig) *SessionLifecycle {
 	if config.LedgerPath == "" {
 		config.LedgerPath = SessionLifecyclePath()
 	}
-	return newSessionLifecycle(
+	lifecycle := newSessionLifecycle(
 		OpenRegistry(config.RegistryPath),
 		tmuxLifecycleRuntime{},
 		NewRepositories(),
 		config.LedgerPath,
 	)
+	lifecycle.worktrees = newWorktreeTransitionCoordinator(config.RegistryPath)
+	return lifecycle
 }
 
 func newSessionLifecycle(registry lifecycleRegistry, runtime lifecycleRuntime, repositories lifecycleRepositories, ledgerPath string) *SessionLifecycle {
 	return &SessionLifecycle{
 		registry: registry, runtime: runtime, repositories: repositories,
+		worktrees: newWorktreeTransitionCoordinator(ledgerPath), observe: Observe,
 		ledgerPath: ledgerPath, now: time.Now,
 	}
 }
@@ -214,11 +219,15 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 	if name == "" {
 		return SessionLifecycleResult{}, errors.New("Session name is required")
 	}
-	if request.Project.Path == "" && request.Directory == "" {
+	if request.ProjectID == "" && strings.TrimSpace(request.Directory) == "" {
 		return SessionLifecycleResult{}, errors.New("Session directory is required")
 	}
-	if request.CreateWorktree && request.Project.Path == "" {
-		return SessionLifecycleResult{}, errors.New("a managed Worktree requires a Project")
+	if request.CreateWorktree && request.ProjectID == "" {
+		return SessionLifecycleResult{}, errors.New("a managed Worktree requires a ProjectID")
+	}
+	project, err := l.resolveProject(ctx, request.ProjectID)
+	if err != nil {
+		return SessionLifecycleResult{}, err
 	}
 
 	kind := request.Kind
@@ -235,14 +244,16 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 	}
 	now := l.now()
 	session := Session{
-		ID: SessionID(NewUUID()), Name: name, ProjectID: request.Project.ID,
-		Project: request.Project.Name, Dir: filepath.Clean(request.Directory),
+		ID: SessionID(NewUUID()), Name: name, ProjectID: project.ID,
+		Project: project.Name, Dir: filepath.Clean(request.Directory),
 		Worktree: request.Worktree || request.CreateWorktree, SessionKind: kind,
 		Presentation: presentation, Purpose: purpose, SpecificationRef: request.SpecificationRef,
 		RuntimeName: SessionName(name), CreatedAt: now,
 	}
-	if request.Directory == "" && !request.CreateWorktree {
-		session.Dir = filepath.Clean(request.Project.Path)
+	if request.CreateWorktree {
+		session.Dir, _ = managedWorktreeTarget(project, name)
+	} else if request.Directory == "" {
+		session.Dir = filepath.Clean(project.Path)
 	}
 	if kind == SessionKindTerminal {
 		if presentation == SessionPresentationDock {
@@ -258,7 +269,7 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 	record := LifecycleRecord{
 		TransitionID: NewUUID(), SessionID: session.ID,
 		Desired: SessionDesiredRunning, Phase: LifecyclePlanned,
-		Session: session, Project: request.Project,
+		Session: session, Project: project,
 		CreateWorktree: request.CreateWorktree, StartMode: "new",
 		InitialPrompt: request.InitialPrompt, PromptDelivery: InitialPromptNotRequested,
 		CreatedAt: now, UpdatedAt: now,
@@ -270,15 +281,67 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 		record.Applied.WorktreeReady = true
 	}
 	advanced := record
-	err := l.withSessionTransition(ctx, session.ID, session.Name, func() error {
-		if _, putErr := l.putRecord(ctx, record, false); putErr != nil {
-			return putErr
-		}
-		var advanceErr error
-		advanced, advanceErr = l.advanceRunning(ctx, record)
-		return advanceErr
-	})
+	target, managed := l.provisionWorktreeTarget(project, request, session)
+	run := func() error {
+		return l.withSessionTransition(ctx, session.ID, session.Name, func() error {
+			// ProjectID is the only authority. Re-resolve it after both transition
+			// locks and before the first repository or runtime side effect.
+			freshProject, resolveErr := l.resolveProject(ctx, request.ProjectID)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			freshSession := session
+			freshSession.ProjectID = freshProject.ID
+			freshSession.Project = freshProject.Name
+			if request.CreateWorktree {
+				freshSession.Dir, _ = managedWorktreeTarget(freshProject, name)
+			} else if request.Directory == "" {
+				freshSession.Dir = filepath.Clean(freshProject.Path)
+			}
+			freshTarget, freshManaged := l.provisionWorktreeTarget(freshProject, request, freshSession)
+			if managed != freshManaged || managed && canonicalWorktreeTransitionPath(target) != canonicalWorktreeTransitionPath(freshTarget) {
+				return errors.New("Project Worktree identity changed during Session provisioning")
+			}
+			record.Project = freshProject
+			record.Session = freshSession
+			advanced = record
+			if _, putErr := l.putRecord(ctx, record, false); putErr != nil {
+				return putErr
+			}
+			var advanceErr error
+			advanced, advanceErr = l.advanceRunning(ctx, record)
+			return advanceErr
+		})
+	}
+	if managed {
+		err = l.worktrees.with(ctx, project, target, run)
+	} else {
+		err = run()
+	}
 	return SessionLifecycleResult{Session: advanced.Session, Record: advanced}, err
+}
+
+func (l *SessionLifecycle) resolveProject(ctx context.Context, id ProjectID) (Project, error) {
+	if id == "" {
+		return Project{}, nil
+	}
+	snapshot, err := l.registry.Snapshot(ctx)
+	if err != nil {
+		return Project{}, err
+	}
+	state := snapshot.State()
+	project := state.ProjectByID(id)
+	if project == nil {
+		return Project{}, fmt.Errorf("ProjectID %q not found", id)
+	}
+	return *project, nil
+}
+
+func (l *SessionLifecycle) provisionWorktreeTarget(project Project, request SessionProvision, session Session) (string, bool) {
+	if request.CreateWorktree {
+		return managedWorktreeTarget(project, session.Name)
+	}
+	return managedWorktreeForDirectory(project, session.Dir)
 }
 
 func (l *SessionLifecycle) Park(ctx context.Context, id SessionID, name string) (SessionLifecycleResult, error) {
@@ -287,6 +350,83 @@ func (l *SessionLifecycle) Park(ctx context.Context, id SessionID, name string) 
 
 func (l *SessionLifecycle) Remove(ctx context.Context, id SessionID, name string) (SessionLifecycleResult, error) {
 	return l.planExisting(ctx, id, name, SessionDesiredRemoved)
+}
+
+// RemoveManagedWorktree owns the complete destructive transition. Provision,
+// Resume, reconciliation, and discovered-Session adoption contend on the same
+// canonical per-Worktree lock. Under that coordination this method rereads the
+// Registry, takes a fresh Observation, removes only known-safe Sessions, then
+// repeats both reads immediately before crossing the repository removal Seam.
+func (l *SessionLifecycle) RemoveManagedWorktree(ctx context.Context, projectID ProjectID, target string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	project, err := l.resolveProject(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	managedTarget, managed := managedWorktreeForDirectory(project, target)
+	if !managed || canonicalWorktreeTransitionPath(managedTarget) != canonicalWorktreeTransitionPath(target) {
+		return errors.New("Worktree path is not managed by the Project")
+	}
+	target = canonicalWorktreeTransitionPath(target)
+	return l.worktrees.with(ctx, project, target, func() error {
+		freshProject, resolveErr := l.resolveProject(ctx, projectID)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		freshTarget, freshManaged := managedWorktreeForDirectory(freshProject, target)
+		if !freshManaged || canonicalWorktreeTransitionPath(freshTarget) != target {
+			return errors.New("Project Worktree identity changed before removal")
+		}
+
+		sessions, readErr := l.registeredSessionsInWorktree(ctx, target)
+		if readErr != nil {
+			return readErr
+		}
+		observation := l.observe(ctx, sessions)
+		if observeErr := validateWorktreeRemovalObservations(sessions, observation); observeErr != nil {
+			return observeErr
+		}
+		for _, session := range sessions {
+			if _, removeErr := l.Remove(ctx, session.ID, session.Name); removeErr != nil {
+				return removeErr
+			}
+		}
+
+		// These are deliberately fresh and adjacent to the destructive
+		// repository call. A Session registered through a competing path is a
+		// new occupancy fact and must veto removal rather than being folded into
+		// the already-approved set.
+		remaining, readErr := l.registeredSessionsInWorktree(ctx, target)
+		if readErr != nil {
+			return readErr
+		}
+		finalObservation := l.observe(ctx, remaining)
+		if observeErr := validateWorktreeRemovalObservations(remaining, finalObservation); observeErr != nil {
+			return observeErr
+		}
+		if len(remaining) != 0 {
+			return errors.New("a Session occupied the Worktree during removal")
+		}
+		_, changeErr := l.repositories.Change(ctx, RemoveManagedWorktreeChange(freshProject, target))
+		return changeErr
+	})
+}
+
+func (l *SessionLifecycle) registeredSessionsInWorktree(ctx context.Context, target string) ([]Session, error) {
+	snapshot, err := l.registry.Snapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	state := snapshot.State()
+	sessions := make([]Session, 0)
+	for _, session := range state.Agents {
+		if sessionBelongsToWorktree(session, target) {
+			sessions = append(sessions, session)
+		}
+	}
+	return sessions, nil
 }
 
 func (l *SessionLifecycle) Resume(ctx context.Context, id SessionID, name string) (SessionLifecycleResult, error) {
@@ -407,7 +547,8 @@ func (l *SessionLifecycle) planExisting(ctx context.Context, id SessionID, name 
 	}
 	session := state.Agents[idx]
 	advanced := LifecycleRecord{SessionID: session.ID, Session: session, Desired: desired}
-	err = l.withSessionTransition(ctx, session.ID, session.Name, func() error {
+	run := func() error {
+		return l.withSessionTransition(ctx, session.ID, session.Name, func() error {
 		if settleErr := l.settleCrossedRename(ctx, session.ID); settleErr != nil {
 			return settleErr
 		}
@@ -426,7 +567,17 @@ func (l *SessionLifecycle) planExisting(ctx context.Context, id SessionID, name 
 		var advanceErr error
 		advanced, advanceErr = l.planSessionLocked(ctx, currentState, currentState.Agents[currentIndex], desired)
 		return advanceErr
-	})
+		})
+	}
+	if desired == SessionDesiredRunning {
+		project, projectErr := lifecycleProjectForSession(state, session)
+		if projectErr != nil {
+			return SessionLifecycleResult{Session: advanced.Session, Record: advanced}, projectErr
+		}
+		err = l.withRunningWorktreeTransition(ctx, project, session, false, run)
+	} else {
+		err = run()
+	}
 	return SessionLifecycleResult{Session: advanced.Session, Record: advanced}, err
 }
 
@@ -459,10 +610,14 @@ func (l *SessionLifecycle) planSessionLocked(ctx context.Context, state State, s
 		Applied:   LifecycleAppliedState{WorktreeReady: true},
 		CreatedAt: now, UpdatedAt: now,
 	}
-	if project := state.ProjectByID(session.ProjectID); project != nil {
+	if session.ProjectID != "" {
+		project := state.ProjectByID(session.ProjectID)
+		if project == nil {
+			return record, fmt.Errorf("ProjectID %q not found", session.ProjectID)
+		}
 		record.Project = *project
-	} else if project := state.ProjectByName(session.Project); project != nil {
-		record.Project = *project
+		record.Session.ProjectID = project.ID
+		record.Session.Project = project.Name
 	}
 	if _, err := l.putRecord(ctx, record, false); err != nil {
 		return record, err
@@ -475,6 +630,48 @@ func (l *SessionLifecycle) planSessionLocked(ctx context.Context, state State, s
 		advanced, err = l.advanceStopped(ctx, record)
 	}
 	return advanced, err
+}
+
+func lifecycleProjectForSession(state State, session Session) (Project, error) {
+	if session.ProjectID == "" {
+		return Project{}, nil
+	}
+	project := state.ProjectByID(session.ProjectID)
+	if project == nil {
+		return Project{}, fmt.Errorf("ProjectID %q not found", session.ProjectID)
+	}
+	return *project, nil
+}
+
+func (l *SessionLifecycle) withRunningWorktreeTransition(
+	ctx context.Context,
+	project Project,
+	session Session,
+	createWorktree bool,
+	fn func() error,
+) error {
+	target, managed := runningWorktreeTarget(project, session, createWorktree)
+	if !managed {
+		return fn()
+	}
+	return l.worktrees.with(ctx, project, target, func() error {
+		freshProject, err := l.resolveProject(ctx, session.ProjectID)
+		if err != nil {
+			return err
+		}
+		freshTarget, freshManaged := runningWorktreeTarget(freshProject, session, createWorktree)
+		if !freshManaged || canonicalWorktreeTransitionPath(freshTarget) != canonicalWorktreeTransitionPath(target) {
+			return errors.New("Project Worktree identity changed during Session transition")
+		}
+		return fn()
+	})
+}
+
+func runningWorktreeTarget(project Project, session Session, createWorktree bool) (string, bool) {
+	if createWorktree {
+		return managedWorktreeTarget(project, session.Name)
+	}
+	return managedWorktreeForDirectory(project, session.Dir)
 }
 
 func (l *SessionLifecycle) Reconcile(ctx context.Context) (LifecycleReconcileResult, error) {
@@ -536,7 +733,8 @@ func (l *SessionLifecycle) Reconcile(ctx context.Context) (LifecycleReconcileRes
 // the runtime Seam.
 func (l *SessionLifecycle) advanceSerialized(ctx context.Context, expected LifecycleRecord) (LifecycleRecord, error) {
 	advanced := expected
-	err := l.withSessionTransition(ctx, expected.SessionID, expected.Session.Name, func() error {
+	run := func() error {
+		return l.withSessionTransition(ctx, expected.SessionID, expected.Session.Name, func() error {
 		latest, ok, readErr := l.recordForSession(ctx, expected.SessionID)
 		if readErr != nil {
 			return readErr
@@ -557,7 +755,18 @@ func (l *SessionLifecycle) advanceSerialized(ctx context.Context, expected Lifec
 			advanced, advanceErr = l.advanceStopped(ctx, latest)
 		}
 		return advanceErr
-	})
+		})
+	}
+	var err error
+	if expected.TransitionKind != LifecycleTransitionRename && expected.Desired == SessionDesiredRunning {
+		project, resolveErr := l.resolveProject(ctx, expected.Session.ProjectID)
+		if resolveErr != nil {
+			return advanced, resolveErr
+		}
+		err = l.withRunningWorktreeTransition(ctx, project, expected.Session, expected.CreateWorktree, run)
+	} else {
+		err = run()
+	}
 	return advanced, err
 }
 
@@ -565,7 +774,22 @@ func (l *SessionLifecycle) advanceSerialized(ctx context.Context, expected Lifec
 // Session transition lock. An explicit Park or Resume that was already in
 // flight therefore cannot be undone using a stale Registry snapshot.
 func (l *SessionLifecycle) reconcileRegisteredSession(ctx context.Context, id SessionID, name string) (examined, restored bool, err error) {
-	err = l.withSessionTransition(ctx, id, name, func() error {
+	initialSnapshot, err := l.registry.Snapshot(ctx)
+	if err != nil {
+		return false, false, err
+	}
+	initialState := initialSnapshot.State()
+	initialIndex := sessionIndex(&initialState, id, name)
+	if initialIndex < 0 {
+		return false, false, nil
+	}
+	initialSession := initialState.Agents[initialIndex]
+	project, err := lifecycleProjectForSession(initialState, initialSession)
+	if err != nil {
+		return false, false, err
+	}
+	run := func() error {
+		return l.withSessionTransition(ctx, id, name, func() error {
 		registrySnapshot, snapshotErr := l.registry.Snapshot(ctx)
 		if snapshotErr != nil {
 			return snapshotErr
@@ -603,7 +827,9 @@ func (l *SessionLifecycle) reconcileRegisteredSession(ctx context.Context, id Se
 		}
 		restored = advanced.Desired == SessionDesiredRunning && advanced.Applied.RuntimePresent
 		return nil
-	})
+		})
+	}
+	err = l.withRunningWorktreeTransition(ctx, project, initialSession, false, run)
 	return examined, restored, err
 }
 
@@ -765,6 +991,23 @@ func (l *SessionLifecycle) advanceRunning(ctx context.Context, record LifecycleR
 	record = current
 	record.Attempts++
 	record.LastError = ""
+	if record.Session.ProjectID != "" {
+		freshProject, resolveErr := l.resolveProject(ctx, record.Session.ProjectID)
+		if resolveErr != nil {
+			return l.failRecord(ctx, record, resolveErr)
+		}
+		oldTarget, oldManaged := runningWorktreeTarget(record.Project, record.Session, record.CreateWorktree)
+		freshTarget, freshManaged := runningWorktreeTarget(freshProject, record.Session, record.CreateWorktree)
+		if oldManaged != freshManaged || oldManaged && canonicalWorktreeTransitionPath(oldTarget) != canonicalWorktreeTransitionPath(freshTarget) {
+			return l.failRecord(ctx, record, errors.New("Project Worktree identity changed during Session transition"))
+		}
+		record.Project = freshProject
+		record.Session.ProjectID = freshProject.ID
+		record.Session.Project = freshProject.Name
+		if record.CreateWorktree {
+			record.Session.Dir = freshTarget
+		}
+	}
 	if record.CreateWorktree && !record.Applied.WorktreeReady {
 		change, changeErr := l.repositories.Change(ctx, CreateManagedWorktreeChange(record.Project, record.Session.Name))
 		if change.Path != "" {
@@ -787,6 +1030,16 @@ func (l *SessionLifecycle) advanceRunning(ctx context.Context, record LifecycleR
 		inspection, inspectErr := l.repositories.Inspect(ctx, RepositoryInspectRequest{
 			Directory: record.Session.Dir, MainBranch: record.Project.MainBranch,
 		})
+		if record.Session.Worktree && (inspectErr != nil || inspection.Presence != RepositoryKnown) {
+			if inspectErr != nil {
+				return l.failRecord(ctx, record, fmt.Errorf("verify managed Worktree before runtime start: %w", inspectErr))
+			}
+			message := "managed Worktree is unavailable before runtime start"
+			if inspection.Problem != nil && strings.TrimSpace(inspection.Problem.Message) != "" {
+				message += ": " + inspection.Problem.Message
+			}
+			return l.failRecord(ctx, record, errors.New(message))
+		}
 		if inspectErr == nil && inspection.Baseline.Known() {
 			record.Session.BaseCommit = inspection.Baseline.Value.Head
 			record.Session.BaseDirty = append([]string(nil), inspection.Baseline.Value.DirtyPaths...)

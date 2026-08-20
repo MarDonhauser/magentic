@@ -150,6 +150,27 @@ func TestRegistryBaselineReopenPreservesConcurrentSessionChange(t *testing.T) {
 	}
 }
 
+func TestRegistryMarkSeenThrottlesSemanticChange(t *testing.T) {
+	registry := OpenRegistry(filepath.Join(t.TempDir(), "state.json"))
+	session := Session{ID: "session-seen", Name: "seen", Dir: t.TempDir()}
+	if _, err := registry.Change(context.Background(), RegisterSession(session)); err != nil {
+		t.Fatal(err)
+	}
+	seenAt := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	first, err := registry.Change(context.Background(), MarkSessionSeen(session.ID, session.Name, seenAt))
+	if err != nil || !first.Applied {
+		t.Fatalf("first MarkSessionSeen = %+v, %v", first, err)
+	}
+	throttled, err := registry.Change(context.Background(), MarkSessionSeen(session.ID, session.Name, seenAt.Add(time.Second)))
+	if err != nil || throttled.Applied || throttled.Revision != first.Revision {
+		t.Fatalf("throttled MarkSessionSeen = %+v, %v", throttled, err)
+	}
+	later, err := registry.Change(context.Background(), MarkSessionSeen(session.ID, session.Name, seenAt.Add(10*time.Second)))
+	if err != nil || !later.Applied {
+		t.Fatalf("later MarkSessionSeen = %+v, %v", later, err)
+	}
+}
+
 func TestRegistryBaselineReopenRejectsConflictingOverwriteAtomically(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	registry := OpenRegistry(path)

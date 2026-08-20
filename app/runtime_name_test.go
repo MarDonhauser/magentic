@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -128,6 +129,27 @@ func TestOpenTermBuildsAttachCommandFromRegisteredRuntimeName(t *testing.T) {
 	}
 	if commandArgs[3] == core.TargetSession(core.SessionName(source.Name)) {
 		t.Fatal("OpenTerm recomputed runtime identity from display name")
+	}
+}
+
+func TestOpenTermDoesNotCollapseObservationFailureToMissingSession(t *testing.T) {
+	installCustomRuntimeTmux(t, "ready", "claude", "claude")
+	t.Setenv("MAGENTIC_HANDOFF_LIST_FAIL", "1")
+	source, target := customRuntimeAgents()
+	handoffTestState(t, source, target)
+
+	starts := 0
+	app := NewApp()
+	app.startTerm = func(*exec.Cmd, *pty.Winsize) (*os.File, error) {
+		starts++
+		return nil, errors.New("must not start")
+	}
+	err := app.OpenTerm(string(source.ID), source.Name, 120, 40)
+	if err == nil || !strings.Contains(err.Error(), "nicht verlässlich geprüft") || strings.Contains(err.Error(), "existiert nicht mehr") {
+		t.Fatalf("OpenTerm() error = %v, want explicit unknown runtime fact", err)
+	}
+	if starts != 0 {
+		t.Fatalf("OpenTerm crossed PTY Seam %d times despite unavailable Observation", starts)
 	}
 }
 

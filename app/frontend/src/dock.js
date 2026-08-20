@@ -6,6 +6,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { BrowserOpenURL } from '../wailsjs/runtime/runtime';
 import { developerIcon } from './avatar.js';
 import { onThemeChange, terminalTheme } from './theme.js';
+import { dockRefKey, normalizeDockRef, normalizeDockState, resolveLegacyDockRefs } from './dock-state.js';
 
 const STORE_KEY = 'magentic.dock';
 const DEFAULT_HEIGHT = 280;
@@ -49,7 +50,7 @@ let cb = {};
 let mounted = false;
 let open = false;
 let height = DEFAULT_HEIGHT;
-let activeName = null;
+let activeKey = null;
 let dockEl = null;
 let tabsEl = null;
 let bodyEl = null;
@@ -63,13 +64,7 @@ function maxHeight() {
 function readState() {
   try {
     const raw = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
-    if (!raw || typeof raw !== 'object') return null;
-    return {
-      open: !!raw.open,
-      height: Number.isFinite(raw.height) ? raw.height : DEFAULT_HEIGHT,
-      tabs: Array.isArray(raw.tabs) ? raw.tabs.filter(n => typeof n === 'string' && n) : [],
-      active: typeof raw.active === 'string' ? raw.active : null,
-    };
+    return normalizeDockState(raw, DEFAULT_HEIGHT);
   } catch {
     return null;
   }
@@ -77,7 +72,12 @@ function readState() {
 
 function persist() {
   try {
-    localStorage.setItem(STORE_KEY, JSON.stringify({ open, height, tabs: [...tabs.keys()], active: activeName }));
+    localStorage.setItem(STORE_KEY, JSON.stringify({
+      open,
+      height,
+      tabs: [...tabs.values()].map(tab => tab.ref),
+      active: activeKey,
+    }));
   } catch { /* Speicher voll oder gesperrt — Zustand ist dann eben flüchtig */ }
 }
 
@@ -94,7 +94,7 @@ function applyOpen() {
 }
 
 function activeTab() {
-  return activeName ? tabs.get(activeName) : null;
+  return activeKey ? tabs.get(activeKey) : null;
 }
 
 function openURL(uri) {
@@ -141,7 +141,7 @@ function fitNow(t) {
   const box = bodyEl.getBoundingClientRect();
   if (box.width < 2 || box.height < 2) return;
   try { t.fit.fit(); } catch { return; }
-  try { cb.resize?.(t.name, t.term.cols, t.term.rows); } catch { /* Backend meldet sich beim nächsten Versuch */ }
+  try { cb.resize?.(t.ref, t.term.cols, t.term.rows); } catch { /* Backend meldet sich beim nächsten Versuch */ }
 }
 
 function scheduleFit() {
@@ -190,7 +190,7 @@ function syncDot(t) {
   let color = 'var(--muted)';
   let label = '';
   try {
-    const s = cb.status?.(t.name);
+    const s = cb.status?.(t.ref);
     if (s) {
       color = s.color || color;
       label = s.label || '';
@@ -214,10 +214,14 @@ function updateBlank() {
   document.body.classList.toggle('dk-no-tabs', blank);
 }
 
-function addTab(name) {
+function addTab(value) {
+  const ref = normalizeDockRef(value);
+  const key = dockRefKey(ref);
+  if (!ref || !key) return null;
+  const name = ref.name;
   const el = document.createElement('div');
   el.className = 'dk-tab';
-  el.dataset.name = name;
+  el.dataset.key = key;
 
   const dot = document.createElement('span');
   dot.className = 'dk-dot';
@@ -248,8 +252,8 @@ function addTab(name) {
   pane.appendChild(host);
   bodyEl.appendChild(pane);
 
-  const t = { name, el, dot, pane, host, term: null, fit: null, offData: null, offClosed: null, live: false, closed: false };
-  tabs.set(name, t);
+  const t = { ref, key, name, el, dot, pane, host, term: null, fit: null, offData: null, offClosed: null, live: false, closed: false };
+  tabs.set(key, t);
   syncDot(t);
   updateBlank();
   return t;
@@ -275,15 +279,15 @@ function ensureLive(t) {
   term.open(t.host);
   bindKeys(term, t);
 
-  term.onData(d => cb.write?.(t.name, toB64(d)));
-  term.onResize(({ cols, rows }) => cb.resize?.(t.name, cols, rows));
+  term.onData(d => cb.write?.(t.ref, toB64(d)));
+  term.onResize(({ cols, rows }) => cb.resize?.(t.ref, cols, rows));
 
   t.term = term;
   t.fit = fit;
 
-  try { t.offData = cb.onData?.(t.name, b64 => term.write(fromB64(b64))) || null; } catch { t.offData = null; }
+  try { t.offData = cb.onData?.(t.ref, b64 => term.write(fromB64(b64))) || null; } catch { t.offData = null; }
   try {
-    t.offClosed = cb.onClosed?.(t.name, () => {
+    t.offClosed = cb.onClosed?.(t.ref, () => {
       t.closed = true;
       term.write('\r\n\x1b[31m— Verbindung beendet —\x1b[0m\r\n');
       syncDot(t);
@@ -291,16 +295,16 @@ function ensureLive(t) {
   } catch { t.offClosed = null; }
 
   try { fit.fit(); } catch { /* Pane noch ohne Maße */ }
-  Promise.resolve(cb.attach?.(t.name, term.cols, term.rows))
+  Promise.resolve(cb.attach?.(t.ref, term.cols, term.rows))
     .catch(err => term.write('\x1b[31m' + err + '\x1b[0m\r\n'));
 }
 
-function activate(name) {
-  const t = tabs.get(name);
+function activate(key) {
+  const t = tabs.get(key);
   if (!t) return;
-  activeName = name;
-  for (const [n, other] of tabs) {
-    const on = n === name;
+  activeKey = key;
+  for (const [otherKey, other] of tabs) {
+    const on = otherKey === key;
     other.el.classList.toggle('dk-active', on);
     other.pane.classList.toggle('dk-on', on);
   }
@@ -310,23 +314,23 @@ function activate(name) {
     fitNow(t);
     t.term?.focus();
   }
-  try { cb.onActive?.(name); } catch { /* optionaler Callback */ }
+  try { cb.onActive?.(t.ref); } catch { /* optionaler Callback */ }
   persist();
 }
 
 function stepTab(dir) {
   const list = [...tabs.keys()];
   if (list.length < 2) return;
-  const i = list.indexOf(activeName);
+  const i = list.indexOf(activeKey);
   const next = list[((i < 0 ? 0 : i) + dir + list.length) % list.length];
   activate(next);
 }
 
 async function spawnTerminal() {
   if (!cb.newTerminal) return;
-  let name = null;
-  try { name = await cb.newTerminal(); } catch { return; }
-  if (name) openInDock(name);
+  let ref = null;
+  try { ref = await cb.newTerminal(); } catch { return; }
+  if (ref) openInDock(ref);
 }
 
 function startDrag(e) {
@@ -442,10 +446,10 @@ function buildDom() {
     const tab = e.target.closest('.dk-tab');
     if (!tab) return;
     if (e.target.closest('.dk-x')) {
-      closeDockTab(tab.dataset.name);
+      closeDockTab(tab.dataset.key);
       return;
     }
-    activate(tab.dataset.name);
+    activate(tab.dataset.key);
   });
   tabsEl.addEventListener('mousedown', e => {
     if (e.button === 1) e.preventDefault();
@@ -455,7 +459,7 @@ function buildDom() {
     const tab = e.target.closest('.dk-tab');
     if (!tab) return;
     e.preventDefault();
-    closeDockTab(tab.dataset.name);
+    closeDockTab(tab.dataset.key);
   });
 }
 
@@ -493,11 +497,28 @@ export function mountDock(opts) {
   applyOpen();
   buildDom();
 
-  for (const name of saved?.tabs || []) {
-    if (!tabs.has(name)) addTab(name);
-  }
-  const wanted = saved?.active && tabs.has(saved.active) ? saved.active : [...tabs.keys()][0] || null;
-  if (wanted) activate(wanted);
+  const restore = async () => {
+    let refs = saved?.tabs || [];
+    const legacyNames = refs.filter(ref => !ref.id).map(ref => ref.name);
+    if (legacyNames.length && cb.migrateLegacy) {
+      try {
+        refs = resolveLegacyDockRefs(refs, await cb.migrateLegacy(legacyNames));
+      } catch { /* bei transientem Registry-Fehler bleibt der explizite Legacy-Pfad erhalten */ }
+    }
+    for (const ref of refs) {
+      const key = dockRefKey(ref);
+      if (!tabs.has(key)) addTab(ref);
+    }
+    let wanted = saved?.active && tabs.has(saved.active) ? saved.active : null;
+    if (!wanted && saved?.active) {
+      const previous = saved.tabs.find(ref => dockRefKey(ref) === saved.active);
+      wanted = previous ? ([...tabs.values()].find(tab => tab.name === previous.name)?.key || null) : null;
+    }
+    wanted ||= [...tabs.keys()][0] || null;
+    if (wanted) activate(wanted);
+    else persist();
+  };
+  restore();
 
   window.addEventListener('resize', onWindowResize);
   window.addEventListener('keydown', onKeyDown, true);
@@ -517,8 +538,8 @@ export function toggleDock(next) {
   persist();
   notifyLayout();
   if (!open) return;
-  if (!activeName || !tabs.has(activeName)) activeName = [...tabs.keys()][0] || null;
-  if (activeName) activate(activeName);
+  if (!activeKey || !tabs.has(activeKey)) activeKey = [...tabs.keys()][0] || null;
+  if (activeKey) activate(activeKey);
   else updateStatuses();
 }
 
@@ -526,29 +547,32 @@ export function isDockOpen() {
   return open;
 }
 
-export function openInDock(name) {
-  if (!mounted || !name) return;
-  if (!tabs.has(name)) addTab(name);
+export function openInDock(value) {
+  const ref = normalizeDockRef(value);
+  const key = dockRefKey(ref);
+  if (!mounted || !ref || !key) return;
+  if (!tabs.has(key)) addTab(ref);
   if (!open) {
     open = true;
     applyOpen();
     notifyLayout();
   }
-  activate(name);
+  activate(key);
 }
 
-export function closeDockTab(name) {
-  const t = tabs.get(name);
+export function closeDockTab(value) {
+  const key = typeof value === 'string' && tabs.has(value) ? value : dockRefKey(value);
+  const t = tabs.get(key);
   if (!t) return;
 
   const order = [...tabs.keys()];
-  const i = order.indexOf(name);
-  tabs.delete(name);
+  const i = order.indexOf(key);
+  tabs.delete(key);
 
   try { t.offData?.(); } catch { /* Listener war schon weg */ }
   try { t.offClosed?.(); } catch { /* Listener war schon weg */ }
   if (t.live) {
-    try { cb.close?.(name); } catch { /* Backend hat die Sitzung evtl. selbst beendet */ }
+    try { cb.close?.(t.ref); } catch { /* Backend hat die Sitzung evtl. selbst beendet */ }
   }
   try { t.term?.dispose(); } catch { /* bereits entsorgt */ }
   t.term = null;
@@ -560,9 +584,9 @@ export function closeDockTab(name) {
 
   updateBlank();
 
-  if (activeName === name) {
-    activeName = null;
-    const rest = order.filter(n => n !== name);
+  if (activeKey === key) {
+    activeKey = null;
+    const rest = order.filter(otherKey => otherKey !== key);
     const next = rest[i] || rest[i - 1] || null;
     if (next) activate(next);
   }
@@ -570,7 +594,7 @@ export function closeDockTab(name) {
 }
 
 export function dockTabs() {
-  return [...tabs.keys()];
+  return [...tabs.values()].map(tab => ({ ...tab.ref }));
 }
 
 export function refitDock() {

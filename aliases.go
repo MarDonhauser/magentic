@@ -35,9 +35,6 @@ var (
 	targetSession        = core.TargetSession
 	targetPane           = core.TargetPane
 	TmuxHasSession       = core.TmuxHasSession
-	TmuxNewClaudeSession = core.TmuxNewClaudeSession
-	TmuxNewShellSession  = core.TmuxNewShellSession
-	TmuxKillSession      = core.TmuxKillSession
 
 	LoadState             = core.LoadState
 	StatePath             = core.StatePath
@@ -71,7 +68,6 @@ var (
 	createTermSessionForID = core.CreateTermSessionForID
 	removeSession          = core.RemoveRegisteredSession
 	startSkillAgent        = core.StartSkillAgent
-	sendPromptWhenReady    = core.SendPromptWhenReady
 	sendSkillByID          = core.SendSkillByID
 	observeSessions        = core.Observe
 

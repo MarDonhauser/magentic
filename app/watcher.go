@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"magentic/core"
@@ -26,19 +27,35 @@ func cloneObservation(snapshot core.ObservationSnapshot) core.ObservationSnapsho
 	return copyOfSnapshot
 }
 
-func (a *App) storeObservation(snapshot core.ObservationSnapshot) {
+func observationFingerprints(sessions []core.Session) map[core.SessionID]string {
+	fingerprints := make(map[core.SessionID]string, len(sessions))
+	for _, session := range sessions {
+		if session.ID == "" {
+			return nil
+		}
+		encoded, err := json.Marshal(session)
+		if err != nil {
+			return nil
+		}
+		fingerprints[session.ID] = string(encoded)
+	}
+	return fingerprints
+}
+
+func (a *App) storeObservation(snapshot core.ObservationSnapshot, sessions []core.Session) {
 	a.observationMu.Lock()
 	a.observation = cloneObservation(snapshot)
 	a.observationAt = time.Now()
+	a.observationInput = observationFingerprints(sessions)
 	a.observationMu.Unlock()
 }
 
 func (a *App) observationFor(sessions []core.Session, fresh bool) core.ObservationSnapshot {
 	if !fresh {
 		a.observationMu.Lock()
-		cached, cachedAt := cloneObservation(a.observation), a.observationAt
+		cached, cachedAt, cachedInput := cloneObservation(a.observation), a.observationAt, a.observationInput
 		a.observationMu.Unlock()
-		if time.Since(cachedAt) <= 5*time.Second && observationCovers(cached, sessions) {
+		if time.Since(cachedAt) <= 5*time.Second && observationCovers(cached, cachedInput, sessions) {
 			return cached
 		}
 	}
@@ -47,12 +64,16 @@ func (a *App) observationFor(sessions []core.Session, fresh bool) core.Observati
 		observe = a.observeSessions
 	}
 	snapshot := observe(context.Background(), sessions)
-	a.storeObservation(snapshot)
+	a.storeObservation(snapshot, sessions)
 	return snapshot
 }
 
-func observationCovers(snapshot core.ObservationSnapshot, sessions []core.Session) bool {
+func observationCovers(snapshot core.ObservationSnapshot, cachedInput map[core.SessionID]string, sessions []core.Session) bool {
 	if len(snapshot.Sessions) != len(sessions) {
+		return false
+	}
+	requested := observationFingerprints(sessions)
+	if len(cachedInput) != len(requested) || len(requested) != len(sessions) {
 		return false
 	}
 	observed := make(map[core.SessionID]bool, len(snapshot.Sessions))
@@ -60,7 +81,7 @@ func observationCovers(snapshot core.ObservationSnapshot, sessions []core.Sessio
 		observed[session.SessionID] = true
 	}
 	for _, session := range sessions {
-		if session.ID == "" || !observed[session.ID] {
+		if session.ID == "" || !observed[session.ID] || cachedInput[session.ID] != requested[session.ID] {
 			return false
 		}
 	}
@@ -97,7 +118,7 @@ func (a *App) watchLoop() {
 			lastErrLog = time.Now()
 		}
 		snapshot := core.Observe(context.Background(), st.Agents)
-		a.storeObservation(snapshot)
+		a.storeObservation(snapshot, st.Agents)
 		if len(st.Agents) > 0 && snapshot.Availability == core.ObservationUnavailable && time.Since(lastErrLog) > time.Minute {
 			problem := "tmux unavailable"
 			if len(snapshot.Problems) > 0 {

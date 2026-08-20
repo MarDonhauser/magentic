@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func useTempState(t *testing.T) string {
@@ -68,20 +67,6 @@ func TestLoadStateMissingFile(t *testing.T) {
 	}
 	if len(st.Agents) != 0 || len(st.Projects) != 0 {
 		t.Fatal("erwartet leerer State")
-	}
-}
-
-func TestMarkSeenThrottles(t *testing.T) {
-	s := &State{Agents: []Agent{{Name: "hera"}}}
-	if !s.MarkSeen("hera") {
-		t.Fatal("erster Aufruf muss speichern wollen")
-	}
-	if s.MarkSeen("hera") {
-		t.Fatal("direkt folgender Aufruf darf keinen Schreibvorgang auslösen")
-	}
-	s.Agents[0].SeenAt = time.Now().Add(-10 * time.Second)
-	if !s.MarkSeen("hera") {
-		t.Fatal("nach Ablauf der Sperre muss wieder gespeichert werden")
 	}
 }
 

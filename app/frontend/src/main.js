@@ -6,14 +6,14 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import {
-  Overview, Projects,
+  Overview,
   NewSession, NewTermSession, NewTermSessionFor, DoneAgent, Cleanup, Merge, Deploy, RemoveWorktree, SetMainBranch,
   OpenTerm, WriteTerm, ResizeTerm, CloseTerm, KillSession, LaterSession, ReopenSession, SendSkill, HandoffSession,
   DeployStatus, AzLogin, ArgoLogin, AzAccounts, AzSetSubscription,
   WorktreeDiff, SessionPreview, SearchTranscripts, SessionLinks, SetActiveTerm,
   PickFolder, AddProject, RemoveProject, ReorderProjects, SaveImage, Timeline,
   Zeitgeist, ZeitgeistStart, ZeitgeistPause, ZeitgeistResume, ZeitgeistStop,
-  MarkSeen, GitGraph, Board, BoardArchive, Stats, StartBoardItem, NewDockSession, BuildInfo,
+  MarkSeen, GitGraph, Board, BoardArchive, Stats, StartBoardItem, NewDockSession, MigrateDockSessions, BuildInfo,
   Breaks, BreakHeartbeat, TakeBreak, EndBreak, SnoozeBreak, BreakConfig, SetBreakConfig, BreakOver,
 } from '../wailsjs/go/main/App';
 import { EventsOn, EventsOff, BrowserOpenURL, ClipboardSetText } from '../wailsjs/runtime/runtime';
@@ -29,7 +29,7 @@ import {
 import { renderGitGraph } from './gitgraph.js';
 import { renderBoard } from './board.js';
 import { renderStats } from './stats.js';
-import { mountDock, toggleDock, isDockOpen, openInDock, closeDockTab, dockTabs, refitDock } from './dock.js';
+import { mountDock, toggleDock, isDockOpen, closeDockTab, dockTabs, refitDock } from './dock.js';
 import { mountBreaks, updateBreaks, openBreak, openBreakSettings, isBreakOpen } from './breaks.js';
 import { initThemeToggle, onThemeChange, terminalTheme } from './theme.js';
 import { createHydraHandoff } from './hydra-handoff.js';
@@ -102,7 +102,6 @@ let view = 'overview';
 let activeTerm = null;
 let activeSessionID = null;
 let ov = null;
-let projects = [];
 let overviewSync = { kind: 'loading', error: '', lastOkAt: '' };
 let confirmRemove = null;
 let confirmRemoveProject = null;
@@ -548,7 +547,8 @@ async function openSession(sessionID, name) {
   view = 'term';
   hydraProject = null;
   termsEl.classList.remove('hydra');
-  if (dockTabs().includes(name)) closeDockTab(name);
+  const dockTab = dockTabs().find(tab => tab.id === sessionID || (!tab.id && tab.name === name));
+  if (dockTab) closeDockTab(dockTab);
   if (activeSessionID && activeSessionID !== sessionID) markSeen(activeSessionID);
   markSeen(sessionID);
   activeTerm = name;
@@ -638,16 +638,29 @@ function projectInfo(name) {
   return (ov?.projects || []).find(p => p.path && p.name === name) || null;
 }
 
+function projectIDs() {
+  return (ov?.projects || []).filter(p => p.path && p.id).map(p => p.id);
+}
+
+function projectInfoByID(id) {
+  return (ov?.projects || []).find(p => p.path && p.id === id) || null;
+}
+
 function pickProject(current) {
   const names = projectNames();
   return current && names.includes(current) ? current : (names[0] || '');
 }
 
+function pickProjectID(current) {
+  const ids = projectIDs();
+  return current && ids.includes(current) ? current : (ids[0] || '');
+}
+
 function projectTabs(active, act) {
-  const names = projectNames();
-  if (!names.length) return '';
-  return `<div class="proj-tabs">` + names.map(n =>
-    `<button class="ptab${n === active ? ' on' : ''}" data-act="${act}" data-project="${esc(n)}">${esc(n)}</button>`
+  const entries = (ov?.projects || []).filter(p => p.path && p.id);
+  if (!entries.length) return '';
+  return `<div class="proj-tabs">` + entries.map(project =>
+    `<button class="ptab${project.id === active ? ' on' : ''}" data-act="${act}" data-project="${esc(project.id)}">${esc(project.name)}</button>`
   ).join('') + `</div>`;
 }
 
@@ -658,7 +671,7 @@ function sessionAvatar(name) {
 async function showGraph(project) {
   view = 'graph';
   leaveTerm();
-  graphProject = pickProject(project ?? graphProject);
+  graphProject = pickProjectID(project ?? graphProject);
   showPanel('graph-view');
   renderSidebar();
   await loadGraph();
@@ -689,7 +702,7 @@ async function loadGraph() {
 async function showBoard(project) {
   view = 'board';
   leaveTerm();
-  boardProject = pickProject(project ?? boardProject);
+  boardProject = pickProjectID(project ?? boardProject);
   showPanel('board-view');
   renderSidebar();
   await loadBoard();
@@ -717,8 +730,8 @@ async function loadBoard() {
     onOpenSession: name => openSessionByName(name),
     onStart: async item => {
       try {
-        const project = projectInfo(boardProject);
-        if (!project?.id) throw new Error(`Projekt „${boardProject}" ist nicht mehr registriert`);
+        const project = projectInfoByID(boardProject);
+        if (!project?.id) throw new Error('Projekt ist nicht mehr registriert');
         const name = await act(StartBoardItem(project.id, item.startToken),
           n => `Session „${n}" für „${item.title}" gestartet`);
         if (name) setTimeout(() => openSessionByName(name), 400);
@@ -1477,8 +1490,8 @@ function projectCard(p) {
     const menuOpen = editingMain === p.id || confirmRemoveProject === p.id ? ' open' : '';
     projectTools = `<div class="project-tools">` +
       `<div class="project-lenses"><span class="project-tools-label">Ansichten</span>` +
-      `<button class="project-lens" data-act="showgraph" data-project="${esc(p.name)}" title="Git-Graph dieses Projekts — wo Worktrees abzweigen und zusammenlaufen">${developerIcon('git')} Graph</button>` +
-      `<button class="project-lens" data-act="showboard" data-project="${esc(p.name)}" title="Board aus allen Spec-Ordnern — Plan, Tasks und was gerade läuft">${developerIcon('markdown')} Board</button>` +
+      `<button class="project-lens" data-act="showgraph" data-project="${esc(p.id)}" title="Git-Graph dieses Projekts — wo Worktrees abzweigen und zusammenlaufen">${developerIcon('git')} Graph</button>` +
+      `<button class="project-lens" data-act="showboard" data-project="${esc(p.id)}" title="Board aus allen Spec-Ordnern — Plan, Tasks und was gerade läuft">${developerIcon('markdown')} Board</button>` +
       `<button class="project-lens" data-act="showstats" data-project="${esc(p.name)}" title="Statistik mit Fokus auf dieses Projekt">${icon('chart')} Statistik</button></div>` +
       `<div class="project-primary-actions">` +
       `<button class="btn primary" data-act="newsession" data-project="${esc(p.id)}" title="Neue Session im Projekt">${icon('play')} Session</button>` +
@@ -1838,14 +1851,14 @@ let refreshQueuedForce = false;
 async function refreshOnce(force) {
   const previousKind = overviewSync.kind;
   try {
-    const [o, p] = await Promise.all([Overview(!!force), Projects()]);
-    ov = o; projects = p || [];
+    const o = await Overview(!!force);
+    ov = o;
     overviewSync = {
       kind: 'fresh',
       error: '',
       lastOkAt: o.generatedAt || new Date().toLocaleTimeString('de-DE'),
     };
-    const key = JSON.stringify([{ ...o, generatedAt: '' }, projects]);
+    const key = JSON.stringify({ ...o, generatedAt: '' });
     const recovered = previousKind === 'stale' || previousKind === 'error';
     if (key === lastDataKey && !force && !recovered) {
       const stamp = document.querySelector('.stamp');
@@ -2161,7 +2174,8 @@ async function openTermInContext() {
 }
 
 async function afterSessionGone(sessionID, name) {
-  if (dockTabs().includes(name)) closeDockTab(name);
+  const dockTab = dockTabs().find(tab => tab.id === sessionID || (!tab.id && tab.name === name));
+  if (dockTab) closeDockTab(dockTab);
   const t = terms.get(name);
   if (t && (!t.sessionID || t.sessionID === sessionID)) {
     EventsOff('term:data:' + t.connectionKey);
@@ -2359,30 +2373,31 @@ function dockContextProject() {
     if (a?.projectID) return a.projectID;
   }
   if (hydraProject) return projectInfo(hydraProject)?.id || '';
-  if (view === 'graph' && graphProject) return projectInfo(graphProject)?.id || '';
-  if (view === 'board' && boardProject) return projectInfo(boardProject)?.id || '';
+  if (view === 'graph' && graphProject) return graphProject;
+  if (view === 'board' && boardProject) return boardProject;
   return (ov?.projects || []).find(project => project.path)?.id || '';
 }
 
 mountDock({
-  // Persisted Dock tabs from releases before SessionID use are the sole
-  // explicit legacy-name path in the backend. Listed Sessions always carry ID.
-  attach: (name, cols, rows) => OpenTerm('', name, cols, rows),
-  write: (name, b64) => WriteTerm(termConnectionKey('', name), b64),
-  resize: (name, cols, rows) => ResizeTerm(termConnectionKey('', name), cols, rows),
-  close: name => {
+  // Old string tabs cross the name Adapter once; all newly persisted tabs and
+  // every terminal transport operation use the stable SessionID.
+  migrateLegacy: names => MigrateDockSessions(names),
+  attach: (tab, cols, rows) => OpenTerm(tab.id, tab.name, cols, rows),
+  write: (tab, b64) => WriteTerm(termConnectionKey(tab.id, tab.name), b64),
+  resize: (tab, cols, rows) => ResizeTerm(termConnectionKey(tab.id, tab.name), cols, rows),
+  close: tab => {
     // Dock-Terminals stehen in keiner Liste — bliebe die tmux-Session offen,
     // liefe sie unsichtbar weiter und wäre nur noch über tmux erreichbar.
-    CloseTerm(termConnectionKey('', name));
-    KillSession('', name).catch(() => {});
+    CloseTerm(termConnectionKey(tab.id, tab.name));
+    KillSession(tab.id, tab.name).catch(() => {});
   },
-  onData: (name, cb) => {
-    const ev = 'term:data:' + termConnectionKey('', name);
+  onData: (tab, cb) => {
+    const ev = 'term:data:' + termConnectionKey(tab.id, tab.name);
     EventsOn(ev, cb);
     return () => EventsOff(ev);
   },
-  onClosed: (name, cb) => {
-    const ev = 'term:closed:' + termConnectionKey('', name);
+  onClosed: (tab, cb) => {
+    const ev = 'term:closed:' + termConnectionKey(tab.id, tab.name);
     EventsOn(ev, cb);
     return () => EventsOff(ev);
   },
@@ -2390,11 +2405,11 @@ mountDock({
     const proj = dockContextProject();
     if (!proj) { toast('Kein Projekt registriert', true); return null; }
     try {
-      return await act(NewDockSession(proj), n => `Terminal „${n}" im Dock geöffnet`);
+      return await act(NewDockSession(proj), ref => `Terminal „${ref.name}" im Dock geöffnet`);
     } catch { return null; }
   },
-  status: name => {
-    const a = agentInfo(name);
+  status: tab => {
+    const a = agentInfo(tab.name, tab.id);
     if (!a) return null;
     const v = agentVisual(a, a.project);
     return { color: v.color, label: v.label };

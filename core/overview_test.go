@@ -117,19 +117,6 @@ func TestSessionNameHint(t *testing.T) {
 	}
 }
 
-func TestMarkSeen(t *testing.T) {
-	s := &State{Agents: []Agent{{Name: "hera"}}}
-	if !s.MarkSeen("hera") {
-		t.Fatal("MarkSeen muss true liefern")
-	}
-	if s.Agents[0].SeenAt.IsZero() {
-		t.Fatal("SeenAt wurde nicht gesetzt")
-	}
-	if s.MarkSeen("gibtsnicht") {
-		t.Fatal("MarkSeen für unbekannte Session muss false liefern")
-	}
-}
-
 func TestOverviewProjectsCoherentObservationFactsAndStableIDs(t *testing.T) {
 	dir := t.TempDir()
 	activeAt := time.Date(2026, 8, 20, 12, 0, 0, 0, time.Local)

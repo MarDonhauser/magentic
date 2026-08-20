@@ -57,7 +57,7 @@ type pollResult struct {
 	repositoryProblem string
 	inspections       map[tuiSessionKey]core.RepositoryInspection
 	inspectionProblem map[tuiSessionKey]string
-	discovered        []Agent
+	discovery         core.RegistryDiscovery
 	diskState         *State
 	zeitgeist         ZgInfo
 }
@@ -113,7 +113,7 @@ type model struct {
 	collapsed      map[string]bool
 	input          textinput.Model
 	inputKind      inputKind
-	pendingProject string
+	pendingProject core.ProjectID
 	renameFrom     string
 	confirmKill    bool
 	confirmRmProj  bool
@@ -138,9 +138,16 @@ func newModel(s *State) model {
 }
 
 func reconcile(s *State) {
-	if agents := discoverNew(s); len(agents) > 0 {
-		if changed, err := OpenRegistry(StatePath()).Change(context.Background(), AddDiscoveredSessions(agents)); err == nil {
+	discovery := discoverNew(context.Background(), s)
+	if err := discovery.Err(); err != nil {
+		core.Logf("TUI Session-Discovery unvollständig: %v", err)
+		return
+	}
+	if len(discovery.Sessions) > 0 {
+		if changed, err := OpenRegistry(StatePath()).Change(context.Background(), AddDiscoveredSessions(discovery.Sessions)); err == nil {
 			*s = changed.Snapshot.State()
+		} else {
+			core.Logf("TUI Session-Discovery fehlgeschlagen: %v", err)
 		}
 	}
 }
@@ -294,7 +301,7 @@ func pollCmd(state State, selected *Agent) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), tuiPollTimeout)
 		defer cancel()
 		res := collectPollModuleFacts(ctx, state, selected, core.Observe, core.NewRepositories())
-		res.discovered = discoverNew(&state)
+		res.discovery = discoverNew(ctx, &state)
 		res.zeitgeist = zeitgeistInfo()
 		if disk, err := LoadState(); err == nil {
 			res.diskState = disk
@@ -540,10 +547,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.poll.diskState != nil {
 			m.state = m.poll.diskState
 		}
-		if len(m.poll.discovered) > 0 {
-			if changed, err := OpenRegistry(StatePath()).Change(context.Background(), AddDiscoveredSessions(m.poll.discovered)); err == nil {
+		if discoveryErr := m.poll.discovery.Err(); discoveryErr != nil {
+			m.setFlash("Session-Discovery unvollständig: "+discoveryErr.Error(), true)
+		} else if len(m.poll.discovery.Sessions) > 0 {
+			if changed, err := OpenRegistry(StatePath()).Change(context.Background(), AddDiscoveredSessions(m.poll.discovery.Sessions)); err == nil {
 				state := changed.Snapshot.State()
 				m.state = &state
+			} else {
+				m.setFlash("Session-Discovery fehlgeschlagen: "+err.Error(), true)
 			}
 		}
 		if selName != "" {
@@ -825,17 +836,21 @@ func (m model) startInput(kind inputKind) (tea.Model, tea.Cmd) {
 			m.setFlash("Kein Projekt gewählt — erst mit p ein Projekt anlegen bzw. eins auswählen", true)
 			return m, nil
 		}
-		m.pendingProject = p.Name
+		m.pendingProject = p.ID
+	}
+	pendingProjectName := string(m.pendingProject)
+	if project := m.state.ProjectByID(m.pendingProject); project != nil {
+		pendingProjectName = project.Name
 	}
 	ti := textinput.New()
 	ti.CharLimit = 500
 	switch kind {
 	case inputNewSession:
-		ti.Prompt = fmt.Sprintf("Neuer Agent in %s (leer = auto): ", m.pendingProject)
+		ti.Prompt = fmt.Sprintf("Neuer Agent in %s (leer = auto): ", pendingProjectName)
 	case inputNewWorktree:
-		ti.Prompt = fmt.Sprintf("Neuer Agent im Worktree von %s (leer = auto): ", m.pendingProject)
+		ti.Prompt = fmt.Sprintf("Neuer Agent im Worktree von %s (leer = auto): ", pendingProjectName)
 	case inputNewTerm:
-		where := m.pendingProject
+		where := pendingProjectName
 		if a := m.selectedAgent(); a != nil {
 			where = shortPath(a.Dir)
 		}
@@ -908,9 +923,9 @@ func (m model) createTermAgent(name string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) createAgent(worktree bool, name, kind string) (tea.Model, tea.Cmd) {
-	proj := m.state.ProjectByName(m.pendingProject)
+	proj := m.state.ProjectByID(m.pendingProject)
 	if proj == nil {
-		m.setFlash("Projekt nicht gefunden", true)
+		m.setFlash(fmt.Sprintf("ProjectID %q existiert nicht mehr", m.pendingProject), true)
 		return m, nil
 	}
 	if name == "" {
@@ -931,9 +946,9 @@ func (m model) createAgent(worktree bool, name, kind string) (tea.Model, tea.Cmd
 		err     error
 	)
 	if kind == KindTerm {
-		created, err = createTermSession(m.state, proj.Name, worktree, name)
+		created, err = createTermSession(m.state, proj.ID, worktree, name)
 	} else {
-		created, err = createAgentSession(m.state, proj.Name, worktree, name)
+		created, err = createAgentSession(m.state, proj.ID, worktree, name)
 	}
 	if err != nil {
 		m.setFlash(err.Error(), true)

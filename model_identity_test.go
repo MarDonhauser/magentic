@@ -35,6 +35,28 @@ func TestCreateTermAgentUsesStableSessionID(t *testing.T) {
 	}
 }
 
+func TestCreateAgentRejectsPendingProjectIDAfterNameReuse(t *testing.T) {
+	previous := createAgentSession
+	t.Cleanup(func() { createAgentSession = previous })
+	stale := Project{ID: "project-stale", Name: "reused", Path: "/removed"}
+	replacement := Project{ID: "project-current", Name: stale.Name, Path: "/current"}
+	called := false
+	createAgentSession = func(_ *State, _ core.ProjectID, _ bool, _ string) (string, error) {
+		called = true
+		return "", nil
+	}
+	m := model{
+		state: &State{Projects: []Project{replacement}}, collapsed: map[string]bool{},
+		pendingProject: stale.ID,
+	}
+
+	next, command := m.createAgent(true, "topic", "")
+	got := next.(model)
+	if called || command != nil || !got.flashIsErr || !strings.Contains(got.flash, "existiert nicht mehr") {
+		t.Fatalf("stale ProjectID crossed create seam: called=%v command=%#v flash=%q error=%v", called, command, got.flash, got.flashIsErr)
+	}
+}
+
 func TestAttachRejectsStaleIDAfterNameReuse(t *testing.T) {
 	previousLoad, previousObserve := LoadState, observeSessions
 	t.Cleanup(func() { LoadState, observeSessions = previousLoad, previousObserve })

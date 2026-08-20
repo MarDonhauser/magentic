@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 func defaultSessionLifecycle() *SessionLifecycle {
@@ -94,15 +95,7 @@ func (tmuxRegistryDiscoveryRuntime) ListSessions(ctx context.Context) ([]string,
 	if err != nil {
 		return nil, err
 	}
-	trimmed := strings.TrimRight(out, "\r\n")
-	if trimmed == "" {
-		return nil, nil
-	}
-	lines := strings.Split(trimmed, "\n")
-	for i := range lines {
-		lines[i] = strings.TrimSuffix(lines[i], "\r")
-	}
-	return lines, nil
+	return parseRegistryDiscoverySessionList(out)
 }
 
 func (tmuxRegistryDiscoveryRuntime) InspectSession(ctx context.Context, runtimeName string) (registryRuntimeSessionFact, error) {
@@ -113,15 +106,56 @@ func (tmuxRegistryDiscoveryRuntime) InspectSession(ctx context.Context, runtimeN
 	if err != nil {
 		return fact, fmt.Errorf("read pane directory: %w", err)
 	}
-	fact.Directory = strings.TrimRight(directory, "\r\n")
+	fact.Directory, err = parseRegistryDiscoveryScalar(directory)
+	if err != nil {
+		return fact, fmt.Errorf("parse pane directory: %w", err)
+	}
 	created, err := runRegistryDiscoveryTmux(
 		ctx, "display-message", "-p", "-t", TargetPane(runtimeName), "#{session_created}",
 	)
 	if err != nil {
 		return fact, fmt.Errorf("read creation time: %w", err)
 	}
-	fact.CreatedUnix = strings.TrimSpace(created)
+	fact.CreatedUnix, err = parseRegistryDiscoveryScalar(created)
+	if err != nil {
+		return fact, fmt.Errorf("parse creation time: %w", err)
+	}
 	return fact, nil
+}
+
+func parseRegistryDiscoverySessionList(output string) ([]string, error) {
+	if output == "" {
+		return nil, errors.New("successful tmux response is empty")
+	}
+	if !strings.HasSuffix(output, "\n") {
+		return nil, errors.New("successful tmux response is unterminated")
+	}
+	rows := strings.Split(strings.TrimSuffix(output, "\n"), "\n")
+	for _, row := range rows {
+		if !validRegistryDiscoveryScalar(row) {
+			return nil, errors.New("successful tmux response contains a malformed session name")
+		}
+	}
+	return rows, nil
+}
+
+func parseRegistryDiscoveryScalar(output string) (string, error) {
+	if output == "" {
+		return "", errors.New("successful tmux response is empty")
+	}
+	if !strings.HasSuffix(output, "\n") {
+		return "", errors.New("successful tmux response is unterminated")
+	}
+	value := strings.TrimSuffix(output, "\n")
+	if !validRegistryDiscoveryScalar(value) {
+		return "", errors.New("successful tmux response contains a malformed scalar")
+	}
+	return value, nil
+}
+
+func validRegistryDiscoveryScalar(value string) bool {
+	return value != "" && strings.TrimSpace(value) == value &&
+		!strings.ContainsFunc(value, unicode.IsControl)
 }
 
 func runRegistryDiscoveryTmux(ctx context.Context, args ...string) (string, error) {
@@ -178,6 +212,12 @@ func discoverNewWithRuntime(ctx context.Context, s *State, runtime registryDisco
 		if !strings.HasPrefix(runtimeName, SessionPrefix) {
 			continue
 		}
+		if !validRegistryDiscoveryScalar(runtimeName) {
+			discovery.Problems = append(discovery.Problems, RegistryDiscoveryProblem{
+				RuntimeName: runtimeName, Operation: "parse-list-sessions", Message: "runtime name is malformed",
+			})
+			continue
+		}
 		if seen[runtimeName] {
 			discovery.Problems = append(discovery.Problems, RegistryDiscoveryProblem{
 				RuntimeName: runtimeName, Operation: "parse-list-sessions", Message: "duplicate runtime name",
@@ -195,6 +235,13 @@ func discoverNewWithRuntime(ctx context.Context, s *State, runtime registryDisco
 			})
 			continue
 		}
+		if registered := s.AgentByName(name); registered != nil {
+			discovery.Problems = append(discovery.Problems, RegistryDiscoveryProblem{
+				RuntimeName: runtimeName, Operation: "resolve-session-identity",
+				Message: fmt.Sprintf("display name conflicts with registered RuntimeName %q", registered.TmuxName()),
+			})
+			continue
+		}
 		fact, err := runtime.InspectSession(ctx, runtimeName)
 		if err != nil {
 			discovery.Problems = append(discovery.Problems, RegistryDiscoveryProblem{
@@ -209,13 +256,13 @@ func discoverNewWithRuntime(ctx context.Context, s *State, runtime registryDisco
 			continue
 		}
 		directory := filepath.Clean(fact.Directory)
-		if strings.TrimSpace(fact.Directory) == "" || !filepath.IsAbs(directory) {
+		if !validRegistryDiscoveryScalar(fact.Directory) || !filepath.IsAbs(directory) || directory != fact.Directory {
 			discovery.Problems = append(discovery.Problems, RegistryDiscoveryProblem{
-				RuntimeName: runtimeName, Operation: "validate-pane-directory", Message: "pane directory is empty or not absolute",
+				RuntimeName: runtimeName, Operation: "validate-pane-directory", Message: "pane directory is not an exact clean absolute path",
 			})
 			continue
 		}
-		createdUnix, err := strconv.ParseInt(fact.CreatedUnix, 10, 64)
+		createdUnix, err := parseRegistryDiscoveryUnixTime(fact.CreatedUnix)
 		if err != nil || createdUnix <= 0 {
 			message := "creation time is not a positive Unix timestamp"
 			if err != nil {
@@ -236,6 +283,18 @@ func discoverNewWithRuntime(ctx context.Context, s *State, runtime registryDisco
 		discovery.Availability = RegistryDiscoveryPartial
 	}
 	return discovery
+}
+
+func parseRegistryDiscoveryUnixTime(value string) (int64, error) {
+	if value == "" {
+		return 0, errors.New("timestamp is empty")
+	}
+	for _, digit := range []byte(value) {
+		if digit < '0' || digit > '9' {
+			return 0, errors.New("timestamp must contain decimal digits only")
+		}
+	}
+	return strconv.ParseInt(value, 10, 64)
 }
 
 func discoveredSessionProject(projects []Project, directory string) (Project, bool) {
@@ -617,7 +676,7 @@ func startSkillAgent(st *State, dir, prompt, kind, nameHint string, specificatio
 		purpose = SessionPurposeDeploy
 	}
 	result, err := defaultSessionLifecycle().Provision(context.Background(), SessionProvision{
-		Project: project, Name: name, Directory: dir,
+		ProjectID: project.ID, Name: name, Directory: dir,
 		Worktree: project.Path != "" && filepath.Clean(dir) != filepath.Clean(project.Path),
 		Kind:     SessionKindCodingAgent, Purpose: purpose, SpecificationRef: specificationRef, InitialPrompt: prompt,
 	})
@@ -808,55 +867,10 @@ func StartDeploy(st *State, projPath string) (string, error) {
 }
 
 func RemoveWorktree(st *State, proj *Project, path string) error {
-	ctx := context.Background()
-	repositories := NewRepositories()
-	survey, err := repositories.Survey(ctx, []Project{*proj})
-	if err != nil {
-		return err
+	if proj == nil || proj.ID == "" {
+		return fmt.Errorf("ProjectID ist für die Worktree-Entfernung erforderlich")
 	}
-	if len(survey.Projects) != 1 || !survey.Projects[0].Worktrees.Known() {
-		return fmt.Errorf("Worktree-Status ist derzeit nicht verlässlich verfügbar")
-	}
-	var target *RepositoryWorktree
-	for i := range survey.Projects[0].Worktrees.Value {
-		worktree := &survey.Projects[0].Worktrees.Value[i]
-		if sameRepositoryPath(worktree.Path, path) {
-			target = worktree
-			break
-		}
-	}
-	if target == nil {
-		return fmt.Errorf("Pfad gehört nicht zu diesem Projekt")
-	}
-	if target.Main {
-		return fmt.Errorf("Haupt-Worktree kann nicht entfernt werden")
-	}
-	if !target.Changes.Known() {
-		return fmt.Errorf("Worktree-Änderungen sind derzeit nicht verlässlich verfügbar")
-	}
-	if !target.Changes.Value.Clean() {
-		return fmt.Errorf("Worktree hat uncommittete Änderungen — erst aufräumen")
-	}
-	if err := registerDiscovered(st); err != nil {
-		return err
-	}
-	var onPath []Agent
-	for _, a := range st.Agents {
-		if sameRepositoryPath(a.Dir, path) {
-			onPath = append(onPath, a)
-		}
-	}
-	observations := Observe(ctx, onPath)
-	if err := validateWorktreeRemovalObservations(onPath, observations); err != nil {
-		return err
-	}
-	lifecycle := defaultSessionLifecycle()
-	for _, a := range onPath {
-		if _, err := lifecycle.Remove(ctx, a.ID, a.Name); err != nil {
-			return err
-		}
-	}
-	if _, err := repositories.Change(ctx, RemoveManagedWorktreeChange(*proj, path)); err != nil {
+	if err := defaultSessionLifecycle().RemoveManagedWorktree(context.Background(), proj.ID, path); err != nil {
 		return err
 	}
 	return refreshState(st)
@@ -890,16 +904,16 @@ func validateWorktreeRemovalObservations(sessions []Agent, snapshot ObservationS
 	return nil
 }
 
-func CreateAgentSession(st *State, projName string, worktree bool, name string) (string, error) {
-	return createSession(st, projName, worktree, name, "")
+func CreateAgentSession(st *State, projectID ProjectID, worktree bool, name string) (string, error) {
+	return createSession(st, projectID, worktree, name, "")
 }
 
-func CreateTermSession(st *State, projName string, worktree bool, name string) (string, error) {
-	return createSession(st, projName, worktree, name, KindTerm)
+func CreateTermSession(st *State, projectID ProjectID, worktree bool, name string) (string, error) {
+	return createSession(st, projectID, worktree, name, KindTerm)
 }
 
-func CreateDockSession(st *State, projName string) (string, error) {
-	return createSession(st, projName, false, "", KindDock)
+func CreateDockSession(st *State, projectID ProjectID) (string, error) {
+	return createSession(st, projectID, false, "", KindDock)
 }
 
 func CreateTermSessionForID(st *State, sessionID SessionID, name string) (string, error) {
@@ -930,7 +944,7 @@ func createTermSessionFor(st *State, a Session, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return startSession(st, name, a.Dir, a.Project, a.Worktree, KindTerm)
+	return startSession(st, name, a.Dir, a.ProjectID, a.Worktree, KindTerm)
 }
 
 func pickSessionName(st *State, name, hint, kind string) (string, error) {
@@ -948,16 +962,23 @@ func pickSessionName(st *State, name, hint, kind string) (string, error) {
 	return name, nil
 }
 
-func createSession(st *State, projName string, worktree bool, name, kind string) (string, error) {
-	proj := st.ProjectByName(projName)
+func createSession(st *State, projectID ProjectID, worktree bool, name, kind string) (string, error) {
+	current, err := LoadState()
+	if err != nil {
+		return "", err
+	}
+	proj := current.ProjectByID(projectID)
 	if proj == nil {
-		return "", fmt.Errorf("Projekt nicht gefunden")
+		return "", fmt.Errorf("ProjectID %q nicht gefunden", projectID)
 	}
-	hint := projName
+	if st != nil {
+		*st = *current
+	}
+	hint := proj.Name
 	if !worktree {
-		hint = SessionNameHint(proj.Path, projName)
+		hint = SessionNameHint(proj.Path, proj.Name)
 	}
-	name, err := pickSessionName(st, name, hint, kind)
+	name, err = pickSessionName(current, name, hint, kind)
 	if err != nil {
 		return "", err
 	}
@@ -970,7 +991,7 @@ func createSession(st *State, projName string, worktree bool, name, kind string)
 		presentation = SessionPresentationDock
 	}
 	result, err := defaultSessionLifecycle().Provision(context.Background(), SessionProvision{
-		Project: *proj, Name: name, Directory: proj.Path,
+		ProjectID: proj.ID, Name: name, Directory: proj.Path,
 		CreateWorktree: worktree, Worktree: worktree,
 		Kind: sessionKind, Presentation: presentation, Purpose: SessionPurposeWork,
 	})
@@ -983,11 +1004,7 @@ func createSession(st *State, projName string, worktree bool, name, kind string)
 	return result.Session.Name, nil
 }
 
-func startSession(st *State, name, dir, project string, worktree bool, kind string) (string, error) {
-	proj := Project{Name: project}
-	if registered := st.ProjectByName(project); registered != nil {
-		proj = *registered
-	}
+func startSession(st *State, name, dir string, projectID ProjectID, worktree bool, kind string) (string, error) {
 	sessionKind := SessionKindCodingAgent
 	presentation := SessionPresentationListed
 	if kind == KindTerm || kind == KindDock {
@@ -997,7 +1014,7 @@ func startSession(st *State, name, dir, project string, worktree bool, kind stri
 		presentation = SessionPresentationDock
 	}
 	result, err := defaultSessionLifecycle().Provision(context.Background(), SessionProvision{
-		Project: proj, Name: name, Directory: dir, Worktree: worktree,
+		ProjectID: projectID, Name: name, Directory: dir, Worktree: worktree,
 		Kind: sessionKind, Presentation: presentation,
 	})
 	if err != nil {

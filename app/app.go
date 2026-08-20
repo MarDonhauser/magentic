@@ -33,6 +33,7 @@ type App struct {
 	observationMu    sync.Mutex
 	observation      core.ObservationSnapshot
 	observationAt    time.Time
+	observationInput map[core.SessionID]string
 	observeSessions  func(context.Context, []core.Session) core.ObservationSnapshot
 	startTerm        func(*exec.Cmd, *pty.Winsize) (*os.File, error)
 }
@@ -40,6 +41,13 @@ type App struct {
 type ptyTerm struct {
 	ptmx *os.File
 	cmd  *exec.Cmd
+}
+
+// DockSessionRef is the stable browser identity of a Dock terminal. Name is
+// presentation only; every live terminal action is resolved through ID.
+type DockSessionRef struct {
+	ID   core.SessionID `json:"id"`
+	Name string         `json:"name"`
 }
 
 func NewApp() *App {
@@ -121,18 +129,6 @@ func (a *App) Overview(fresh bool) (core.Overview, error) {
 	}
 	snapshot := a.observationFor(st.Agents, fresh)
 	return core.BuildOverviewFromObservation(st, snapshot), nil
-}
-
-func (a *App) Projects() ([]string, error) {
-	st, err := core.LoadState()
-	if err != nil {
-		return nil, err
-	}
-	var names []string
-	for _, p := range st.Projects {
-		names = append(names, p.Name)
-	}
-	return names, nil
 }
 
 func loadSessionByID(rawID string) (*core.State, core.Session, error) {
@@ -281,30 +277,30 @@ func (a *App) MarkSeen(sessionID string) error {
 	return err
 }
 
-func (a *App) GitGraph(project string, limit int) (core.GitGraph, error) {
-	st, err := core.LoadState()
+func (a *App) GitGraph(projectID string, limit int) (core.GitGraph, error) {
+	st, project, err := loadProjectByID(projectID)
 	if err != nil {
 		return core.GitGraph{}, err
 	}
-	return core.BuildGitGraph(st, project, limit), nil
+	return core.BuildGitGraph(st, project.Name, limit), nil
 }
 
-func (a *App) Board(project string) (core.Board, error) {
-	st, err := core.LoadState()
+func (a *App) Board(projectID string) (core.Board, error) {
+	st, project, err := loadProjectByID(projectID)
 	if err != nil {
 		return core.Board{}, err
 	}
-	return core.BuildBoard(st, project), nil
+	return core.BuildBoard(st, project.Name), nil
 }
 
 // BoardArchive is an explicit, bounded archive query. Board remains the fast
 // current-work default used during normal navigation.
-func (a *App) BoardArchive(project string, limit int) (core.Board, error) {
-	st, err := core.LoadState()
+func (a *App) BoardArchive(projectID string, limit int) (core.Board, error) {
+	st, project, err := loadProjectByID(projectID)
 	if err != nil {
 		return core.Board{}, err
 	}
-	return core.BuildBoardWithQuery(st, project, core.SpecificationQuery{
+	return core.BuildBoardWithQuery(st, project.Name, core.SpecificationQuery{
 		IncludeArchived: true,
 		ArchiveLimit:    limit,
 	}), nil
@@ -427,7 +423,7 @@ func (a *App) NewSession(projectID string, worktree bool, name string) (string, 
 	if err != nil {
 		return "", err
 	}
-	return core.CreateAgentSession(st, project.Name, worktree, name)
+	return core.CreateAgentSession(st, project.ID, worktree, name)
 }
 
 func (a *App) NewTermSession(projectID string, worktree bool, name string) (string, error) {
@@ -435,15 +431,48 @@ func (a *App) NewTermSession(projectID string, worktree bool, name string) (stri
 	if err != nil {
 		return "", err
 	}
-	return core.CreateTermSession(st, project.Name, worktree, name)
+	return core.CreateTermSession(st, project.ID, worktree, name)
 }
 
-func (a *App) NewDockSession(projectID string) (string, error) {
+func (a *App) NewDockSession(projectID string) (DockSessionRef, error) {
 	st, project, err := loadProjectByID(projectID)
 	if err != nil {
-		return "", err
+		return DockSessionRef{}, err
 	}
-	return core.CreateDockSession(st, project.Name)
+	name, err := core.CreateDockSession(st, project.ID)
+	if err != nil {
+		return DockSessionRef{}, err
+	}
+	session := st.AgentByName(name)
+	if session == nil || !session.IsDock() || session.ID == "" {
+		return DockSessionRef{}, fmt.Errorf("Dock-Session %q wurde nicht stabil registriert", name)
+	}
+	return DockSessionRef{ID: session.ID, Name: session.Name}, nil
+}
+
+// MigrateDockSessions is the sole name-based browser compatibility seam. It
+// resolves persisted pre-ID Dock tabs once; unknown and non-Dock names are not
+// projected as live targets.
+func (a *App) MigrateDockSessions(names []string) ([]DockSessionRef, error) {
+	st, err := core.LoadState()
+	if err != nil {
+		return nil, err
+	}
+	refs := make([]DockSessionRef, 0, len(names))
+	seen := make(map[core.SessionID]bool, len(names))
+	for _, rawName := range names {
+		name := strings.TrimSpace(rawName)
+		if name == "" {
+			continue
+		}
+		session := st.AgentByName(name)
+		if session == nil || !session.IsDock() || session.ID == "" || seen[session.ID] {
+			continue
+		}
+		seen[session.ID] = true
+		refs = append(refs, DockSessionRef{ID: session.ID, Name: session.Name})
+	}
+	return refs, nil
 }
 
 func (a *App) NewTermSessionFor(sessionID string) (string, error) {
@@ -581,8 +610,19 @@ func (a *App) OpenTerm(sessionID, legacyDockName string, cols, rows int) error {
 	connectionKey := termKeyForTarget(sessionID, registered)
 	name := registered.Name
 	session := registered.TmuxName()
-	if !core.TmuxHasSession(session) {
+	observed, source := sessionRuntimeObservation(a.observationFor([]core.Session{registered}, true), registered.ID)
+	switch observed.Presence {
+	case core.SessionPresencePresent:
+		// Presence is the only fact attachment needs; unavailable content does
+		// not make a known-present tmux runtime disappear.
+	case core.SessionPresenceAbsent:
 		return fmt.Errorf("Session %q existiert nicht mehr", name)
+	default:
+		detail := "Laufzeit-Präsenz ist derzeit unbekannt"
+		if len(source.Problems) > 0 {
+			detail = source.Problems[0]
+		}
+		return fmt.Errorf("Session %q kann nicht verlässlich geprüft werden: %s", name, detail)
 	}
 	a.mu.Lock()
 	if _, ok := a.terms[connectionKey]; ok {
