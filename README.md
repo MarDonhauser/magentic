@@ -33,6 +33,7 @@ Zwei Oberflächen, eine gemeinsame Logik (`core/`):
 magentic              # TUI starten
 magentic add [pfad]   # Projekt registrieren (Default: aktuelles Verzeichnis)
 open app/build/bin/magentic.app   # Desktop-App
+./start.sh                         # Desktop-App bequem starten
 ```
 
 ## Tasten (TUI)

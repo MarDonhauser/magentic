@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="de">
+<head><meta charset="UTF-8"><title>Dock-Repro</title></head>
+<body>
+<script>
+  const app = {};
+  const methods = 'Overview Projects NewSession NewTermSession NewTermSessionFor DoneAgent Cleanup Merge Deploy RemoveWorktree SetMainBranch OpenTerm WriteTerm ResizeTerm CloseTerm KillSession LaterSession ReopenSession SendSkill DeployStatus AzLogin ArgoLogin AzAccounts AzSetSubscription WorktreeDiff SessionPreview SearchTranscripts SessionLinks SetActiveTerm PickFolder AddProject RemoveProject ReorderProjects SaveImage Timeline Zeitgeist ZeitgeistStart ZeitgeistPause ZeitgeistResume ZeitgeistStop MarkSeen GitGraph Board Stats RevealPath StartBoardItem NewDockSession BuildInfo Breaks BreakHeartbeat TakeBreak EndBreak SnoozeBreak BreakConfig SetBreakConfig BreakOver'.split(' ');
+  for (const name of methods) app[name] = () => Promise.resolve(null);
+  app.Overview = () => Promise.resolve({ counts: {}, projects: [], later: [], usage: null });
+  app.BuildInfo = () => Promise.resolve('');
+  app.BreakConfig = () => Promise.resolve({ enabled: false });
+  app.Breaks = () => Promise.resolve({ enabled: false });
+  app.Zeitgeist = () => Promise.resolve({});
+  app.DeployStatus = () => Promise.resolve({});
+  app.Timeline = () => Promise.resolve([]);
+  window.go = { main: { App: app } };
+  window.runtime = {
+    EventsOnMultiple: () => () => {},
+    EventsOff: () => {},
+    BrowserOpenURL: () => {},
+    ClipboardSetText: () => Promise.resolve(null),
+  };
+  fetch('/')
+    .then(response => response.text())
+    .then(html => {
+      const mainScript = '<script src="./src/main.js" type="module"><\/script>';
+      document.open();
+      document.write(html.replace(mainScript, '<script src="./src/main.js?dock-repro" type="module"><\/script>'));
+      document.close();
+    });
+</script>
+</body>
+</html>
