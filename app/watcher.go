@@ -115,6 +115,7 @@ func (a *App) watchLoop() {
 			SessionLabels: labels,
 			Break:         core.BreakStatusFromObservation(st, snapshot),
 			Deployments:   a.takeDeploymentOutcomes(),
+			Events:        a.takeAttentionEvents(),
 			Quiet:         quiet,
 			Now:           time.Now(),
 		})
@@ -122,29 +123,84 @@ func (a *App) watchLoop() {
 	}
 }
 
+func (a *App) enqueueAttentionEvent(event core.AttentionEvent) {
+	a.attentionEventMu.Lock()
+	defer a.attentionEventMu.Unlock()
+	if event.Key != "" {
+		for _, pending := range a.attentionEvents {
+			if pending.Kind == event.Kind && pending.Key == event.Key {
+				return
+			}
+		}
+	}
+	a.attentionEvents = append(a.attentionEvents, event)
+}
+
+func (a *App) takeAttentionEvents() []core.AttentionEvent {
+	a.attentionEventMu.Lock()
+	defer a.attentionEventMu.Unlock()
+	events := append([]core.AttentionEvent(nil), a.attentionEvents...)
+	a.attentionEvents = nil
+	return events
+}
+
+func (a *App) executeAttentionEvents(events ...core.AttentionEvent) {
+	plan := a.attentionPlanner().Plan(core.AttentionInput{
+		Observation: core.ObservationSnapshot{Availability: core.ObservationUnavailable},
+		Events:      append([]core.AttentionEvent(nil), events...),
+		Now:         time.Now(),
+	})
+	executeAttentionPlan(plan)
+}
+
+func breakFinishedAttentionEvent(at time.Time) core.AttentionEvent {
+	episode := at.UTC().Truncate(time.Minute).Format("20060102T1504")
+	return core.AttentionEvent{Key: "break-finished:" + episode, Kind: core.AttentionEventBreakFinished}
+}
+
+type attentionPlanExecutor struct {
+	badge   func(string)
+	notify  func(string, string, string)
+	request func(bool)
+	cancel  func()
+	front   func()
+}
+
+var platformAttentionExecutor = attentionPlanExecutor{
+	badge: setDockBadge, notify: core.NotifyDesktop,
+	request: requestAttention, cancel: cancelAttention, front: bringToFront,
+}
+
 func executeAttentionPlan(plan core.AttentionPlan) {
+	platformAttentionExecutor.execute(plan)
+}
+
+func (executor attentionPlanExecutor) execute(plan core.AttentionPlan) {
 	if plan.DockBadge.Update {
-		setDockBadge(attentionDockBadgeLabel(plan.DockBadge))
+		if executor.badge != nil {
+			executor.badge(plan.DockBadge.Label)
+		}
 	}
 	for _, notification := range plan.Notifications {
-		core.NotifyDesktop(notification.Title, notification.Message, notification.Sound)
+		if executor.notify != nil {
+			executor.notify(notification.Title, notification.Message, notification.Sound)
+		}
 	}
 	switch plan.NativeAttention {
 	case core.NativeAttentionCancel:
-		cancelAttention()
+		if executor.cancel != nil {
+			executor.cancel()
+		}
 	case core.NativeAttentionInformational:
-		requestAttention(false)
+		if executor.request != nil {
+			executor.request(false)
+		}
 	case core.NativeAttentionCritical:
-		requestAttention(true)
+		if executor.request != nil {
+			executor.request(true)
+		}
 	}
-	if plan.BringToFront {
-		bringToFront()
+	if plan.BringToFront && executor.front != nil {
+		executor.front()
 	}
-}
-
-func attentionDockBadgeLabel(badge core.AttentionDockBadge) string {
-	if badge.Label != "" && !badge.Complete {
-		return badge.Label + "+"
-	}
-	return badge.Label
 }

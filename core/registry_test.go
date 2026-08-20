@@ -139,6 +139,28 @@ func TestRegistryMutableCompatibilityMergesDifferentFields(t *testing.T) {
 	}
 }
 
+func TestRegistryRenameRecordsExplicitCustomRuntimeTransition(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	registry := OpenRegistry(path)
+	session := Session{ID: "session-1", Name: "display", RuntimeName: "custom-runtime", Dir: "/workspace"}
+	if _, err := registry.Change(context.Background(), RegisterSession(session)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Change(context.Background(), RenameRegisteredSessionRuntime(
+		session.ID, session.Name, "renamed", "mgt-renamed",
+	)); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := registry.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := snapshot.State().Agents[0]
+	if got.Name != "renamed" || got.RuntimeName != "mgt-renamed" || got.TmuxName() != "mgt-renamed" {
+		t.Fatalf("runtime rename was not retained: %#v", got)
+	}
+}
+
 func TestRegistryCoordinatesIndependentProcesses(t *testing.T) {
 	if os.Getenv("MAGENTIC_REGISTRY_HELPER") != "" {
 		path := os.Getenv("MAGENTIC_REGISTRY_HELPER")

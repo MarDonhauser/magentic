@@ -33,9 +33,13 @@ case "$1" in
 	if [ -n "$MAGENTIC_HANDOFF_TARGET_COMMAND_AFTER" ] && [ "$count" -ge "${MAGENTIC_HANDOFF_TARGET_SWITCH_AT:-2}" ]; then
 	  target_command="$MAGENTIC_HANDOFF_TARGET_COMMAND_AFTER"
 	fi
-    printf '%ssource\t%s\t1\n' "$MAGENTIC_HANDOFF_SESSION_PREFIX" "$MAGENTIC_HANDOFF_SOURCE_COMMAND"
-    printf '%starget\t%s\t1\n' "$MAGENTIC_HANDOFF_SESSION_PREFIX" "$target_command"
-    ;;
+	printf '%s\t%s\t1\n' "$MAGENTIC_HANDOFF_SOURCE_RUNTIME" "$MAGENTIC_HANDOFF_SOURCE_COMMAND"
+	printf '%s\t%s\t1\n' "$MAGENTIC_HANDOFF_TARGET_RUNTIME" "$target_command"
+	;;
+  list-sessions)
+	printf '%s\n' "$MAGENTIC_HANDOFF_SOURCE_RUNTIME"
+	printf '%s\n' "$MAGENTIC_HANDOFF_TARGET_RUNTIME"
+	;;
   capture-pane)
     printf '%s\n' "$MAGENTIC_HANDOFF_PANE_CONTENT"
     ;;
@@ -53,7 +57,8 @@ esac
 	t.Setenv("MAGENTIC_HANDOFF_TMUX_LOG", logPath)
 	t.Setenv("MAGENTIC_HANDOFF_LIST_COUNT", listCountPath)
 	t.Setenv("MAGENTIC_HANDOFF_PANE_CONTENT", paneContent)
-	t.Setenv("MAGENTIC_HANDOFF_SESSION_PREFIX", core.SessionPrefix)
+	t.Setenv("MAGENTIC_HANDOFF_SOURCE_RUNTIME", core.SessionName("source"))
+	t.Setenv("MAGENTIC_HANDOFF_TARGET_RUNTIME", core.SessionName("target"))
 	t.Setenv("MAGENTIC_HANDOFF_SOURCE_COMMAND", sourceCommand)
 	t.Setenv("MAGENTIC_HANDOFF_TARGET_COMMAND", targetCommand)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))

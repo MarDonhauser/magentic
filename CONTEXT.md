@@ -17,9 +17,17 @@ _Avoid_: Project name, Project path
 A Git working directory associated with a Project and available as a Session's place of work.
 _Avoid_: Branch, checkout, folder
 
+**WorktreeRef**:
+An opaque Project-qualified handle that a UI may retain and ask Repositories to resolve freshly without receiving or authorizing a filesystem path.
+_Avoid_: Worktree path, branch name, browser-supplied directory
+
 **RepositoryKnowledge**:
 The known, unknown, or inapplicable result of observing Git facts for a Project or Worktree.
 _Avoid_: Empty value, false, clean
+
+**StatsCommitCoverage**:
+Whether commit totals cover every registered repository, only a known subset, no readable repository, or no applicable repository.
+_Avoid_: Zero commits, Git error, provider coverage
 
 ## Sessions
 
@@ -94,5 +102,5 @@ A Project- and source-qualified reference to a Specification using that source's
 _Avoid_: Specification path, title, bare ID
 
 **SpecificationState**:
-The source-derived position of a Specification as backlog, active, review, or terminally done.
+The source-derived position of a Specification as backlog, active, review, terminally done, or explicitly unknown when its source facts cannot support a stage.
 _Avoid_: Task completion percentage, Board column guess

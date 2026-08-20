@@ -795,7 +795,7 @@ func (m model) sendSkillToSelected(cmd string) (tea.Model, tea.Cmd) {
 		m.setFlash(a.Name+" ist eine Terminal-Session — dort läuft kein Claude", true)
 		return m, nil
 	}
-	sn := tmuxSessionName(a.Name)
+	sn := a.TmuxName()
 	st := m.statusFor(*a)
 	if !TmuxHasSession(sn) || st == StatusExited || st == StatusDead {
 		m.setFlash("Claude läuft in dieser Session nicht mehr", true)
@@ -1009,19 +1009,22 @@ func (m model) renameAgent(newName string) (tea.Model, tea.Cmd) {
 		m.setFlash(fmt.Sprintf("Name %q ist schon vergeben", newName), true)
 		return m, nil
 	}
-	old := tmuxSessionName(m.renameFrom)
-	if TmuxHasSession(old) {
-		if _, err := tmux("rename-session", "-t", targetSession(old), tmuxSessionName(newName)); err != nil {
-			m.setFlash("tmux rename: "+err.Error(), true)
-			return m, nil
-		}
-	}
 	session := m.state.AgentByName(m.renameFrom)
 	if session == nil {
 		m.setFlash("Session nicht gefunden", true)
 		return m, nil
 	}
-	changed, err := OpenRegistry(StatePath()).Change(context.Background(), RenameRegisteredSession(session.ID, session.Name, newName))
+	old := session.TmuxName()
+	change := RenameRegisteredSession(session.ID, session.Name, newName)
+	if TmuxHasSession(old) {
+		newRuntime := tmuxSessionName(newName)
+		if _, err := tmux("rename-session", "-t", targetSession(old), newRuntime); err != nil {
+			m.setFlash("tmux rename: "+err.Error(), true)
+			return m, nil
+		}
+		change = RenameRegisteredSessionRuntime(session.ID, session.Name, newName, newRuntime)
+	}
+	changed, err := OpenRegistry(StatePath()).Change(context.Background(), change)
 	if err != nil {
 		// The external rename may already have applied. Keep that explicit to
 		// the user; a later Registry retry is safer than silently reverting it.
@@ -1088,7 +1091,7 @@ func (m model) attach() (tea.Model, tea.Cmd) {
 	if a == nil {
 		return m, nil
 	}
-	sn := tmuxSessionName(a.Name)
+	sn := a.TmuxName()
 	if !TmuxHasSession(sn) {
 		m.setFlash("Session existiert nicht mehr — mit x entfernen oder n neu starten", true)
 		return m, nil

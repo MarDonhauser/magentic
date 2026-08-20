@@ -79,8 +79,8 @@ func withPortableDirectoryLockConfig(ctx context.Context, lockDir string, config
 		if !os.IsExist(err) {
 			return fmt.Errorf("create lock directory: %w", err)
 		}
-		if portableDirectoryLockIsStale(owner, config.staleAfter) {
-			_ = recoverPortableDirectoryLock(lockDir, owner)
+		if nonce, stale := portableDirectoryLockOwnerIfStale(lockDir, owner, config.staleAfter); stale {
+			_ = recoverPortableDirectoryLock(lockDir, owner, nonce, config.staleAfter)
 			continue
 		}
 		timer := time.NewTimer(config.retry)
@@ -112,23 +112,42 @@ func heartbeatPortableDirectoryLock(owner, nonce string, interval time.Duration,
 	}
 }
 
-func portableDirectoryLockIsStale(owner string, staleAfter time.Duration) bool {
-	data, err := os.ReadFile(owner)
-	if err != nil || strings.TrimSpace(string(data)) == "" {
-		return false
-	}
-	info, err := os.Stat(owner)
-	return err == nil && time.Since(info.ModTime()) > staleAfter
-}
-
-func recoverPortableDirectoryLock(lockDir, owner string) error {
+func portableDirectoryLockOwnerIfStale(lockDir, owner string, staleAfter time.Duration) (string, bool) {
 	data, err := os.ReadFile(owner)
 	if err != nil {
-		return err
+		if !os.IsNotExist(err) {
+			return "", false
+		}
+		info, statErr := os.Stat(lockDir)
+		return "", statErr == nil && time.Since(info.ModTime()) > staleAfter
 	}
 	nonce := strings.TrimSpace(string(data))
-	if nonce == "" || !portableLockOwnedBy(owner, nonce) {
-		return errors.New("lock owner changed")
+	if nonce == "" {
+		return "", false
+	}
+	info, err := os.Stat(owner)
+	return nonce, err == nil && time.Since(info.ModTime()) > staleAfter
+}
+
+func recoverPortableDirectoryLock(lockDir, owner, expectedNonce string, staleAfter time.Duration) error {
+	data, err := os.ReadFile(owner)
+	if err != nil {
+		if !os.IsNotExist(err) || expectedNonce != "" {
+			return err
+		}
+		info, statErr := os.Stat(lockDir)
+		if statErr != nil || time.Since(info.ModTime()) <= staleAfter {
+			return errors.New("ownerless lock is not stale")
+		}
+	} else {
+		nonce := strings.TrimSpace(string(data))
+		if nonce == "" || nonce != expectedNonce || !portableLockOwnedBy(owner, nonce) {
+			return errors.New("lock owner changed")
+		}
+		info, statErr := os.Stat(owner)
+		if statErr != nil || time.Since(info.ModTime()) <= staleAfter {
+			return errors.New("lock owner heartbeat resumed")
+		}
 	}
 	tombstone := lockDir + ".abandoned-" + NewUUID()
 	if err := os.Rename(lockDir, tombstone); err != nil {

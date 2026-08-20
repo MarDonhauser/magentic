@@ -76,6 +76,7 @@ type RegistryChange struct {
 	projectName string
 	sessionName string
 	newName     string
+	newRuntime  string
 	mainBranch  string
 	order       []string
 	sessions    []Session
@@ -128,6 +129,16 @@ func MarkSessionDeploy(sessionID SessionID, name string, at time.Time) RegistryC
 
 func RenameRegisteredSession(sessionID SessionID, oldName, newName string) RegistryChange {
 	return RegistryChange{kind: registryRenameSession, sessionID: sessionID, sessionName: oldName, newName: newName}
+}
+
+// RenameRegisteredSessionRuntime records the runtime rename already applied by
+// an external Adapter. RuntimeName remains the sole address for later tmux
+// operations, including Sessions whose runtime never used the default name.
+func RenameRegisteredSessionRuntime(sessionID SessionID, oldName, newName, newRuntime string) RegistryChange {
+	return RegistryChange{
+		kind: registryRenameSession, sessionID: sessionID, sessionName: oldName,
+		newName: newName, newRuntime: newRuntime,
+	}
 }
 
 func AddDiscoveredSessions(sessions []Session) RegistryChange {
@@ -339,7 +350,9 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 			}
 			oldDefaultRuntime := SessionName(session.Name)
 			session.Name = change.newName
-			if session.RuntimeName == "" || session.RuntimeName == oldDefaultRuntime {
+			if change.newRuntime != "" {
+				session.RuntimeName = change.newRuntime
+			} else if session.RuntimeName == "" || session.RuntimeName == oldDefaultRuntime {
 				session.RuntimeName = SessionName(change.newName)
 			}
 		}

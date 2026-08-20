@@ -68,3 +68,24 @@ func TestPortableDirectoryLockRecoversAbandonedOwner(t *testing.T) {
 		t.Fatalf("abandoned lock was not recovered: called=%v err=%v", called, err)
 	}
 }
+
+func TestPortableDirectoryLockRecoversCrashBeforeOwnerWrite(t *testing.T) {
+	lockDir := filepath.Join(t.TempDir(), "ownerless.lockdir")
+	if err := os.Mkdir(lockDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(lockDir, old, old); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	err := withPortableDirectoryLockConfig(context.Background(), lockDir, portableDirectoryLockConfig{
+		staleAfter: 20 * time.Millisecond, heartbeat: 5 * time.Millisecond, retry: time.Millisecond,
+	}, func() error {
+		called = true
+		return nil
+	})
+	if err != nil || !called {
+		t.Fatalf("ownerless abandoned lock was not recovered: called=%v err=%v", called, err)
+	}
+}

@@ -140,7 +140,7 @@ func TestAttentionUsesKnownFactsFromPartialObservation(t *testing.T) {
 	if plan.Observation != AttentionObservationPartial || len(plan.Notifications) != 1 || plan.Notifications[0].SessionID != "known" {
 		t.Fatalf("healthy partial fact was discarded: %#v", plan)
 	}
-	if !plan.DockBadge.Update || plan.DockBadge.Complete || plan.DockBadge.Count != 1 {
+	if !plan.DockBadge.Update || plan.DockBadge.Complete || plan.DockBadge.Count != 1 || plan.DockBadge.Label != "1+" {
 		t.Fatalf("partial badge must be an actionable lower bound: %#v", plan.DockBadge)
 	}
 	if !hasAttentionSuppression(plan, AttentionSuppressedInsufficientFacts) {
@@ -226,6 +226,35 @@ func TestAttentionDefersBreakForMeetingAndQuiet(t *testing.T) {
 	assertSingleAttentionKind(t, afterQuiet, AttentionIntentBreakReminder)
 }
 
+func TestAttentionPlansBreakEventsWithDedupeAndReset(t *testing.T) {
+	planner := NewAttentionPlanner(AttentionPlannerConfig{})
+	input := attentionTestInput(attentionTestStart, attentionSnapshot(ObservationAvailable))
+	input.Events = []AttentionEvent{{Key: "break:42", Kind: AttentionEventBreakFinished}}
+	finished := planner.Plan(input)
+	assertSingleAttentionKind(t, finished, AttentionIntentBreakFinished)
+	intent := finished.Notifications[0]
+	if intent.Title != "magentic" || intent.Message != "Pause vorbei — nichts drängt." || intent.Sound != "Purr" || intent.DedupeKey != "event:break:42" {
+		t.Fatalf("break-finished intent = %#v", intent)
+	}
+	duplicate := planner.Plan(input)
+	if len(duplicate.Notifications) != 0 || !hasAttentionSuppression(duplicate, AttentionSuppressedDuplicate) {
+		t.Fatalf("break-finished event was not deduped: %#v", duplicate)
+	}
+
+	input.Events = nil
+	input.Break = BreakAdvice{Enabled: true, Level: BreakLevelDue, GoodMoment: true}
+	reminder := planner.Plan(input)
+	if reminder.NativeAttention != NativeAttentionInformational {
+		t.Fatalf("break reminder did not establish native attention: %#v", reminder)
+	}
+	reset := attentionTestInput(attentionTestStart.Add(time.Second), attentionSnapshot(ObservationAvailable))
+	reset.Events = []AttentionEvent{{Kind: AttentionEventBreakReset}}
+	resetPlan := planner.Plan(reset)
+	if resetPlan.NativeAttention != NativeAttentionCancel || len(resetPlan.Notifications) != 0 {
+		t.Fatalf("explicit break reset = %#v", resetPlan)
+	}
+}
+
 func TestAttentionPrioritizesSessionInputOverBreakAndDeployment(t *testing.T) {
 	planner := NewAttentionPlanner(AttentionPlannerConfig{})
 	planner.Plan(attentionTestInput(attentionTestStart, attentionSnapshot(ObservationAvailable, attentionObserved("one", AttentionWorking))))
@@ -236,6 +265,7 @@ func TestAttentionPrioritizesSessionInputOverBreakAndDeployment(t *testing.T) {
 		{Key: "build-1:failed", Kind: AttentionDeploymentBuildFailed, Name: "api", Detail: "(main)"},
 		{Key: "build-2:ready", Kind: AttentionDeploymentBuildReady, Name: "web", Detail: "✓ (main)"},
 	}
+	input.Events = []AttentionEvent{{Key: "break-finished:priority", Kind: AttentionEventBreakFinished}}
 	plan := planner.Plan(input)
 	assertSingleAttentionKind(t, plan, AttentionIntentNeedsInput)
 	if plan.NativeAttention != NativeAttentionCritical || !hasAttentionSuppression(plan, AttentionSuppressedLowerPriority) {

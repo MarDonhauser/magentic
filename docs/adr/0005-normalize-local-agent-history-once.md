@@ -5,3 +5,7 @@ records into provider-neutral local events, then serves timeline, links, search,
 and statistics from one protected derived index. Raw provider envelopes and
 quota data remain outside this Interface, and attribution is recomputed from
 the latest stable Registry identities without reparsing source files.
+
+Consumers preserve provider identity, attribution knowledge, and source
+coverage. An unknown Project association is not displayed as an intentionally
+unassociated event, and an unreadable repository is not counted as zero commits.

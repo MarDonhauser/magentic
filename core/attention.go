@@ -12,7 +12,7 @@ import (
 const (
 	attentionBreakReminderEvery = 8 * time.Minute
 	attentionBreakInsistAfter   = 2
-	attentionDeployDedupeMax    = 512
+	attentionExternalDedupeMax  = 512
 )
 
 type AttentionObservationState string
@@ -38,6 +38,7 @@ const (
 	AttentionIntentNeedsInput       AttentionIntentKind = "session-needs-input"
 	AttentionIntentSessionComplete  AttentionIntentKind = "session-complete"
 	AttentionIntentBreakReminder    AttentionIntentKind = "break-reminder"
+	AttentionIntentBreakFinished    AttentionIntentKind = "break-finished"
 	AttentionIntentDeploymentFailed AttentionIntentKind = "deployment-failed"
 	AttentionIntentDeploymentReady  AttentionIntentKind = "deployment-ready"
 )
@@ -89,12 +90,30 @@ type AttentionDeploymentOutcome struct {
 	Detail string                  `json:"detail,omitempty"`
 }
 
+type AttentionEventKind string
+
+const (
+	// AttentionEventBreakReset acknowledges a user break action and cancels
+	// any outstanding break attention without producing a notification.
+	AttentionEventBreakReset    AttentionEventKind = "break-reset"
+	AttentionEventBreakFinished AttentionEventKind = "break-finished"
+)
+
+// AttentionEvent carries explicit local UI transitions into the same planner
+// cycle as Observation, break, and deployment facts. Key identifies one event
+// episode and is used for bounded deduplication.
+type AttentionEvent struct {
+	Key  string             `json:"key,omitempty"`
+	Kind AttentionEventKind `json:"kind"`
+}
+
 type AttentionInput struct {
 	Observation   ObservationSnapshot          `json:"observation"`
 	ActiveSession SessionID                    `json:"activeSession,omitempty"`
 	SessionLabels map[SessionID]string         `json:"sessionLabels,omitempty"`
 	Break         BreakAdvice                  `json:"break"`
 	Deployments   []AttentionDeploymentOutcome `json:"deployments,omitempty"`
+	Events        []AttentionEvent             `json:"events,omitempty"`
 	Quiet         AttentionQuietSignal         `json:"quiet,omitempty"`
 	Now           time.Time                    `json:"now,omitzero"`
 }
@@ -156,12 +175,12 @@ type attentionBreakMemory struct {
 // AttentionPlanner is a stateful, deterministic policy Module. It plans only;
 // notification, Dock, native-attention, and window APIs remain executor work.
 type AttentionPlanner struct {
-	mu          sync.Mutex
-	now         func() time.Time
-	sessions    map[SessionID]attentionSessionMemory
-	breakState  attentionBreakMemory
-	seenDeploy  map[string]bool
-	deployOrder []string
+	mu            sync.Mutex
+	now           func() time.Time
+	sessions      map[SessionID]attentionSessionMemory
+	breakState    attentionBreakMemory
+	seenExternal  map[string]bool
+	externalOrder []string
 }
 
 func NewAttentionPlanner(config AttentionPlannerConfig) *AttentionPlanner {
@@ -170,7 +189,7 @@ func NewAttentionPlanner(config AttentionPlannerConfig) *AttentionPlanner {
 		clock = time.Now
 	}
 	return &AttentionPlanner{
-		now: clock, sessions: map[SessionID]attentionSessionMemory{}, seenDeploy: map[string]bool{},
+		now: clock, sessions: map[SessionID]attentionSessionMemory{}, seenExternal: map[string]bool{},
 	}
 }
 
@@ -204,6 +223,7 @@ func (p *AttentionPlanner) Plan(input AttentionInput) AttentionPlan {
 	}
 
 	candidates := p.sessionCandidates(input, &plan)
+	candidates = append(candidates, p.eventCandidates(input.Events, &plan)...)
 	breakCandidate := p.breakCandidate(input.Break, input.Quiet, now, &plan)
 	if breakCandidate != nil {
 		candidates = append(candidates, *breakCandidate)
@@ -371,6 +391,46 @@ func attentionSessionKey(id SessionID, kind string, episode uint64) string {
 	return "session:" + string(id) + ":" + kind + ":" + strconv.FormatUint(episode, 10)
 }
 
+func (p *AttentionPlanner) eventCandidates(events []AttentionEvent, plan *AttentionPlan) []attentionCandidate {
+	events = append([]AttentionEvent(nil), events...)
+	sort.SliceStable(events, func(i, j int) bool { return attentionEventKey(events[i]) < attentionEventKey(events[j]) })
+	var candidates []attentionCandidate
+	for _, event := range events {
+		switch event.Kind {
+		case AttentionEventBreakReset:
+			p.resetBreakAttention(plan)
+			continue
+		case AttentionEventBreakFinished:
+			key := attentionEventKey(event)
+			if p.seenExternal[key] {
+				plan.Suppressions = append(plan.Suppressions, AttentionSuppression{
+					Kind: AttentionIntentBreakFinished, DedupeKey: key, Reason: AttentionSuppressedDuplicate,
+				})
+				continue
+			}
+			p.rememberExternal(key)
+			candidates = append(candidates, attentionCandidate{intent: AttentionNotificationIntent{
+				Kind: AttentionIntentBreakFinished, Title: "magentic",
+				Message: "Pause vorbei — nichts drängt.", Sound: "Purr",
+				DedupeKey: key, Priority: 150,
+			}})
+		default:
+			plan.Suppressions = append(plan.Suppressions, AttentionSuppression{
+				DedupeKey: attentionEventKey(event), Reason: AttentionSuppressedInsufficientFacts,
+			})
+		}
+	}
+	return candidates
+}
+
+func attentionEventKey(event AttentionEvent) string {
+	key := strings.TrimSpace(event.Key)
+	if key == "" {
+		key = string(event.Kind)
+	}
+	return "event:" + key
+}
+
 func (p *AttentionPlanner) breakCandidate(advice BreakAdvice, quiet AttentionQuietSignal, now time.Time, plan *AttentionPlan) *attentionCandidate {
 	if !advice.Enabled {
 		p.resetBreakAttention(plan)
@@ -443,7 +503,7 @@ func (p *AttentionPlanner) deploymentCandidates(outcomes []AttentionDeploymentOu
 	var candidates []attentionCandidate
 	for _, outcome := range outcomes {
 		key := attentionDeploymentKey(outcome)
-		if p.seenDeploy[key] {
+		if p.seenExternal[key] {
 			plan.Suppressions = append(plan.Suppressions, AttentionSuppression{DedupeKey: key, Reason: AttentionSuppressedDuplicate})
 			continue
 		}
@@ -452,7 +512,7 @@ func (p *AttentionPlanner) deploymentCandidates(outcomes []AttentionDeploymentOu
 			plan.Suppressions = append(plan.Suppressions, AttentionSuppression{DedupeKey: key, Reason: AttentionSuppressedInsufficientFacts})
 			continue
 		}
-		p.rememberDeployment(key)
+		p.rememberExternal(key)
 		candidates = append(candidates, candidate)
 	}
 	return candidates
@@ -508,15 +568,15 @@ func attentionDeploymentCandidate(outcome AttentionDeploymentOutcome, key string
 	return candidate, true
 }
 
-func (p *AttentionPlanner) rememberDeployment(key string) {
-	p.seenDeploy[key] = true
-	p.deployOrder = append(p.deployOrder, key)
-	if len(p.deployOrder) <= attentionDeployDedupeMax {
+func (p *AttentionPlanner) rememberExternal(key string) {
+	p.seenExternal[key] = true
+	p.externalOrder = append(p.externalOrder, key)
+	if len(p.externalOrder) <= attentionExternalDedupeMax {
 		return
 	}
-	drop := p.deployOrder[0]
-	p.deployOrder = p.deployOrder[1:]
-	delete(p.seenDeploy, drop)
+	drop := p.externalOrder[0]
+	p.externalOrder = p.externalOrder[1:]
+	delete(p.seenExternal, drop)
 }
 
 func attentionObservationState(snapshot ObservationSnapshot) AttentionObservationState {
@@ -562,6 +622,9 @@ func attentionDockBadge(snapshot ObservationSnapshot) AttentionDockBadge {
 	label := ""
 	if count > 0 {
 		label = strconv.Itoa(count)
+		if !complete {
+			label += "+"
+		}
 	}
 	return AttentionDockBadge{Update: true, Complete: complete, Count: count, Label: label}
 }

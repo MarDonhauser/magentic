@@ -79,6 +79,25 @@ func TestBuildSessionHandoffPromptWithoutProviderIDUsesTmuxReference(t *testing.
 	}
 }
 
+func TestBuildSessionHandoffPromptUsesPersistedRuntimeName(t *testing.T) {
+	source := Agent{
+		Name: "renamed-display", RuntimeName: "mgt-original-runtime",
+		Project: "navi", Dir: "/work/navi", SessionID: "claude-run",
+	}
+	prompt := BuildSessionHandoffPrompt(source, AgentToolClaude)
+	for _, want := range []string{
+		`Magentic-/tmux-Session-ID (Suchreferenz): "mgt-original-runtime"`,
+		`tmux-Pane-Ziel: "=mgt-original-runtime:"`,
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("Handoff-Prompt enthält persistierte RuntimeName-Referenz %q nicht:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, `Suchreferenz): "`+SessionName(source.Name)+`"`) {
+		t.Fatalf("Handoff-Prompt leitete Runtime-ID aus dem Anzeigenamen ab:\n%s", prompt)
+	}
+}
+
 func TestBuildSessionHandoffPromptIgnoresStaleClaudeIDForLiveCodex(t *testing.T) {
 	source := Agent{
 		Name:      "term-navi",
@@ -150,6 +169,14 @@ func TestHandoffSourceToolUsesLiveAgentInTerminal(t *testing.T) {
 	infos := map[string]PaneInfo{SessionName(source.Name): {Command: "codex"}}
 	if got, err := handoffSourceTool(source, infos); err != nil || got != AgentToolCodex {
 		t.Fatalf("handoffSourceTool() = %q, %v; want codex", got, err)
+	}
+}
+
+func TestHandoffSourceToolLooksUpPersistedRuntimeName(t *testing.T) {
+	source := Agent{Name: "renamed-display", RuntimeName: "mgt-original-runtime", Kind: KindTerm}
+	infos := map[string]PaneInfo{source.RuntimeName: {Command: "codex"}}
+	if got, err := handoffSourceTool(source, infos); err != nil || got != AgentToolCodex {
+		t.Fatalf("handoffSourceTool() = %q, %v; want codex from persisted runtime", got, err)
 	}
 }
 

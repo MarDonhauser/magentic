@@ -99,6 +99,9 @@ es keins — das zeigt der Punkt an der Session selbst schon deutlich genug.
 
 ### Weitere Ansichten
 
+- **Suche** — durchsucht normalisierte Prompts und Antworten aller unterstützten
+  Coding-Agent-Anbieter. Treffer behalten Anbieter und bekannte
+  Projektzuordnung; eine unbekannte Zuordnung wird ausdrücklich so angezeigt.
 - **Verlauf** — führt die eigenen Prompts der letzten sieben Tage aus den
   lokalen Sessions von **Claude Code, Codex, Gemini CLI und GitHub Copilot**
   chronologisch zusammen. Quelle und Projekt stehen direkt am Eintrag; bekannte
@@ -132,7 +135,9 @@ es keins — das zeigt der Punkt an der Session selbst schon deutlich genug.
     und werden nicht als Null erfunden.
   - **Commits** zählt nur, was unter der git-Identität des jeweiligen
     Repositories (`user.email` / `user.name`) steht. In geteilten Repos stammt
-    sonst der Großteil der Commits von Kolleginnen und Kollegen.
+    sonst der Großteil der Commits von Kolleginnen und Kollegen. Fehlende
+    Identität oder ein nicht lesbarer Verlauf erscheinen als unvollständige
+    Commit-Abdeckung, nie als exakte Null.
 
   Zwei Zahlen brauchen zusätzlich Einordnung — in der App steht sie als
   Tooltip an der jeweiligen Kachel:
@@ -294,12 +299,14 @@ Die gemeinsame Logik in `core/` ist entlang weniger tiefer Module organisiert:
 - **Session Observation** liest tmux in einem zeitlich begrenzten Durchlauf und
   unterscheidet bekannte, partielle und nicht verfügbare Beobachtungen.
 - **Repositories** besitzt die gemeinsame Bedeutung von Git- und
-  Worktree-Zustand; fehlgeschlagene Git-Abfragen gelten nie als „sauber“.
+  Worktree-Zustand; fehlgeschlagene oder fehlerhafte Git-Antworten gelten nie als
+  „sauber“. Desktop-Aktionen lösen opake WorktreeRefs frisch auf.
 - **WorkHistory** normalisiert lokale Verläufe von Claude Code, Codex, Gemini
   CLI und GitHub Copilot einmal für Verlauf, Suche, Links und Statistik.
 - **Specifications** adaptiert die unterstützten Spec-Layouts, vergibt stabile
-  SpecificationRefs und liefert dem Board aktuelle Arbeit standardmäßig ohne
-  einen unbegrenzten Archiv-Scan.
+  SpecificationRefs, hält physische Projektgrenzen ein und verbindet laufende
+  Sessions nur über deren dauerhafte Referenz. Das Board scannt Archive nur
+  explizit und begrenzt.
 - **Attention** leitet Benachrichtigungen, Dock-Badge, native Aufmerksamkeit
   und Pauseneskalation deterministisch aus einer Observation ab; der Watcher
   führt nur noch diese Intents aus.
@@ -308,13 +315,18 @@ Die Domain-Sprache steht in `CONTEXT.md`, dauerhafte Entscheidungen in
 `docs/adr/`. Alte mutable-State- und formatabhängige Funktionen sind nur noch
 Kompatibilitäts-Adapter; neue Implementierungen gehen über die Module.
 
-- Agents sind tmux-Sessions mit Prefix `mgt-`. Auch von Hand erstellte Sessions (`tmux new -s mgt-foo`) werden beim Start adoptiert und anhand des Verzeichnisses einem Projekt zugeordnet.
+- Sessions erhalten standardmäßig eine tmux-Runtime mit Prefix `mgt-`; deren
+  eigener `RuntimeName` bleibt auch nach einem Anzeigenamenwechsel die einzige
+  Adresse. Von Hand erstellte Runtimes (`tmux new -s mgt-foo`) werden beim Start
+  adoptiert und anhand des Verzeichnisses einem Projekt zugeordnet.
 - Terminal-Sessions (`kind: "term"` im State) starten nur die Shell. Sie werden
   beim Neustart als Shell wiederhergestellt (nicht mit `claude --continue`),
   bekommen keine Claude-Statuserkennung und keine Benachrichtigungen;
   `/done` & Co. lehnen sie ab. Git-Änderungen pro Session zählt magentic
   trotzdem — committen im Terminal wird also mitgezählt.
-- Der Status wird alle 2 Sekunden per `tmux capture-pane` erkannt.
+- Die TUI liest alle Runtime-Fakten alle zwei Sekunden in genau einer
+  Observation und alle Git-Fakten in einem Repositories-Durchlauf; partielle
+  Abfragen bleiben sichtbar unbekannt.
 - Worktrees landen unter `<projekt>-agents/<agentname>` neben dem Projektordner.
 - Konfiguration und Agent-Registry: `~/.config/magentic/state.json`
 - Gemeinsame Logik von TUI und App liegt in `core/` (State, tmux, Status,

@@ -18,19 +18,22 @@ import (
 )
 
 type App struct {
-	ctx            context.Context
-	mu             sync.Mutex
-	terms          map[string]*ptyTerm
-	activeTerm     string
-	dsMu           sync.Mutex
-	dsPrev         *DeployStatus
-	deployments    []core.AttentionDeploymentOutcome
-	deploySequence uint64
-	attentionOnce  sync.Once
-	attention      *core.AttentionPlanner
-	observationMu  sync.Mutex
-	observation    core.ObservationSnapshot
-	observationAt  time.Time
+	ctx              context.Context
+	mu               sync.Mutex
+	terms            map[string]*ptyTerm
+	activeTerm       string
+	dsMu             sync.Mutex
+	dsPrev           *DeployStatus
+	deployments      []core.AttentionDeploymentOutcome
+	deploySequence   uint64
+	attentionOnce    sync.Once
+	attention        *core.AttentionPlanner
+	attentionEventMu sync.Mutex
+	attentionEvents  []core.AttentionEvent
+	observationMu    sync.Mutex
+	observation      core.ObservationSnapshot
+	observationAt    time.Time
+	startTerm        func(*exec.Cmd, *pty.Winsize) (*os.File, error)
 }
 
 type ptyTerm struct {
@@ -304,18 +307,27 @@ func (a *App) BreakHeartbeat(active bool) core.BreakAdvice {
 }
 
 func (a *App) TakeBreak() error {
-	cancelAttention()
-	return core.TakeBreak()
+	if err := core.TakeBreak(); err != nil {
+		return err
+	}
+	a.executeAttentionEvents(core.AttentionEvent{Kind: core.AttentionEventBreakReset})
+	return nil
 }
 
 func (a *App) EndBreak() error {
-	cancelAttention()
-	return core.EndBreak()
+	if err := core.EndBreak(); err != nil {
+		return err
+	}
+	a.executeAttentionEvents(core.AttentionEvent{Kind: core.AttentionEventBreakReset})
+	return nil
 }
 
 func (a *App) SnoozeBreak() error {
-	cancelAttention()
-	return core.SnoozeBreak()
+	if err := core.SnoozeBreak(); err != nil {
+		return err
+	}
+	a.executeAttentionEvents(core.AttentionEvent{Kind: core.AttentionEventBreakReset})
+	return nil
 }
 
 func (a *App) BreakConfig() core.BreakConfig {
@@ -329,7 +341,7 @@ func (a *App) SetBreakConfig(c core.BreakConfig) error {
 // Damit er während der Pause wirklich wegschauen kann, statt auf den Countdown
 // zu starren.
 func (a *App) BreakOver() {
-	core.NotifyDesktop("magentic", "Pause vorbei — nichts drängt.", "Purr")
+	a.enqueueAttentionEvent(breakFinishedAttentionEvent(time.Now()))
 }
 
 // BuildInfo liefert den Zeitpunkt, zu dem die laufende Binary gebaut wurde —
@@ -569,7 +581,11 @@ func (a *App) OpenTerm(name string, cols, rows int) error {
 	core.Tmux("set-option", "-w", "-t", session+":", "window-size", "latest")
 	cmd := exec.Command("tmux", "attach-session", "-t", core.TargetSession(session))
 	cmd.Env = append(core.EnvWithout("TMUX"), "TERM=xterm-256color")
-	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
+	startTerm := pty.StartWithSize
+	if a.startTerm != nil {
+		startTerm = a.startTerm
+	}
+	ptmx, err := startTerm(cmd, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
 	if err != nil {
 		return fmt.Errorf("tmux attach: %w", err)
 	}
