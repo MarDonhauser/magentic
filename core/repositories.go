@@ -385,7 +385,7 @@ func (r *Repositories) Inspect(ctx context.Context, request RepositoryInspectReq
 
 func (r *Repositories) baselineDelta(ctx context.Context, dir string, current RepositoryInspection, baseline RepositoryBaseline) *RepositoryBaselineDelta {
 	delta := &RepositoryBaselineDelta{}
-	if baseline.Directory != "" && filepath.Clean(baseline.Directory) != dir {
+	if baseline.Directory != "" && !sameRepositoryPath(baseline.Directory, dir) {
 		err := errors.New("baseline belongs to a different checkout")
 		delta.Paths = repositoryUnknownFact[[]string]("baseline_delta", err)
 		delta.Commits = repositoryUnknownFact[int]("baseline_delta", err)
@@ -469,7 +469,7 @@ func parseRepositoriesTopology(out string) ([]repositoriesTopologyWorktree, erro
 		switch {
 		case strings.HasPrefix(line, "worktree "):
 			flush()
-			current.Path = strings.TrimPrefix(line, "worktree ")
+			current.Path = decodeRepositoryPath(strings.TrimPrefix(line, "worktree "))
 		case strings.HasPrefix(line, "HEAD "):
 			current.Head = strings.TrimSpace(strings.TrimPrefix(line, "HEAD "))
 		case strings.HasPrefix(line, "branch "):
@@ -480,7 +480,7 @@ func parseRepositoriesTopology(out string) ([]repositoriesTopologyWorktree, erro
 			current.Bare = true
 		case line == "locked" || strings.HasPrefix(line, "locked "):
 			current.Locked = true
-			current.LockReason = strings.TrimSpace(strings.TrimPrefix(line, "locked"))
+			current.LockReason = decodeRepositoryPath(strings.TrimSpace(strings.TrimPrefix(line, "locked")))
 		case line == "prunable" || strings.HasPrefix(line, "prunable "):
 			current.Prunable = true
 		}

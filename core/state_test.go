@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -34,7 +35,7 @@ func TestSaveIsAtomicUnderConcurrency(t *testing.T) {
 	long := &State{Projects: base.Projects}
 	for i := 0; i < 60; i++ {
 		long.Agents = append(long.Agents, Agent{
-			Name:      "agent-mit-langem-namen-" + string(rune('a'+i%26)),
+			Name:      fmt.Sprintf("agent-mit-langem-namen-%02d", i),
 			Project:   "req.pilot",
 			Dir:       "/tmp/req.pilot",
 			CreatedAt: time.Now(),
@@ -80,7 +81,7 @@ func TestSaveLeavesNoTempFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if e.Name() != "state.json" {
+		if e.Name() != "state.json" && e.Name() != "state.json.lock" {
 			t.Fatalf("unerwartete Datei übrig: %s", e.Name())
 		}
 	}

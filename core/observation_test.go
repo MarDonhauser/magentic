@@ -233,3 +233,26 @@ func TestObserveNeverPassesRuntimeNameToTmuxCommands(t *testing.T) {
 		t.Fatalf("capture must target only tmux's pane ID: %v", calls)
 	}
 }
+
+func TestObserveBoundsTmuxProbes(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	runner := &recordingObservationRunner{run: func(ctx context.Context, _ ...string) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}}
+	config := testObservationConfig(now)
+	config.cycleTimeout = 40 * time.Millisecond
+	config.probeTimeout = 20 * time.Millisecond
+	started := time.Now()
+
+	got := observeWithRunner(context.Background(), []Session{{
+		ID: "session-1", Name: "one", RuntimeName: "mgt-one",
+	}}, runner, config)
+
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("tmux probe exceeded its bounded timeout: %s", elapsed)
+	}
+	if got.Availability != ObservationUnavailable || len(got.Problems) != 1 || !got.Problems[0].TimedOut {
+		t.Fatalf("timeout was not represented explicitly: %#v", got)
+	}
+}

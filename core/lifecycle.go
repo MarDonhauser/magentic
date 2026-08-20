@@ -57,22 +57,22 @@ type LifecycleAppliedState struct {
 // LifecycleRecord is the compact desired/applied ledger entry for one
 // Session. A newer transition replaces the older entry for the same SessionID.
 type LifecycleRecord struct {
-	TransitionID     string                `json:"transitionId"`
-	SessionID        SessionID             `json:"sessionId"`
-	Desired          SessionDesiredState   `json:"desired"`
-	Phase            LifecyclePhase        `json:"phase"`
-	Session          Session               `json:"session"`
-	Project          Project               `json:"project,omitempty"`
-	CreateWorktree   bool                  `json:"createWorktree,omitempty"`
-	StartMode        string                `json:"startMode,omitempty"`
-	InitialPrompt    string                `json:"initialPrompt,omitempty"`
-	PromptDelivery   InitialPromptDelivery `json:"promptDelivery"`
-	Applied          LifecycleAppliedState `json:"applied"`
-	Attempts         int                   `json:"attempts"`
-	MayHaveApplied   bool                  `json:"mayHaveApplied,omitempty"`
-	LastError        string                `json:"lastError,omitempty"`
-	CreatedAt        time.Time             `json:"createdAt"`
-	UpdatedAt        time.Time             `json:"updatedAt"`
+	TransitionID   string                `json:"transitionId"`
+	SessionID      SessionID             `json:"sessionId"`
+	Desired        SessionDesiredState   `json:"desired"`
+	Phase          LifecyclePhase        `json:"phase"`
+	Session        Session               `json:"session"`
+	Project        Project               `json:"project,omitempty"`
+	CreateWorktree bool                  `json:"createWorktree,omitempty"`
+	StartMode      string                `json:"startMode,omitempty"`
+	InitialPrompt  string                `json:"initialPrompt,omitempty"`
+	PromptDelivery InitialPromptDelivery `json:"promptDelivery"`
+	Applied        LifecycleAppliedState `json:"applied"`
+	Attempts       int                   `json:"attempts"`
+	MayHaveApplied bool                  `json:"mayHaveApplied,omitempty"`
+	LastError      string                `json:"lastError,omitempty"`
+	CreatedAt      time.Time             `json:"createdAt"`
+	UpdatedAt      time.Time             `json:"updatedAt"`
 }
 
 type LifecycleSnapshot struct {
@@ -291,7 +291,7 @@ func (l *SessionLifecycle) planExisting(ctx context.Context, id SessionID, name 
 		TransitionID: NewUUID(), SessionID: session.ID, Desired: desired,
 		Phase: LifecyclePlanned, Session: session,
 		StartMode: "resume", PromptDelivery: InitialPromptNotRequested,
-		Applied: LifecycleAppliedState{WorktreeReady: true},
+		Applied:   LifecycleAppliedState{WorktreeReady: true},
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if project := state.ProjectByID(session.ProjectID); project != nil {
@@ -370,6 +370,11 @@ func (l *SessionLifecycle) Reconcile(ctx context.Context) (LifecycleReconcileRes
 			desired = SessionDesiredLater
 		}
 		already := current[session.ID]
+		if already.TransitionID != "" && already.Phase != LifecycleConverged {
+			// This transition was already attempted above. Keep its exact
+			// partial state instead of replacing it with a prompt-less intent.
+			continue
+		}
 		if already.Desired == desired && already.Phase != LifecycleFailed &&
 			((desired == SessionDesiredRunning && exists) || (desired == SessionDesiredLater && !exists)) {
 			continue
