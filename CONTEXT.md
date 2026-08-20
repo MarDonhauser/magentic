@@ -44,7 +44,7 @@ A vendor-qualified reference to a coding-agent run or conversation associated wi
 _Avoid_: SessionID, provider session ID, transcript ID
 
 **RuntimeName**:
-The replaceable name by which an external Session runtime is addressed.
+The replaceable, opaque and exact scalar by which an external Session runtime is addressed; it is never trimmed or reconstructed from a display name at an external boundary.
 _Avoid_: SessionID, Session name
 
 **SessionKind**:
@@ -112,3 +112,7 @@ _Avoid_: Task completion percentage, Board column guess
 **SpecificationLifecycle**:
 The stage, reason, archive fact, and terminal fact derived together from one Specification source reading.
 _Avoid_: Board column, inferred completion, task percentage
+
+**SpecificationStartToken**:
+An opaque, short-lived authority that lets Specifications re-resolve a discovered item and verify its Project identity and physical containment immediately before provisioning.
+_Avoid_: Specification path, browser-supplied work instructions, SpecificationRef

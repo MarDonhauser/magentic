@@ -312,8 +312,9 @@ Die gemeinsame Logik in `core/` ist entlang weniger tiefer Module organisiert:
   AttentionEvents ab; der Watcher führt nur noch diese Intents aus.
 
 Die Domain-Sprache steht in `CONTEXT.md`, dauerhafte Entscheidungen in
-`docs/adr/`. Alte mutable-State- und formatabhängige Funktionen sind nur noch
-Kompatibilitäts-Adapter; neue Implementierungen gehen über die Module.
+`docs/adr/`. Formatabhängige Adapter bleiben privat hinter den Modulen;
+historische Namensdaten überschreiten nur explizite, eng begrenzte
+Migrationsgrenzen.
 
 - Sessions erhalten standardmäßig eine tmux-Runtime mit Prefix `mgt-`; deren
   eigener `RuntimeName` bleibt auch nach einem Anzeigenamenwechsel die einzige

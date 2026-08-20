@@ -544,6 +544,7 @@ func TestRepositoriesChangeDoesNotRemoveOnMalformedSuccessfulStatus(t *testing.T
 		{name: "missing terminator", status: "# branch.oid " + head + "\n# branch.head agent/topic"},
 		{name: "ordinary record without a change", status: repositoriesStatusFixture(head, "agent/topic", "1 .. N... 100644 100644 100644 "+oldOID+" "+head+" tracked.go")},
 		{name: "rename record without rename status", status: repositoriesStatusFixture(head, "agent/topic", "2 M. N... 100644 100644 100644 "+oldOID+" "+head+" R100 tracked.go\told.go")},
+		{name: "rename score disagrees with status", status: repositoriesStatusFixture(head, "agent/topic", "2 R. N... 100644 100644 100644 "+oldOID+" "+head+" C100 tracked.go\told.go")},
 		{name: "invalid ordinary mode", status: repositoriesStatusFixture(head, "agent/topic", "1 M. N... 10064x 100644 100644 "+oldOID+" "+head+" tracked.go")},
 		{name: "invalid ordinary submodule", status: repositoriesStatusFixture(head, "agent/topic", "1 M. SXYZ 100644 100644 100644 "+oldOID+" "+head+" tracked.go")},
 		{name: "invalid unmerged status", status: repositoriesStatusFixture(head, "agent/topic", "u M. N... 100644 100644 100644 100644 "+oldOID+" "+head+" "+head+" tracked.go")},
@@ -558,6 +559,39 @@ func TestRepositoriesChangeDoesNotRemoveOnMalformedSuccessfulStatus(t *testing.T
 			runner.assertDone()
 			if err == nil || result.State != RepositoryUnknown || result.Changed || result.MayHaveApplied || result.Problem == nil {
 				t.Fatalf("malformed status authorized removal: result=%#v error=%v", result, err)
+			}
+		})
+	}
+}
+
+func TestRepositoriesChangeDoesNotRemoveOnMalformedSuccessfulTopology(t *testing.T) {
+	projectPath := filepath.Join(t.TempDir(), "project")
+	target := filepath.Join(filepath.Dir(projectPath), "project-agents", "topic")
+	project := Project{Name: "demo", Path: projectPath}
+	root := repositoriesTopologyFixture(
+		repositoriesTopologyWorktree{Path: projectPath, Head: "aaaa", Branch: "main"},
+	)
+	topic := repositoriesTopologyFixture(
+		repositoriesTopologyWorktree{Path: target, Head: "bbbb", Branch: "agent/topic"},
+	)
+	tests := []struct {
+		name     string
+		topology string
+	}{
+		{name: "leading path whitespace", topology: root + strings.Replace(topic, "worktree "+target, "worktree  "+target, 1)},
+		{name: "trailing path whitespace", topology: root + strings.Replace(topic, "worktree "+target+"\n", "worktree "+target+" \n", 1)},
+		{name: "extra record separator", topology: root + "\n" + topic},
+		{name: "extra HEAD delimiter", topology: root + strings.Replace(topic, "HEAD ", "HEAD  ", 1)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runner := &repositoriesRecordingRunner{t: t, steps: []repositoriesRunnerStep{
+				{dir: projectPath, args: []string{"worktree", "list", "--porcelain"}, output: test.topology},
+			}}
+			result, err := newRepositories(runner).Change(context.Background(), RemoveManagedWorktreeChange(project, target))
+			runner.assertDone()
+			if err == nil || result.State != RepositoryUnknown || result.Changed || result.MayHaveApplied || result.Problem == nil {
+				t.Fatalf("malformed topology authorized removal: result=%#v error=%v", result, err)
 			}
 		})
 	}

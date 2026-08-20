@@ -271,7 +271,7 @@ func observeWithRunner(ctx context.Context, sessions []Session, runner observati
 		if session.ID != "" {
 			idCounts[session.ID]++
 		}
-		if validObservedRuntimeName(runtimeNames[i]) {
+		if validRuntimeIdentity(runtimeNames[i]) {
 			runtimeCounts[runtimeNames[i]]++
 		}
 	}
@@ -286,7 +286,7 @@ func observeWithRunner(ctx context.Context, sessions []Session, runner observati
 			snapshot.Problems = append(snapshot.Problems, ObservationProblem{
 				SessionID: session.ID, Operation: "validate-session", Message: "RuntimeName is required",
 			})
-		case !validObservedRuntimeName(runtimeNames[i]):
+		case !validRuntimeIdentity(runtimeNames[i]):
 			snapshot.Problems = append(snapshot.Problems, ObservationProblem{
 				SessionID: session.ID, RuntimeName: runtimeNames[i],
 				Operation: "validate-session", Message: "RuntimeName is malformed",
@@ -464,7 +464,7 @@ func parseObservedPanes(output string) (map[string]observedPane, []ObservationPr
 		if len(parts) > 0 {
 			runtimeName = parts[0]
 		}
-		if len(parts) != 6 || !validObservedRuntimeName(runtimeName) || !validObservedCommand(parts[2]) || !validObservedPaneID(parts[1]) ||
+		if len(parts) != 6 || !validRuntimeIdentity(runtimeName) || !validObservedCommand(parts[2]) || !validObservedPaneID(parts[1]) ||
 			!validObservedBinaryFact(parts[4]) || !validObservedBinaryFact(parts[5]) {
 			// An unidentifiable row may belong to any registered RuntimeName. The
 			// remaining parsed rows still prove presence, but their absence cannot
@@ -548,18 +548,6 @@ func validObservedPaneID(id string) bool {
 	}
 	for _, character := range id[1:] {
 		if character < '0' || character > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-func validObservedRuntimeName(name string) bool {
-	if name == "" || strings.TrimSpace(name) != name {
-		return false
-	}
-	for _, character := range name {
-		if unicode.IsControl(character) {
 			return false
 		}
 	}

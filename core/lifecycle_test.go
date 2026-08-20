@@ -19,6 +19,7 @@ type fakeLifecycleRuntime struct {
 	existsErr            error
 	renameErr            error
 	renameAppliesOnError bool
+	existsCalls          []string
 	renameCalls          int
 	lastRenameFrom       string
 	lastRenameTo         string
@@ -29,6 +30,7 @@ type fakeLifecycleRuntime struct {
 }
 
 func (f *fakeLifecycleRuntime) Exists(_ context.Context, session Session) (bool, error) {
+	f.existsCalls = append(f.existsCalls, session.TmuxName())
 	if f.existsErr != nil {
 		return false, f.existsErr
 	}
@@ -717,6 +719,26 @@ func TestLifecycleRenameRejectsDisplayAndRuntimeCollisionsBeforeSideEffect(t *te
 	})
 }
 
+func TestLifecycleRenameRejectsMalformedOpaqueRuntimeBeforeExternalProbe(t *testing.T) {
+	lifecycle, runtime, registry, _ := lifecycleHarness(t)
+	session := registerLifecycleSession(t, registry, runtime, Session{
+		ID: "malformed-runtime", Name: "source", RuntimeName: " foreign-runtime",
+	}, false)
+	// A distinct, trim-equivalent runtime exists. Normalizing the durable opaque
+	// identity would target that unrelated process.
+	runtime.runtimeNames["foreign-runtime"] = true
+
+	if _, err := lifecycle.Rename(context.Background(), session.ID, session.Name, "renamed"); err == nil {
+		t.Fatal("malformed opaque RuntimeName was accepted")
+	}
+	if len(runtime.existsCalls) != 0 || runtime.renameCalls != 0 {
+		t.Fatalf("malformed RuntimeName crossed the runtime Seam: exists=%q rename=%d", runtime.existsCalls, runtime.renameCalls)
+	}
+	if !runtime.runtimeNames["foreign-runtime"] {
+		t.Fatal("trim-equivalent foreign runtime was mutated")
+	}
+}
+
 func TestLifecycleRenameReconcilesCrashAfterExternalRenameWithoutReplay(t *testing.T) {
 	lifecycle, runtime, registry, _ := lifecycleHarness(t)
 	session := registerLifecycleSession(t, registry, runtime, Session{
@@ -855,6 +877,9 @@ func TestTmuxLifecycleRuntimeDistinguishesAbsenceFromUnavailable(t *testing.T) {
 		{name: "no server", output: "no server running on /tmp/tmux-501/default\n", wantAbsent: true},
 		{name: "permission denied", output: "error connecting to /tmp/tmux-501/default (Permission denied)\n"},
 		{name: "server failure", output: "server exited unexpectedly\n"},
+		{name: "absence phrase embedded in failure", output: "permission denied; can't find session: mgt-iris\n"},
+		{name: "absence mixed with another diagnostic", output: "can't find session: mgt-iris\nserver exited unexpectedly\n"},
+		{name: "truncated absence diagnostic", output: "can't find session:"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

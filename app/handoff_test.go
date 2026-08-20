@@ -4,7 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -143,16 +145,28 @@ func defaultHandoffAgents() (core.Agent, core.Agent) {
 }
 
 func newHandoffTestApp() *App {
+	var observations atomic.Int64
 	return &App{observeSessions: func(_ context.Context, sessions []core.Session) core.ObservationSnapshot {
+		// App.HandoffSession performs one coherent initial Observation before the
+		// delivery Module starts its live revalidation cycle. Model the fake tmux
+		// switch counters from that boundary so semantic tests never depend on
+		// subprocess scheduling against Observation's production deadlines.
+		liveObservation := observations.Add(1) - 1
 		snapshot := core.ObservationSnapshot{
 			ObservedAt: time.Now().UTC(), Availability: core.ObservationAvailable,
 			Sessions: make([]core.SessionObservation, 0, len(sessions)),
 		}
 		unavailable := os.Getenv("MAGENTIC_HANDOFF_LIST_FAIL") != ""
 		for _, session := range sessions {
+			content := handoffObservedValue(
+				os.Getenv("MAGENTIC_HANDOFF_PANE_CONTENT"),
+				os.Getenv("MAGENTIC_HANDOFF_PANE_CONTENT_AFTER"),
+				os.Getenv("MAGENTIC_HANDOFF_CONTENT_SWITCH_AT"),
+				liveObservation,
+			)
 			observed := core.SessionObservation{
 				SessionID: session.ID, Availability: core.ObservationAvailable,
-				Presence: core.SessionPresencePresent, Content: os.Getenv("MAGENTIC_HANDOFF_PANE_CONTENT"),
+				Presence: core.SessionPresencePresent, Content: content,
 				ContentKnown: true, Occupancy: core.OccupancyOccupied,
 			}
 			if unavailable {
@@ -165,7 +179,12 @@ func newHandoffTestApp() *App {
 				snapshot.Sessions = append(snapshot.Sessions, observed)
 				continue
 			}
-			command := os.Getenv("MAGENTIC_HANDOFF_TARGET_COMMAND")
+			command := handoffObservedValue(
+				os.Getenv("MAGENTIC_HANDOFF_TARGET_COMMAND"),
+				os.Getenv("MAGENTIC_HANDOFF_TARGET_COMMAND_AFTER"),
+				os.Getenv("MAGENTIC_HANDOFF_TARGET_SWITCH_AT"),
+				liveObservation,
+			)
 			if session.TmuxName() == os.Getenv("MAGENTIC_HANDOFF_SOURCE_RUNTIME") {
 				if os.Getenv("MAGENTIC_HANDOFF_OMIT_SOURCE") != "" {
 					observed.Presence = core.SessionPresenceAbsent
@@ -199,6 +218,20 @@ func newHandoffTestApp() *App {
 		}
 		return snapshot
 	}}
+}
+
+func handoffObservedValue(initial, after, switchAt string, liveObservation int64) string {
+	if after == "" {
+		return initial
+	}
+	threshold := int64(2)
+	if parsed, err := strconv.ParseInt(switchAt, 10, 64); err == nil {
+		threshold = parsed
+	}
+	if liveObservation >= threshold {
+		return after
+	}
+	return initial
 }
 
 func parseFakeTmuxCalls(t *testing.T, path string) [][]string {
@@ -273,6 +306,31 @@ func TestAppHandoffSessionUsesStableIDsAndOnlyTrustedQuotedMetadataInOneLiteralP
 	}
 	if _, enter := handoffSendCounts(t, logPath); enter != 1 {
 		t.Fatalf("Enter count = %d, want 1", enter)
+	}
+}
+
+func TestAppHandoffSessionUsesInjectedObserverForEveryLiveRevalidation(t *testing.T) {
+	logPath := installHandoffFakeTmux(t, "Ready\nshift+tab to cycle", "claude", "claude")
+	source, target := defaultHandoffSessions()
+	handoffTestState(t, source, target)
+
+	app := newHandoffTestApp()
+	observe := app.observeSessions
+	var observations atomic.Int32
+	app.observeSessions = func(ctx context.Context, sessions []core.Session) core.ObservationSnapshot {
+		observations.Add(1)
+		return observe(ctx, sessions)
+	}
+	if err := app.HandoffSession(string(source.ID), string(target.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if got := observations.Load(); got != 3 {
+		t.Fatalf("Observation calls = %d, want initial plus pre-literal and pre-Enter revalidation", got)
+	}
+	for _, call := range parseFakeTmuxCalls(t, logPath) {
+		if len(call) > 0 && (call[0] == "list-panes" || call[0] == "capture-pane") {
+			t.Fatalf("delivery bypassed injected Observer through tmux %q: %#v", call[0], call)
+		}
 	}
 }
 

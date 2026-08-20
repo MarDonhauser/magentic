@@ -1021,7 +1021,7 @@ func parseRepositoriesStatus(out string) (repositoriesStatus, error) {
 			fields := strings.SplitN(line, " ", 10)
 			if len(fields) != 10 || !validRepositoryChangedXY(fields[1], true) ||
 				!validRepositorySubmodule(fields[2]) || !validRepositoryModes(fields[3:6]) ||
-				!validRepositoryOIDSet(fields[6:8]) || !validRepositoryRenameScore(fields[8]) {
+				!validRepositoryOIDSet(fields[6:8]) || !validRepositoryRenameScore(fields[8], fields[1]) {
 				return repositoriesStatus{}, fmt.Errorf("invalid renamed change at status line %d", lineNumber+1)
 			}
 			pathRaw, originalRaw, hasOriginal := strings.Cut(fields[9], "\t")
@@ -1147,8 +1147,11 @@ func validRepositoryOIDSet(values []string) bool {
 	return true
 }
 
-func validRepositoryRenameScore(value string) bool {
+func validRepositoryRenameScore(value, xy string) bool {
 	if len(value) < 2 || (value[0] != 'R' && value[0] != 'C') {
+		return false
+	}
+	if !strings.ContainsRune(xy, rune(value[0])) {
 		return false
 	}
 	score, err := parseRepositoryNonnegativeDecimal(value[1:], "rename score")

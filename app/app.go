@@ -488,7 +488,7 @@ func (a *App) HandoffSession(sourceID, targetID string) error {
 		return err
 	}
 	snapshot := a.observationFor(st.Agents, true)
-	return core.HandoffSession(st, snapshot, core.SessionID(sourceID), core.SessionID(targetID))
+	return core.HandoffSessionWithObserver(st, snapshot, core.SessionID(sourceID), core.SessionID(targetID), a.observeSessions)
 }
 
 func (a *App) SendSkill(sessionID, cmd string) error {
@@ -496,7 +496,7 @@ func (a *App) SendSkill(sessionID, cmd string) error {
 		return fmt.Errorf("nur Slash-Kommandos erlaubt")
 	}
 	id := core.SessionID(strings.TrimSpace(sessionID))
-	if err := core.SendSkillByID(id, cmd); err != nil {
+	if err := core.SendSkillByIDWithObserver(id, cmd, a.observeSessions); err != nil {
 		return err
 	}
 	if strings.Contains(cmd, "/deploy") {

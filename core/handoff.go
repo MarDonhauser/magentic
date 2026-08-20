@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
@@ -308,6 +309,13 @@ func resolveHandoffSessions(st *State, sourceID, targetID SessionID) (Session, S
 // resolves coding-agent run identity, validates readiness, builds the prompt,
 // and synchronously reports delivery or failure through this one Interface.
 func HandoffSession(st *State, snapshot ObservationSnapshot, sourceID, targetID SessionID) error {
+	return HandoffSessionWithObserver(st, snapshot, sourceID, targetID, nil)
+}
+
+// HandoffSessionWithObserver preserves the caller's Observation boundary for
+// the live checks immediately before terminal input. A nil Observer selects
+// the production Observation Module.
+func HandoffSessionWithObserver(st *State, snapshot ObservationSnapshot, sourceID, targetID SessionID, observe func(context.Context, []Session) ObservationSnapshot) error {
 	source, target, err := resolveHandoffSessions(st, sourceID, targetID)
 	if err != nil {
 		return err
@@ -323,8 +331,8 @@ func HandoffSession(st *State, snapshot ObservationSnapshot, sourceID, targetID 
 		return err
 	}
 	prompt := buildSessionHandoffPrompt(resolved)
-	return enqueuePrompt(
+	return enqueuePromptUsing(
 		target.TmuxName(), prompt, true, targetTool,
-		waitForReady, false, true, handoffLiveTargetValidator(target.Name),
+		waitForReady, false, true, handoffLiveTargetValidator(target.Name), observe,
 	)
 }

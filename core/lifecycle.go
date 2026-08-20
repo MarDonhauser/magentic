@@ -938,10 +938,10 @@ func (l *SessionLifecycle) advanceRename(ctx context.Context, expected Lifecycle
 	if record.TransitionKind != LifecycleTransitionRename || strings.TrimSpace(record.RenameTo) == "" {
 		return l.failRecord(ctx, record, errors.New("invalid Session rename intent"))
 	}
-	oldRuntime := strings.TrimSpace(record.Session.RuntimeName)
-	targetRuntime := strings.TrimSpace(record.RenameRuntimeTo)
-	if oldRuntime == "" || targetRuntime == "" {
-		return l.failRecord(ctx, record, errors.New("Session rename requires explicit runtime identities"))
+	oldRuntime := record.Session.RuntimeName
+	targetRuntime := record.RenameRuntimeTo
+	if !validRuntimeIdentity(oldRuntime) || !validRuntimeIdentity(targetRuntime) {
+		return l.failRecord(ctx, record, errors.New("Session rename requires exact runtime identities"))
 	}
 
 	registrySnapshot, err := l.registry.Snapshot(ctx)
@@ -1469,9 +1469,20 @@ func (r tmuxLifecycleRuntime) Exists(ctx context.Context, session Session) (bool
 }
 
 func tmuxTargetKnownAbsent(output []byte) bool {
-	message := strings.ToLower(strings.TrimSpace(string(output)))
-	return strings.Contains(message, "can't find session:") ||
-		strings.Contains(message, "no server running on ")
+	message := string(output)
+	if strings.HasSuffix(message, "\n") {
+		message = strings.TrimSuffix(message, "\n")
+	}
+	if message == "" || strings.ContainsAny(message, "\r\n") || strings.TrimSpace(message) != message {
+		return false
+	}
+	for _, prefix := range []string{"can't find session: ", "no server running on "} {
+		if strings.HasPrefix(message, prefix) {
+			detail := strings.TrimPrefix(message, prefix)
+			return detail != "" && strings.TrimSpace(detail) == detail
+		}
+	}
+	return false
 }
 
 func (tmuxLifecycleRuntime) Start(ctx context.Context, session Session, mode string) error {

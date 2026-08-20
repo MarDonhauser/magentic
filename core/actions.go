@@ -519,9 +519,9 @@ func (q *promptTargetQueue) enqueue(session, key string, synchronous bool, deadl
 	return nil
 }
 
-func inspectLivePromptTarget(session, expectedTool string) (promptTargetObservation, error) {
+func inspectLivePromptTargetUsing(session, expectedTool string, observe observationReader) (promptTargetObservation, error) {
 	name := strings.TrimPrefix(session, SessionPrefix)
-	observed := observePromptTarget(context.Background(), session)
+	observed := observePromptTarget(context.Background(), session, observe)
 	if err := validatePromptTargetObservation(name, observed); err != nil {
 		return promptTargetObservation{}, err
 	}
@@ -533,13 +533,13 @@ func inspectLivePromptTarget(session, expectedTool string) (promptTargetObservat
 	return observed, nil
 }
 
-func deliverPrompt(session, prompt string, submit bool, expectedTool string, waitForReady, tolerateStartup bool, validate promptTargetValidator, deadline time.Time) error {
+func deliverPrompt(session, prompt string, submit bool, expectedTool string, waitForReady, tolerateStartup bool, validate promptTargetValidator, deadline time.Time, observe observationReader) error {
 	if waitForReady {
 		for {
 			if err := waitForPromptDeadline(deadline, time.Second, session); err != nil {
 				return err
 			}
-			observed, err := inspectLivePromptTarget(session, expectedTool)
+			observed, err := inspectLivePromptTargetUsing(session, expectedTool, observe)
 			if err != nil {
 				if tolerateStartup {
 					continue
@@ -557,13 +557,13 @@ func deliverPrompt(session, prompt string, submit bool, expectedTool string, wai
 			if err := waitForPromptDeadline(deadline, 500*time.Millisecond, session); err != nil {
 				return err
 			}
-			return sendPromptLiteralValidated(session, prompt, submit, expectedTool, validate)
+			return sendPromptLiteralValidated(session, prompt, submit, expectedTool, validate, observe)
 		}
 	}
 	if !time.Now().Before(deadline) {
 		return promptDeadlineError(session)
 	}
-	return sendPromptLiteralValidated(session, prompt, submit, expectedTool, validate)
+	return sendPromptLiteralValidated(session, prompt, submit, expectedTool, validate, observe)
 }
 
 func promptDeliveryKey(prompt string, submit bool, expectedTool string, waitForReady, tolerateStartup, preferSync bool, validate promptTargetValidator) string {
@@ -585,6 +585,10 @@ func promptDeliveryKey(prompt string, submit bool, expectedTool string, waitForR
 }
 
 func enqueuePrompt(session, prompt string, submit bool, expectedTool string, waitForReady, tolerateStartup, preferSync bool, validate promptTargetValidator) error {
+	return enqueuePromptUsing(session, prompt, submit, expectedTool, waitForReady, tolerateStartup, preferSync, validate, nil)
+}
+
+func enqueuePromptUsing(session, prompt string, submit bool, expectedTool string, waitForReady, tolerateStartup, preferSync bool, validate promptTargetValidator, observe observationReader) error {
 	if strings.TrimSpace(prompt) == "" {
 		return fmt.Errorf("Prompt ist leer")
 	}
@@ -592,12 +596,8 @@ func enqueuePrompt(session, prompt string, submit bool, expectedTool string, wai
 	q := queueForPromptTarget(session)
 	deadline := time.Now().Add(promptDeliveryTimeout)
 	return q.enqueue(session, key, preferSync, deadline, func(deadline time.Time) error {
-		return deliverPrompt(session, prompt, submit, expectedTool, waitForReady, tolerateStartup, validate, deadline)
+		return deliverPrompt(session, prompt, submit, expectedTool, waitForReady, tolerateStartup, validate, deadline, observe)
 	})
-}
-
-func SendPromptWhenReady(session, prompt string, submit bool) {
-	_ = enqueuePrompt(session, prompt, submit, AgentToolClaude, true, true, false, nil)
 }
 
 func promptTerminalInput(prompt string) string {
@@ -612,15 +612,11 @@ func promptTerminalInput(prompt string) string {
 	return "\x1b[200~" + normalized + "\x1b[201~"
 }
 
-// sendPromptLiteral passes the prompt as one tmux argument. In particular, it
-// must never be interpolated into a shell command: handoff metadata can contain
-// paths and names that have meaning to a shell.
-func sendPromptLiteral(session, prompt string, submit bool, expectedTool string) error {
-	return sendPromptLiteralValidated(session, prompt, submit, expectedTool, nil)
-}
-
-func sendPromptLiteralValidated(session, prompt string, submit bool, expectedTool string, validate promptTargetValidator) error {
-	observed, err := inspectLivePromptTarget(session, expectedTool)
+// sendPromptLiteralValidated passes the prompt as one tmux argument. In
+// particular, it must never be interpolated into a shell command: handoff
+// metadata can contain paths and names that have meaning to a shell.
+func sendPromptLiteralValidated(session, prompt string, submit bool, expectedTool string, validate promptTargetValidator, observe observationReader) error {
+	observed, err := inspectLivePromptTargetUsing(session, expectedTool, observe)
 	if err != nil {
 		return err
 	}
@@ -635,7 +631,7 @@ func sendPromptLiteralValidated(session, prompt string, submit bool, expectedToo
 	if !submit {
 		return nil
 	}
-	observed, err = inspectLivePromptTarget(session, expectedTool)
+	observed, err = inspectLivePromptTargetUsing(session, expectedTool, observe)
 	if err != nil {
 		return err
 	}
@@ -650,20 +646,9 @@ func sendPromptLiteralValidated(session, prompt string, submit bool, expectedToo
 	return nil
 }
 
-// SendPromptToSession sends immediately when the detected agent's input is
-// ready. While Claude is working, it reuses the established readiness loop and
-// submits the prompt once the composer is available again.
-func SendPromptToSession(session, prompt string) error {
-	observed, err := inspectLivePromptTarget(session, "")
-	if err != nil {
-		return err
-	}
-	return enqueuePromptForObservedTarget(session, prompt, observed)
-}
-
-func enqueuePromptForObservedTarget(session, prompt string, observed promptTargetObservation) error {
+func enqueuePromptForObservedTargetUsing(session, prompt string, observed promptTargetObservation, observe observationReader) error {
 	ready := observed.Tool != AgentToolClaude || observed.Input == promptInputReady
-	return enqueuePrompt(session, prompt, true, observed.Tool, !ready, false, ready, nil)
+	return enqueuePromptUsing(session, prompt, true, observed.Tool, !ready, false, ready, nil, observe)
 }
 
 func StartSkillAgent(st *State, projectID ProjectID, dir, prompt, kind, nameHint string) (string, error) {
@@ -732,6 +717,13 @@ func startSkillAgent(st *State, projectID ProjectID, dir, prompt, kind, nameHint
 // SendSkillByID resolves the action target through its durable Registry
 // identity.
 func SendSkillByID(id SessionID, cmd string) error {
+	return SendSkillByIDWithObserver(id, cmd, nil)
+}
+
+// SendSkillByIDWithObserver keeps a caller's coherent Observation Adapter in
+// use through every delivery-time revalidation. A nil Observer uses the
+// production Observation Module.
+func SendSkillByIDWithObserver(id SessionID, cmd string, observe func(context.Context, []Session) ObservationSnapshot) error {
 	st, err := LoadState()
 	if err != nil {
 		return err
@@ -740,20 +732,20 @@ func SendSkillByID(id SessionID, cmd string) error {
 	if session == nil {
 		return fmt.Errorf("unbekannte SessionID: %s", id)
 	}
-	return sendSkillToSession(*session, cmd)
+	return sendSkillToSession(*session, cmd, observe)
 }
 
-func sendSkillToSession(session Session, cmd string) error {
+func sendSkillToSession(session Session, cmd string, observe observationReader) error {
 	name := session.Name
 	sn := session.TmuxName()
 	if session.IsTerm() {
 		return fmt.Errorf("%s ist eine Terminal-Session — dort läuft kein Claude", name)
 	}
-	observed, err := inspectLivePromptTarget(sn, AgentToolClaude)
+	observed, err := inspectLivePromptTargetUsing(sn, AgentToolClaude, observe)
 	if err != nil {
 		return err
 	}
-	return enqueuePromptForObservedTarget(sn, cmd, observed)
+	return enqueuePromptForObservedTargetUsing(sn, cmd, observed, observe)
 }
 
 func DoneSession(id SessionID) error {
@@ -818,24 +810,9 @@ func StartMerge(st *State, projectID ProjectID, projPath, source, target string)
 	return StartSkillAgent(st, projectID, projPath, prompt, "merge", "merge "+source)
 }
 
-func StartBoardSession(st *State, projectID ProjectID, projPath, id, itemPath string) (string, error) {
-	return StartSpecificationSession(st, SpecificationStartIntent{
-		ProjectID:              projectID,
-		ID:                     id,
-		ProjectDirectory:       projPath,
-		SpecificationDirectory: itemPath,
-		WorkInstructions: SpecificationWorkInstructions{
-			ReadInOrder:      []SpecificationDocumentKind{SpecificationDocumentProposal, SpecificationDocumentSpecification, SpecificationDocumentDesign, SpecificationDocumentPlan, SpecificationDocumentTasks},
-			KeepTasksUpdated: true,
-			ReviewBeforeWork: true,
-		},
-	})
-}
-
 // StartSpecificationSession is the controlled handoff from Specifications to
-// Session Lifecycle. Callers must obtain intent through Specifications.ResolveStart;
-// the compatibility StartBoardSession Adapter above exists only for older Go
-// callers and is not exposed by the desktop facade.
+// Session Lifecycle. Callers must obtain intent through
+// Specifications.ResolveStart.
 func StartSpecificationSession(st *State, intent SpecificationStartIntent) (string, error) {
 	if intent.ProjectID == "" || strings.TrimSpace(intent.ID) == "" || strings.TrimSpace(intent.ProjectDirectory) == "" || strings.TrimSpace(intent.SpecificationDirectory) == "" {
 		return "", fmt.Errorf("unvollst\u00e4ndiger Specification-Start")

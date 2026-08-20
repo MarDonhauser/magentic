@@ -49,7 +49,7 @@ func TestSendSkillTargetsRegisteredRuntimeName(t *testing.T) {
 	source, target := customRuntimeAgents()
 	handoffTestState(t, source, target)
 
-	if err := core.SendSkillByID(source.ID, "/review "); err != nil {
+	if err := newHandoffTestApp().SendSkill(string(source.ID), "/review "); err != nil {
 		t.Fatal(err)
 	}
 	assertLiteralTmuxTarget(t, logPath, core.TargetPane(customSourceRuntime))
@@ -93,11 +93,12 @@ func TestSessionPreviewAndLinksUseRegisteredRuntimeName(t *testing.T) {
 	source, target := customRuntimeAgents()
 	handoffTestState(t, source, target)
 
-	preview := (&App{}).SessionPreview(string(source.ID))
+	app := newHandoffTestApp()
+	preview := app.SessionPreview(string(source.ID))
 	if !preview.ContentKnown || !strings.Contains(preview.Content, "custom runtime") {
 		t.Fatalf("SessionPreview() = %#v", preview)
 	}
-	links, err := (&App{}).SessionLinks(string(source.ID))
+	links, err := app.SessionLinks(string(source.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +115,7 @@ func TestOpenTermBuildsAttachCommandFromRegisteredRuntimeName(t *testing.T) {
 
 	wantStop := errors.New("stop before starting PTY")
 	var commandArgs []string
-	app := NewApp()
+	app := newHandoffTestApp()
 	app.startTerm = func(command *exec.Cmd, _ *pty.Winsize) (*os.File, error) {
 		commandArgs = append([]string(nil), command.Args...)
 		return nil, wantStop
@@ -139,7 +140,7 @@ func TestOpenTermDoesNotCollapseObservationFailureToMissingSession(t *testing.T)
 	handoffTestState(t, source, target)
 
 	starts := 0
-	app := NewApp()
+	app := newHandoffTestApp()
 	app.startTerm = func(*exec.Cmd, *pty.Winsize) (*os.File, error) {
 		starts++
 		return nil, errors.New("must not start")
