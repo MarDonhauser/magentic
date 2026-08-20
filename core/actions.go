@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,51 @@ import (
 	"sync"
 	"time"
 )
+
+func lifecycleForState(st *State) *SessionLifecycle {
+	registryPath := StatePath()
+	if st != nil && st.registryPath != "" {
+		registryPath = st.registryPath
+	}
+	ledgerPath := SessionLifecyclePath()
+	if os.Getenv("MAGENTIC_LIFECYCLE") == "" && registryPath != StatePath() {
+		ledgerPath = filepath.Join(filepath.Dir(registryPath), "lifecycle.json")
+	}
+	return OpenSessionLifecycle(SessionLifecycleConfig{RegistryPath: registryPath, LedgerPath: ledgerPath})
+}
+
+func refreshState(st *State) error {
+	if st == nil {
+		return fmt.Errorf("Session Registry is unavailable")
+	}
+	path := st.registryPath
+	if path == "" {
+		path = StatePath()
+	}
+	snapshot, err := OpenRegistry(path).Snapshot(context.Background())
+	if err != nil {
+		return err
+	}
+	*st = *snapshot.MutableState()
+	return nil
+}
+
+func registerDiscovered(st *State) error {
+	discovered := DiscoverNew(st)
+	if len(discovered) == 0 {
+		return nil
+	}
+	path := st.registryPath
+	if path == "" {
+		path = StatePath()
+	}
+	result, err := OpenRegistry(path).Change(context.Background(), AddDiscoveredSessions(discovered))
+	if err != nil {
+		return err
+	}
+	*st = *result.Snapshot.MutableState()
+	return nil
+}
 
 func DiscoverNew(s *State) []Agent {
 	known := map[string]bool{}
@@ -49,48 +95,18 @@ func DiscoverNew(s *State) []Agent {
 }
 
 func RestoreSessions(st *State) int {
-	restored := 0
-	changed := false
-	kept := st.Agents[:0]
-	for _, a := range st.Agents {
-		sn := SessionName(a.Name)
-		if TmuxHasSession(sn) {
-			kept = append(kept, a)
-			continue
-		}
-		if !a.LaterAt.IsZero() {
-			kept = append(kept, a)
-			continue
-		}
-		if info, err := os.Stat(a.Dir); err != nil || !info.IsDir() {
-			Logf("restore %s: Verzeichnis %s fehlt — Agent entfernt", a.Name, a.Dir)
-			changed = true
-			continue
-		}
-		var err error
-		if a.IsTerm() {
-			err = TmuxNewShellSession(sn, a.Dir)
-		} else {
-			extraArgs := "--continue"
-			if a.SessionID != "" {
-				extraArgs = "--resume " + a.SessionID
-			}
-			err = TmuxNewClaudeSession(sn, a.Dir, extraArgs)
-		}
-		if err != nil {
-			Logf("restore %s: %v", a.Name, err)
-			kept = append(kept, a)
-			continue
-		}
-		Logf("restore %s: neu erstellt in %s", a.Name, a.Dir)
-		restored++
-		kept = append(kept, a)
+	result, err := lifecycleForState(st).Reconcile(context.Background())
+	if err != nil {
+		Logf("Session Lifecycle reconcile: %v", err)
+		return 0
 	}
-	st.Agents = kept
-	if changed {
-		st.Save()
+	for _, problem := range result.Problems {
+		Logf("restore %s: %s", problem.Name, problem.Message)
 	}
-	return restored
+	if err := refreshState(st); err != nil {
+		Logf("Session Lifecycle Registry refresh: %v", err)
+	}
+	return result.Restored
 }
 
 func ReopenLater(st *State, name string) error {
@@ -98,27 +114,10 @@ func ReopenLater(st *State, name string) error {
 	if a == nil {
 		return fmt.Errorf("unbekannte Session: %s", name)
 	}
-	if info, err := os.Stat(a.Dir); err != nil || !info.IsDir() {
-		return fmt.Errorf("Verzeichnis existiert nicht mehr: %s", a.Dir)
+	if _, err := lifecycleForState(st).Resume(context.Background(), a.ID, a.Name); err != nil {
+		return err
 	}
-	sn := SessionName(a.Name)
-	if !TmuxHasSession(sn) {
-		var err error
-		if a.IsTerm() {
-			err = TmuxNewShellSession(sn, a.Dir)
-		} else {
-			extraArgs := "--continue"
-			if a.SessionID != "" {
-				extraArgs = "--resume " + a.SessionID
-			}
-			err = TmuxNewClaudeSession(sn, a.Dir, extraArgs)
-		}
-		if err != nil {
-			return err
-		}
-	}
-	a.LaterAt = time.Time{}
-	return st.Save()
+	return refreshState(st)
 }
 
 type promptTargetQueue struct {
@@ -278,25 +277,40 @@ func SendSlashCommand(session, cmd string) {
 }
 
 func StartSkillAgent(st *State, dir, prompt, kind, nameHint string) (string, error) {
-	for _, a := range DiscoverNew(st) {
-		st.AddAgent(a)
-	}
-	name := PickAgentName(st, nameHint)
-	session := SessionName(name)
-	sid := NewUUID()
-	if err := TmuxNewClaudeSession(session, dir, "--session-id "+sid); err != nil {
+	if err := registerDiscovered(st); err != nil {
 		return "", err
 	}
-	proj := ""
+	name := PickAgentName(st, nameHint)
+	project := Project{}
 	for _, p := range st.Projects {
-		if dir == p.Path || strings.HasPrefix(dir, p.Path+string(os.PathSeparator)) {
-			proj = p.Name
+		managedRoot := filepath.Join(filepath.Dir(p.Path), filepath.Base(p.Path)+"-agents")
+		if dir == p.Path || strings.HasPrefix(dir, p.Path+string(os.PathSeparator)) ||
+			dir == managedRoot || strings.HasPrefix(dir, managedRoot+string(os.PathSeparator)) {
+			project = p
 			break
 		}
 	}
-	baseCommit, baseDirty := CaptureBaseline(dir)
-	st.AddAgent(Agent{Name: name, Project: proj, Dir: dir, Kind: kind, CreatedAt: time.Now(), BaseCommit: baseCommit, BaseDirty: baseDirty, SessionID: sid})
-	go SendPromptWhenReady(session, prompt, true)
+	purpose := SessionPurposeWork
+	switch kind {
+	case "cleanup":
+		purpose = SessionPurposeCleanup
+	case "merge":
+		purpose = SessionPurposeMerge
+	case "deploy":
+		purpose = SessionPurposeDeploy
+	}
+	result, err := lifecycleForState(st).Provision(context.Background(), SessionProvision{
+		Project: project, Name: name, Directory: dir,
+		Worktree: project.Path != "" && filepath.Clean(dir) != filepath.Clean(project.Path),
+		Kind: SessionKindCodingAgent, Purpose: purpose, InitialPrompt: prompt,
+	})
+	if err != nil {
+		return "", err
+	}
+	if err := refreshState(st); err != nil {
+		return "", err
+	}
+	name = result.Session.Name
 	return name, nil
 }
 
@@ -630,33 +644,72 @@ func createSession(st *State, projName string, worktree bool, name, kind string)
 	if err != nil {
 		return "", err
 	}
-	dir := proj.Path
-	if worktree {
-		wt, err := CreateWorktree(proj.Path, name)
-		if err != nil {
-			return "", err
-		}
-		dir = wt
+	sessionKind := SessionKindCodingAgent
+	presentation := SessionPresentationListed
+	if kind == KindTerm || kind == KindDock {
+		sessionKind = SessionKindTerminal
 	}
-	return startSession(st, name, dir, proj.Name, worktree, kind)
+	if kind == KindDock {
+		presentation = SessionPresentationDock
+	}
+	result, err := lifecycleForState(st).Provision(context.Background(), SessionProvision{
+		Project: *proj, Name: name, Directory: proj.Path,
+		CreateWorktree: worktree, Worktree: worktree,
+		Kind: sessionKind, Presentation: presentation, Purpose: SessionPurposeWork,
+	})
+	if err != nil {
+		return "", err
+	}
+	if err := refreshState(st); err != nil {
+		return "", err
+	}
+	return result.Session.Name, nil
 }
 
 func startSession(st *State, name, dir, project string, worktree bool, kind string) (string, error) {
-	sid := ""
-	if kind == KindTerm || kind == KindDock {
-		if err := TmuxNewShellSession(SessionName(name), dir); err != nil {
-			return "", fmt.Errorf("tmux: %w", err)
-		}
-	} else {
-		sid = NewUUID()
-		if err := TmuxNewClaudeSession(SessionName(name), dir, "--session-id "+sid); err != nil {
-			return "", fmt.Errorf("tmux: %w", err)
-		}
+	proj := Project{Name: project}
+	if registered := st.ProjectByName(project); registered != nil {
+		proj = *registered
 	}
-	baseCommit, baseDirty := CaptureBaseline(dir)
-	st.AddAgent(Agent{Name: name, Project: project, Dir: dir, Worktree: worktree, Kind: kind, CreatedAt: time.Now(), BaseCommit: baseCommit, BaseDirty: baseDirty, SessionID: sid})
-	if err := st.Save(); err != nil {
+	sessionKind := SessionKindCodingAgent
+	presentation := SessionPresentationListed
+	if kind == KindTerm || kind == KindDock {
+		sessionKind = SessionKindTerminal
+	}
+	if kind == KindDock {
+		presentation = SessionPresentationDock
+	}
+	result, err := lifecycleForState(st).Provision(context.Background(), SessionProvision{
+		Project: proj, Name: name, Directory: dir, Worktree: worktree,
+		Kind: sessionKind, Presentation: presentation,
+	})
+	if err != nil {
 		return "", err
 	}
-	return name, nil
+	if err := refreshState(st); err != nil {
+		return "", err
+	}
+	return result.Session.Name, nil
+}
+
+func ParkSession(st *State, name string) error {
+	session := st.AgentByName(name)
+	if session == nil {
+		return fmt.Errorf("unbekannte Session: %s", name)
+	}
+	if _, err := lifecycleForState(st).Park(context.Background(), session.ID, session.Name); err != nil {
+		return err
+	}
+	return refreshState(st)
+}
+
+func RemoveRegisteredSession(st *State, name string) error {
+	session := st.AgentByName(name)
+	if session == nil {
+		return nil
+	}
+	if _, err := lifecycleForState(st).Remove(context.Background(), session.ID, session.Name); err != nil {
+		return err
+	}
+	return refreshState(st)
 }

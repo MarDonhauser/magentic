@@ -349,6 +349,16 @@ func agentPhase(a Agent, mainBranch string, alive bool) (string, string) {
 	if !alive {
 		return "", ""
 	}
+	switch a.Purpose {
+	case SessionPurposeDeploy:
+		return "deploy", ""
+	case SessionPurposeMerge:
+		return "merge", ""
+	case SessionPurposeCleanup:
+		return "cleanup", ""
+	}
+	// Legacy Registry records are translated here until every installation has
+	// passed through the Registry migration.
 	switch a.Kind {
 	case "deploy":
 		return "deploy", ""

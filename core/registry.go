@@ -337,7 +337,11 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 			if other := state.AgentByName(change.newName); other != nil && other.ID != session.ID {
 				return false, "", "", fmt.Errorf("Session %q existiert schon", change.newName)
 			}
+			oldDefaultRuntime := SessionName(session.Name)
 			session.Name = change.newName
+			if session.RuntimeName == "" || session.RuntimeName == oldDefaultRuntime {
+				session.RuntimeName = SessionName(change.newName)
+			}
 		}
 		return true, "", session.ID, nil
 	case registryAddDiscovered:

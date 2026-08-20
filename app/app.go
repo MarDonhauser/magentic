@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -111,8 +110,12 @@ func (a *App) Overview(fresh bool) (core.Overview, error) {
 	if err != nil {
 		return core.Overview{}, err
 	}
-	for _, ag := range core.DiscoverNew(st) {
-		st.AddAgent(ag)
+	if discovered := core.DiscoverNew(st); len(discovered) > 0 {
+		changed, changeErr := core.OpenRegistry(core.StatePath()).Change(a.ctx, core.AddDiscoveredSessions(discovered))
+		if changeErr != nil {
+			return core.Overview{}, changeErr
+		}
+		st = changed.Snapshot.MutableState()
 	}
 	var statuses map[string]core.AgentStatus
 	var contents map[string]string
@@ -163,16 +166,8 @@ func (a *App) AddProject(path string) (string, error) {
 	if err != nil || !info.IsDir() {
 		return "", fmt.Errorf("Verzeichnis nicht gefunden: %s", abs)
 	}
-	st, err := core.LoadState()
-	if err != nil {
-		return "", err
-	}
 	name := filepath.Base(abs)
-	if st.ProjectByName(name) != nil {
-		return "", fmt.Errorf("Projekt %q existiert schon", name)
-	}
-	st.Projects = append(st.Projects, core.Project{Name: name, Path: abs})
-	if err := st.Save(); err != nil {
+	if _, err := core.OpenRegistry(core.StatePath()).Change(a.ctx, core.RegisterProject(core.Project{Name: name, Path: abs})); err != nil {
 		return "", err
 	}
 	return name, nil
@@ -183,43 +178,17 @@ func (a *App) RemoveProject(name string) error {
 	if err != nil {
 		return err
 	}
-	kept := st.Projects[:0]
-	found := false
-	for _, p := range st.Projects {
-		if p.Name == name {
-			found = true
-			continue
-		}
-		kept = append(kept, p)
-	}
-	if !found {
+	project := st.ProjectByName(name)
+	if project == nil {
 		return fmt.Errorf("Projekt %q nicht gefunden", name)
 	}
-	st.Projects = kept
-	return st.Save()
+	_, err = core.OpenRegistry(core.StatePath()).Change(a.ctx, core.RemoveProject(project.ID, project.Name))
+	return err
 }
 
 func (a *App) ReorderProjects(order []string) error {
-	st, err := core.LoadState()
-	if err != nil {
-		return err
-	}
-	rank := make(map[string]int, len(order))
-	for i, n := range order {
-		rank[n] = i
-	}
-	sort.SliceStable(st.Projects, func(i, j int) bool {
-		ri, oki := rank[st.Projects[i].Name]
-		rj, okj := rank[st.Projects[j].Name]
-		if !oki {
-			ri = len(rank)
-		}
-		if !okj {
-			rj = len(rank)
-		}
-		return ri < rj
-	})
-	return st.Save()
+	_, err := core.OpenRegistry(core.StatePath()).Change(a.ctx, core.ReorderProjects(order))
+	return err
 }
 
 func (a *App) SaveImage(dataB64 string) (string, error) {
@@ -255,10 +224,12 @@ func (a *App) MarkSeen(name string) error {
 	if err != nil {
 		return err
 	}
-	if !st.MarkSeen(name) {
-		return nil
+	session := st.AgentByName(name)
+	if session == nil {
+		return fmt.Errorf("unbekannte Session: %s", name)
 	}
-	return st.Save()
+	_, err = core.OpenRegistry(core.StatePath()).Change(a.ctx, core.MarkSessionSeen(session.ID, session.Name, time.Now()))
+	return err
 }
 
 func (a *App) GitGraph(project string, limit int) (core.GitGraph, error) {
@@ -305,7 +276,6 @@ func (a *App) StartBoardItem(project, id, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	st.Save()
 	return name, nil
 }
 
@@ -444,8 +414,9 @@ func (a *App) SendSkill(name, cmd string) error {
 	}
 	if strings.Contains(cmd, "/deploy") {
 		if st, err := core.LoadState(); err == nil {
-			st.MarkDeploy(name)
-			st.Save()
+			if session := st.AgentByName(name); session != nil {
+				_, _ = core.OpenRegistry(core.StatePath()).Change(a.ctx, core.MarkSessionDeploy(session.ID, session.Name, time.Now()))
+			}
 		}
 	}
 	return nil
@@ -460,7 +431,6 @@ func (a *App) Cleanup(path, mainBranch string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	st.Save()
 	return name, nil
 }
 
@@ -477,7 +447,6 @@ func (a *App) Merge(project, source, target string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	st.Save()
 	return name, nil
 }
 
@@ -494,7 +463,6 @@ func (a *App) Deploy(project string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	st.Save()
 	return name, nil
 }
 
@@ -510,7 +478,7 @@ func (a *App) RemoveWorktree(project, path string) error {
 	if err := core.RemoveWorktree(st, proj, path); err != nil {
 		return err
 	}
-	return st.Save()
+	return nil
 }
 
 func (a *App) SetMainBranch(project, main string) error {
@@ -522,23 +490,17 @@ func (a *App) SetMainBranch(project, main string) error {
 	if proj == nil {
 		return fmt.Errorf("unbekanntes Projekt: %s", project)
 	}
-	proj.MainBranch = strings.TrimSpace(main)
-	return st.Save()
+	_, err = core.OpenRegistry(core.StatePath()).Change(a.ctx, core.SetProjectMainBranch(proj.ID, proj.Name, strings.TrimSpace(main)))
+	return err
 }
 
 func (a *App) KillSession(name string) error {
-	sn := core.SessionName(name)
 	a.CloseTerm(name)
-	if core.TmuxHasSession(sn) {
-		if err := core.TmuxKillSession(sn); err != nil {
-			return err
-		}
+	st, err := core.LoadState()
+	if err != nil {
+		return err
 	}
-	if st, err := core.LoadState(); err == nil {
-		st.RemoveAgent(name)
-		st.Save()
-	}
-	return nil
+	return core.RemoveRegisteredSession(st, name)
 }
 
 func (a *App) LaterSession(name string) error {
@@ -547,22 +509,19 @@ func (a *App) LaterSession(name string) error {
 		return err
 	}
 	if !st.HasAgent(name) {
-		for _, ag := range core.DiscoverNew(st) {
-			st.AddAgent(ag)
+		if discovered := core.DiscoverNew(st); len(discovered) > 0 {
+			changed, changeErr := core.OpenRegistry(core.StatePath()).Change(a.ctx, core.AddDiscoveredSessions(discovered))
+			if changeErr != nil {
+				return changeErr
+			}
+			st = changed.Snapshot.MutableState()
 		}
 	}
 	if !st.HasAgent(name) {
 		return fmt.Errorf("unbekannte Session: %s", name)
 	}
 	a.CloseTerm(name)
-	sn := core.SessionName(name)
-	if core.TmuxHasSession(sn) {
-		if err := core.TmuxKillSession(sn); err != nil {
-			return err
-		}
-	}
-	st.MarkLater(name)
-	return st.Save()
+	return core.ParkSession(st, name)
 }
 
 func (a *App) ReopenSession(name string) error {

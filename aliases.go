@@ -6,6 +6,7 @@ type (
 	State          = core.State
 	Project        = core.Project
 	Agent          = core.Agent
+	RegistryChange = core.RegistryChange
 	AgentStatus    = core.AgentStatus
 	GitInfo        = core.GitInfo
 	WorktreeInfo   = core.WorktreeInfo
@@ -46,6 +47,12 @@ var (
 	TmuxListSessions     = core.TmuxListSessions
 
 	LoadState = core.LoadState
+	StatePath = core.StatePath
+	OpenRegistry = core.OpenRegistry
+	RegisterProject = core.RegisterProject
+	RemoveProject = core.RemoveProject
+	RenameRegisteredSession = core.RenameRegisteredSession
+	AddDiscoveredSessions = core.AddDiscoveredSessions
 
 	CollectStatuses      = core.CollectStatuses
 	DetectClaudeStatus   = core.DetectClaudeStatus
@@ -78,7 +85,10 @@ var (
 	formatDurShort  = core.FormatDurShort
 
 	discoverNew          = core.DiscoverNew
+	createAgentSession   = core.CreateAgentSession
+	createTermSession    = core.CreateTermSession
 	createTermSessionFor = core.CreateTermSessionFor
+	removeSession        = core.RemoveRegisteredSession
 	startSkillAgent      = core.StartSkillAgent
 	sendPromptWhenReady  = core.SendPromptWhenReady
 	sendSlashCommand     = core.SendSlashCommand

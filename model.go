@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -56,7 +57,7 @@ type pollResult struct {
 	details    map[string]string
 	preview    string
 	discovered []Agent
-	diskMain   map[string]string
+	diskState  *State
 	zeitgeist  ZgInfo
 }
 
@@ -104,10 +105,9 @@ func newModel(s *State) model {
 
 func reconcile(s *State) {
 	if agents := discoverNew(s); len(agents) > 0 {
-		for _, a := range agents {
-			s.AddAgent(a)
+		if changed, err := OpenRegistry(StatePath()).Change(context.Background(), AddDiscoveredSessions(agents)); err == nil {
+			*s = *changed.Snapshot.MutableState()
 		}
-		s.Save()
 	}
 }
 
@@ -295,10 +295,7 @@ func pollCmd(state State, selected *Agent) tea.Cmd {
 		res.discovered = discoverNew(&state)
 		res.zeitgeist = zeitgeistInfo()
 		if disk, err := LoadState(); err == nil {
-			res.diskMain = map[string]string{}
-			for _, p := range disk.Projects {
-				res.diskMain[p.Name] = p.MainBranch
-			}
+			res.diskState = disk
 		}
 		return pollMsg(res)
 	}
@@ -357,41 +354,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.poll = pollResult(msg)
 		m.handleStatusChanges(oldStatuses)
-		if selName != "" {
-			m.selectAgent(selName)
-		}
-		if m.poll.diskMain != nil {
-			for i := range m.state.Projects {
-				if mb, ok := m.poll.diskMain[m.state.Projects[i].Name]; ok {
-					m.state.Projects[i].MainBranch = mb
-				}
-			}
+		if m.poll.diskState != nil {
+			m.state = m.poll.diskState
 		}
 		if len(m.poll.discovered) > 0 {
-			changed := false
-			for _, a := range m.poll.discovered {
-				if !m.state.HasAgent(a.Name) {
-					m.state.AddAgent(a)
-					changed = true
-				}
-			}
-			if changed {
-				m.state.Save()
+			if changed, err := OpenRegistry(StatePath()).Change(context.Background(), AddDiscoveredSessions(m.poll.discovered)); err == nil {
+				m.state = changed.Snapshot.MutableState()
 			}
 		}
-		kept := m.state.Agents[:0]
-		pruned := false
-		for _, a := range m.state.Agents {
-			if m.poll.statuses[a.Name] == StatusDead {
-				pruned = true
-				continue
-			}
-			kept = append(kept, a)
-		}
-		if pruned {
-			m.state.Agents = kept
-			m.state.Save()
-			m.ensureSelectable()
+		if selName != "" {
+			m.selectAgent(selName)
 		}
 		return m, nil
 	case attachDoneMsg:

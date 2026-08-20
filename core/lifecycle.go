@@ -84,6 +84,7 @@ type SessionProvision struct {
 	Project        Project
 	Name           string
 	Directory      string
+	Worktree       bool
 	CreateWorktree bool
 	Kind           SessionKind
 	Presentation   SessionPresentation
@@ -221,7 +222,7 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 	session := Session{
 		ID: SessionID(NewUUID()), Name: name, ProjectID: request.Project.ID,
 		Project: request.Project.Name, Dir: filepath.Clean(request.Directory),
-		Worktree: request.CreateWorktree, SessionKind: kind,
+		Worktree: request.Worktree || request.CreateWorktree, SessionKind: kind,
 		Presentation: presentation, Purpose: purpose,
 		RuntimeName: SessionName(name), CreatedAt: now,
 	}

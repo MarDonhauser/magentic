@@ -1,14 +1,9 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
-	"encoding/json"
+	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -108,9 +103,32 @@ func (a *App) SessionLinks(name string) ([]LinkInfo, error) {
 		seen[l.URL] = true
 		out = append(out, l)
 	}
-	if ag := st.AgentByName(name); ag != nil && ag.SessionID != "" {
-		for _, l := range assistantLinks(ag.SessionID) {
-			add(l)
+	if session := st.AgentByName(name); session != nil {
+		history, err := core.OpenWorkHistory(core.WorkHistoryConfig{})
+		if err != nil {
+			return nil, err
+		}
+		sessionKey := session.Name
+		if session.ID != "" {
+			sessionKey = string(session.ID)
+		}
+		page, err := history.Links(context.Background(), core.HistoryAssociationsFromState(st), core.HistoryLinkQuery{
+			Events: core.HistoryEventQuery{
+				SessionKeys: []string{sessionKey},
+				Kinds:       []core.HistoryEventKind{core.HistoryEventOutput},
+			},
+			Distinct: true,
+			Limit:    40,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, link := range page.Links {
+			when := ""
+			if link.OccurredAt.State == core.HistoryFactKnown {
+				when = link.OccurredAt.Value.In(time.Local).Format("02.01. 15:04")
+			}
+			add(LinkInfo{URL: link.URL, Time: when})
 		}
 	}
 	sn := core.SessionName(name)
@@ -123,53 +141,6 @@ func (a *App) SessionLinks(name string) ([]LinkInfo, error) {
 		out = out[:40]
 	}
 	return out, nil
-}
-
-func assistantLinks(sessionID string) []LinkInfo {
-	home, _ := os.UserHomeDir()
-	matches, _ := filepath.Glob(filepath.Join(home, ".claude", "projects", "*", sessionID+".jsonl"))
-	if len(matches) == 0 {
-		return nil
-	}
-	f, err := os.Open(matches[0])
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-	assistantMark := []byte(`"type":"assistant"`)
-	httpMark := []byte("http")
-	var chron []LinkInfo
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1024*1024), 32*1024*1024)
-	for sc.Scan() {
-		line := sc.Bytes()
-		if !bytes.Contains(line, assistantMark) || !bytes.Contains(line, httpMark) {
-			continue
-		}
-		var entry struct {
-			Type      string `json:"type"`
-			Timestamp string `json:"timestamp"`
-			Message   struct {
-				Content json.RawMessage `json:"content"`
-			} `json:"message"`
-		}
-		if json.Unmarshal(line, &entry) != nil || entry.Type != "assistant" {
-			continue
-		}
-		for _, u := range extractURLs(extractText(entry.Message.Content)) {
-			chron = append(chron, LinkInfo{URL: u, Time: formatTranscriptTime(entry.Timestamp)})
-		}
-	}
-	seen := map[string]bool{}
-	var out []LinkInfo
-	for i := len(chron) - 1; i >= 0; i-- {
-		if seen[chron[i].URL] {
-			continue
-		}
-		seen[chron[i].URL] = true
-		out = append(out, chron[i])
-	}
-	return out
 }
 
 type SearchHit struct {
@@ -186,27 +157,55 @@ func (a *App) SearchTranscripts(query string) ([]SearchHit, error) {
 	if len(query) < 3 {
 		return nil, fmt.Errorf("mindestens 3 Zeichen")
 	}
-	home, _ := os.UserHomeDir()
-	base := filepath.Join(home, ".claude", "projects")
-	dirs, err := os.ReadDir(base)
+	st, err := core.LoadState()
+	if err != nil {
+		return nil, err
+	}
+	history, err := core.OpenWorkHistory(core.WorkHistoryConfig{})
+	if err != nil {
+		return nil, err
+	}
+	page, err := history.Events(context.Background(), core.HistoryAssociationsFromState(st), core.HistoryEventQuery{
+		Providers: []core.HistoryProvider{core.HistoryProviderClaude},
+		Kinds:     []core.HistoryEventKind{core.HistoryEventPrompt, core.HistoryEventOutput},
+		Text:      query,
+		Limit:     80,
+	})
 	if err != nil {
 		return nil, err
 	}
 	qLower := strings.ToLower(query)
-	var hits []SearchHit
-	for _, d := range dirs {
-		if !d.IsDir() {
+	hits := make([]SearchHit, 0, len(page.Events))
+	for _, event := range page.Events {
+		if event.Text.State != core.HistoryFactKnown {
 			continue
 		}
-		project := decodeProjectDir(d.Name(), home)
-		files, _ := filepath.Glob(filepath.Join(base, d.Name(), "*.jsonl"))
-		for _, f := range files {
-			hits = append(hits, scanTranscript(f, project, qLower)...)
+		text := event.Text.Value
+		idx := strings.Index(strings.ToLower(text), qLower)
+		if idx < 0 {
+			continue
 		}
-	}
-	sort.Slice(hits, func(i, j int) bool { return hits[i].TimeRaw > hits[j].TimeRaw })
-	if len(hits) > 80 {
-		hits = hits[:80]
+		project := "ohne Projekt"
+		if event.Attribution.ProjectName.State == core.HistoryFactKnown && event.Attribution.ProjectName.Value != "" {
+			project = event.Attribution.ProjectName.Value
+		}
+		role := "assistant"
+		if event.Role == core.HistoryRoleDeveloper {
+			role = "user"
+		}
+		timeRaw, displayTime := "", ""
+		if event.OccurredAt.State == core.HistoryFactKnown {
+			timeRaw = event.OccurredAt.Value.UTC().Format(time.RFC3339Nano)
+			displayTime = event.OccurredAt.Value.In(time.Local).Format("02.01. 15:04")
+		}
+		hits = append(hits, SearchHit{
+			Project: project,
+			Role:    role,
+			Time:    displayTime,
+			TimeRaw: timeRaw,
+			Snippet: snippetAround(text, idx, len(qLower)),
+			Full:    capStr(text, 6000),
+		})
 	}
 	return hits, nil
 }
@@ -227,179 +226,21 @@ var tlWeekdays = map[time.Weekday]string{
 }
 
 func (a *App) Timeline() ([]TimelineEntry, error) {
-	home, _ := os.UserHomeDir()
 	st, _ := core.LoadState()
-	ctx := newTimelineContext(st)
-	cutoff := time.Now().AddDate(0, 0, -7)
-	var out []TimelineEntry
-	out = append(out, collectClaudeTimeline(filepath.Join(home, ".claude", "projects"), home, ctx, cutoff)...)
-	codexHome := os.Getenv("CODEX_HOME")
-	if codexHome == "" {
-		codexHome = filepath.Join(home, ".codex")
-	}
-	out = append(out, collectCodexTimeline(codexHome, ctx, cutoff)...)
-	out = append(out, collectGeminiTimeline(filepath.Join(home, ".gemini", "tmp"), ctx, cutoff)...)
-	out = append(out, collectCopilotTimeline(filepath.Join(home, ".copilot", "session-state"), ctx, cutoff)...)
-
-	sort.Slice(out, func(i, j int) bool { return out[i].TimeRaw > out[j].TimeRaw })
-	seen := map[string]bool{}
-	kept := out[:0]
-	for _, e := range out {
-		prefix := e.Text
-		if len(prefix) > 80 {
-			prefix = prefix[:80]
-		}
-		k := e.Source + "|" + e.TimeRaw + "|" + prefix
-		if seen[k] {
-			continue
-		}
-		seen[k] = true
-		kept = append(kept, e)
-	}
-	out = kept
-	if len(out) > 150 {
-		out = out[:150]
-	}
-	return out, nil
-}
-
-func scanUserPrompts(path, project, agent string, cutoff time.Time) []TimelineEntry {
-	f, err := os.Open(path)
+	history, err := core.OpenWorkHistory(core.WorkHistoryConfig{})
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	defer f.Close()
-	var entries []TimelineEntry
-	userMark := []byte(`"type":"user"`)
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1024*1024), 32*1024*1024)
-	for sc.Scan() {
-		line := sc.Bytes()
-		if !bytes.Contains(line, userMark) {
-			continue
-		}
-		var entry struct {
-			Type        string `json:"type"`
-			Timestamp   string `json:"timestamp"`
-			IsSidechain bool   `json:"isSidechain"`
-			IsMeta      bool   `json:"isMeta"`
-			Message     struct {
-				Content json.RawMessage `json:"content"`
-			} `json:"message"`
-		}
-		if json.Unmarshal(line, &entry) != nil {
-			continue
-		}
-		if entry.Type != "user" || entry.IsSidechain || entry.IsMeta {
-			continue
-		}
-		text := strings.TrimSpace(extractText(entry.Message.Content))
-		if text == "" || strings.HasPrefix(text, "<") ||
-			strings.HasPrefix(text, "[Request interrupted") || strings.HasPrefix(text, "Caveat:") {
-			continue
-		}
-		t, err := time.Parse(time.RFC3339, entry.Timestamp)
-		if err != nil || t.Before(cutoff) {
-			continue
-		}
-		lt := t.Local()
-		entries = append(entries, TimelineEntry{
-			Agent:   agent,
-			Project: project,
-			Source:  timelineSourceClaude,
-			Day:     tlWeekdays[lt.Weekday()] + " " + lt.Format("02.01."),
-			Time:    lt.Format("15:04"),
-			TimeRaw: t.UTC().Format(time.RFC3339Nano),
-			Text:    capStr(text, 500),
-		})
-	}
-	return entries
-}
-
-func decodeProjectDir(dir, home string) string {
-	homeEnc := strings.ReplaceAll(home, "/", "-")
-	if prefix := homeEnc + "-Projects-"; strings.HasPrefix(dir, prefix) {
-		return strings.TrimPrefix(dir, prefix)
-	}
-	if strings.HasPrefix(dir, homeEnc+"-") {
-		return strings.TrimPrefix(dir, homeEnc+"-")
-	}
-	return strings.TrimPrefix(dir, "-")
-}
-
-func scanTranscript(path, project, qLower string) []SearchHit {
-	f, err := os.Open(path)
+	page, err := history.Events(context.Background(), core.HistoryAssociationsFromState(st), core.HistoryEventQuery{
+		Since:    time.Now().AddDate(0, 0, -7),
+		Kinds:    []core.HistoryEventKind{core.HistoryEventPrompt},
+		Lineages: []core.HistoryLineage{core.HistoryLineagePrimary},
+		Limit:    150,
+	})
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	defer f.Close()
-	var hits []SearchHit
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1024*1024), 32*1024*1024)
-	for sc.Scan() && len(hits) < 8 {
-		line := sc.Bytes()
-		if !containsFold(line, qLower) {
-			continue
-		}
-		var entry struct {
-			Type      string `json:"type"`
-			Timestamp string `json:"timestamp"`
-			Message   struct {
-				Content json.RawMessage `json:"content"`
-			} `json:"message"`
-		}
-		if json.Unmarshal(line, &entry) != nil {
-			continue
-		}
-		if entry.Type != "user" && entry.Type != "assistant" {
-			continue
-		}
-		text := extractText(entry.Message.Content)
-		idx := strings.Index(strings.ToLower(text), qLower)
-		if idx < 0 {
-			continue
-		}
-		hits = append(hits, SearchHit{
-			Project: project,
-			Role:    entry.Type,
-			Time:    formatTranscriptTime(entry.Timestamp),
-			TimeRaw: entry.Timestamp,
-			Snippet: snippetAround(text, idx, len(qLower)),
-			Full:    capStr(text, 6000),
-		})
-	}
-	return hits
-}
-
-func containsFold(line []byte, qLower string) bool {
-	return strings.Contains(strings.ToLower(string(line)), qLower)
-}
-
-func extractText(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	if raw[0] == '"' {
-		var s string
-		if json.Unmarshal(raw, &s) == nil {
-			return s
-		}
-		return ""
-	}
-	var blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	if json.Unmarshal(raw, &blocks) != nil {
-		return ""
-	}
-	var parts []string
-	for _, b := range blocks {
-		if b.Type == "text" && b.Text != "" {
-			parts = append(parts, b.Text)
-		}
-	}
-	return strings.Join(parts, "\n")
+	return timelineEntries(page), nil
 }
 
 func snippetAround(text string, idx, qlen int) string {

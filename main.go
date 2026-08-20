@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	_ "net/http/pprof"
@@ -59,18 +60,8 @@ func cliAddProject() {
 		fmt.Fprintln(os.Stderr, "Verzeichnis nicht gefunden:", abs)
 		os.Exit(1)
 	}
-	s, err := LoadState()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
 	name := filepath.Base(abs)
-	if s.ProjectByName(name) != nil {
-		fmt.Println("Projekt existiert schon:", name)
-		return
-	}
-	s.Projects = append(s.Projects, Project{Name: name, Path: abs})
-	if err := s.Save(); err != nil {
+	if _, err := OpenRegistry(StatePath()).Change(context.Background(), RegisterProject(Project{Name: name, Path: abs})); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
