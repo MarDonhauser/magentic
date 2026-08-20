@@ -151,15 +151,17 @@ function icon(name) {
 function sessionToolMark(session) {
   const label = sessionToolLabel(session);
   const tool = sessionToolKey(session);
-  return `<span class="dev-tool-mark" data-agent-tool="${tool}" role="img" aria-label="${label}" title="${label}">${sessionToolIcon(session)}</span>`;
+  const toolIcon = sessionToolIcon(session);
+  if (!toolIcon) return '';
+  return `<span class="dev-tool-mark" data-agent-tool="${tool}" role="img" aria-label="${label}" title="${label}">${toolIcon}</span>`;
 }
 
 function agentPortrait(name, size, session) {
   const label = sessionToolLabel(session);
   const tool = sessionToolKey(session);
+  const toolIcon = sessionToolIcon(session);
   return `<span class="agent-portrait" style="--agent-avatar-size:${Number(size) || 18}px">` +
-    `${robotAvatar(name, size)}<span class="agent-provider-badge" data-agent-tool="${tool}" role="img" aria-label="${label}" title="${label}">` +
-    `${sessionToolIcon(session)}</span></span>`;
+    `${robotAvatar(name, size)}${toolIcon ? `<span class="agent-provider-badge" data-agent-tool="${tool}" role="img" aria-label="${label}" title="${label}">${toolIcon}</span>` : ''}</span>`;
 }
 
 function visHtml(v) {
@@ -550,7 +552,12 @@ function showPanel(id) {
     if (el) el.style.display = p === id ? 'block' : 'none';
   }
   for (const [panel, nav] of Object.entries(NAV_FOR)) {
-    $(nav)?.classList.toggle('on', panel === id);
+    const navEl = $(nav);
+    if (!navEl) continue;
+    const current = panel === id;
+    navEl.classList.toggle('on', current);
+    if (current) navEl.setAttribute('aria-current', 'page');
+    else navEl.removeAttribute('aria-current');
   }
 }
 
@@ -2163,7 +2170,10 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) beat
 setInterval(() => { if (!document.hidden) refreshBreaks(); }, 5000);
 
 function syncDockNav() {
-  $('nav-dock').classList.toggle('on', isDockOpen());
+  const nav = $('nav-dock');
+  const expanded = isDockOpen();
+  nav.classList.toggle('on', expanded);
+  nav.setAttribute('aria-pressed', String(expanded));
 }
 
 $('nav-break').onclick = () => { if (!isBreakOpen()) openBreak(); };

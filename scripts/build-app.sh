@@ -8,6 +8,21 @@ cd "$(dirname "$0")/.."
 IDENTITY="${MAGENTIC_SIGN_IDENTITY:-magentic-dev}"
 APP="app/build/bin/magentic.app"
 
+WAILS_BIN="${MAGENTIC_WAILS_BIN:-}"
+if [ -z "$WAILS_BIN" ]; then
+  if command -v wails >/dev/null 2>&1; then
+    WAILS_BIN="$(command -v wails)"
+  else
+    GO_BIN="$(go env GOPATH 2>/dev/null)/bin/wails"
+    if [ -x "$GO_BIN" ]; then
+      WAILS_BIN="$GO_BIN"
+    else
+      echo "✗ wails nicht gefunden. Installiere es oder setze MAGENTIC_WAILS_BIN."
+      exit 1
+    fi
+  fi
+fi
+
 # Nicht über find-identity prüfen: ein selbstsigniertes Zertifikat ohne
 # Trust-Setting taucht dort nicht auf, obwohl codesign es nutzen kann.
 can_sign() {
@@ -26,7 +41,7 @@ if ! can_sign; then
 fi
 
 echo "→ wails build…"
-(cd app && wails build "$@")
+(cd app && "$WAILS_BIN" build "$@")
 
 # Kein --options runtime: Hardened Runtime verlangt für den Mikrofonzugriff
 # zusätzlich das Entitlement com.apple.security.device.audio-input, sonst

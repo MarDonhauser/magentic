@@ -341,7 +341,7 @@ export function sessionToolKey(session) {
     session?.command,
     session?.agent,
   ].filter(Boolean).join(' ');
-  return developerIconName(identity) || 'claude';
+  return developerIconName(identity) || '';
 }
 
 export function sessionToolLabel(session) {

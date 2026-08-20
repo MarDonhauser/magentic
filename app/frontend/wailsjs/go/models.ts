@@ -338,6 +338,7 @@ export namespace core {
 	
 	export class OvAgent {
 	    name: string;
+	    tool?: string;
 	    status: string;
 	    label: string;
 	    detail: string;
@@ -361,6 +362,7 @@ export namespace core {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
+	        this.tool = source["tool"];
 	        this.status = source["status"];
 	        this.label = source["label"];
 	        this.detail = source["detail"];
@@ -383,6 +385,7 @@ export namespace core {
 	    project: string;
 	    age: string;
 	    term: boolean;
+	    tool?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new OvLater(source);
@@ -394,6 +397,7 @@ export namespace core {
 	        this.project = source["project"];
 	        this.age = source["age"];
 	        this.term = source["term"];
+	        this.tool = source["tool"];
 	    }
 	}
 	export class OvWorktree {
