@@ -216,11 +216,11 @@ body.dk-dragging .dk-body { pointer-events: none; }
 .dk-pane .xterm-viewport::-webkit-scrollbar { width: 10px; }
 .dk-pane .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
 .dk-pane .xterm-viewport::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.18);
+  background: var(--term-scroll-thumb);
   border-radius: 5px;
   border: 2px solid var(--term-bg);
 }
-.dk-pane .xterm-viewport::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.34); }
+.dk-pane .xterm-viewport::-webkit-scrollbar-thumb:hover { background: var(--term-scroll-thumb-hover); }
 
 .dk-empty {
   position: absolute;

@@ -131,7 +131,7 @@
 .br-scrim {
   position: absolute;
   inset: 0;
-  background: rgba(18, 21, 26, 0.92);
+  background: var(--break-scrim);
   backdrop-filter: blur(2px);
   animation: br-fade .4s ease both;
 }
@@ -207,7 +207,7 @@
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--break-ring);
 }
 
 .br-core {
