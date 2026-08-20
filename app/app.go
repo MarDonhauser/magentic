@@ -124,7 +124,8 @@ func (a *App) Overview(fresh bool) (core.Overview, error) {
 	} else {
 		statuses, contents, activity = a.statusesFor(st.Agents)
 	}
-	return core.BuildOverviewFrom(st, statuses, contents, activity), nil
+	tools := core.CollectAgentTools(st.Agents)
+	return core.BuildOverviewWithToolsFrom(st, statuses, contents, activity, tools), nil
 }
 
 func (a *App) Projects() ([]string, error) {

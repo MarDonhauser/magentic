@@ -695,6 +695,14 @@ $('nav-graph').onclick = () => showGraph();
 $('nav-board').onclick = () => showBoard();
 $('nav-stats').onclick = () => showStats();
 
+const sidebarToolsEl = $('sidebar-tools');
+sidebarToolsEl.addEventListener('click', e => {
+  if (e.target.closest('.nav-btn')) sidebarToolsEl.open = false;
+});
+document.addEventListener('mousedown', e => {
+  if (sidebarToolsEl.open && !sidebarToolsEl.contains(e.target)) sidebarToolsEl.open = false;
+});
+
 for (const id of ['graph-view', 'board-view']) {
   $(id).addEventListener('click', e => {
     const b = e.target.closest('button[data-act]');
@@ -943,22 +951,45 @@ function branchChip(a) {
     icon('gitbranch') + esc(a.branch) + '</span>';
 }
 
-function attentionBar() {
-  const waiting = [];
+function liveSessions() {
+  const sessions = [];
   for (const p of ov?.projects || []) {
     for (const wt of p.worktrees || []) {
       for (const a of wt.agents || []) {
-        if (!a.dock && a.status === 'blocked') waiting.push(a.name);
+        if (a.dock || ['dead', 'exited'].includes(a.status)) continue;
+        sessions.push({ ...a, project: p.name, branch: a.branch || wt.branch || '' });
       }
     }
   }
-  // Nur bei wartenden Sessions: dass etwas neu ist, zeigt schon der Punkt an
-  // der Session selbst — ein eigener Kasten dafür ist bloß Rauschen.
+  return sessions;
+}
+
+function attentionState() {
+  const sessions = liveSessions();
+  return {
+    waiting: sessions.filter(a => a.status === 'blocked'),
+    active: sessions.filter(a => ['running', 'agents', 'shell', 'term'].includes(a.status)),
+    unread: sessions.filter(a => a.unread && a.status !== 'blocked'),
+  };
+}
+
+function attentionBar() {
+  const { waiting } = attentionState();
   const bar = $('attention');
-  if (!waiting.length) { bar.className = ''; bar.innerHTML = ''; return; }
+  if (!waiting.length) {
+    bar.className = '';
+    bar.innerHTML = '';
+    bar.onclick = null;
+    bar.removeAttribute('title');
+    return;
+  }
+  const label = waiting.length === 1
+    ? `${esc(waiting[0].name)} wartet auf dich`
+    : `${waiting.length} Sessions warten auf dich`;
   bar.className = 'wait';
-  bar.innerHTML = `<span class="at-wait">${icon('lock')} ${waiting.length} ${waiting.length === 1 ? 'Session wartet' : 'Sessions warten'} auf dich</span>`;
-  bar.onclick = () => openSession(waiting[0]);
+  bar.innerHTML = `<span class="at-wait">${icon('lock')} ${label}</span>`;
+  bar.title = 'Nächste wartende Session öffnen';
+  bar.onclick = () => openSession(waiting[0].name);
 }
 
 function renderSidebar() {
@@ -1200,6 +1231,41 @@ function agentPill(a, project) {
     `<span class="age">${esc(a.age)}</span>${open}${done}</span>`;
 }
 
+function attentionOverview() {
+  const { waiting, active, unread } = attentionState();
+  if (!waiting.length) {
+    const activity = active.length === 1
+      ? '1 Session arbeitet weiter.'
+      : active.length > 1
+        ? `${active.length} Sessions arbeiten weiter.`
+        : 'Im Moment ist keine Entscheidung offen.';
+    const recent = unread.length
+      ? `<span><strong>${unread.length}</strong> neu</span>`
+      : '';
+    return `<section class="attention-summary is-clear">` +
+      `<div class="attention-summary-lead"><span class="attention-summary-icon">${icon('check')}</span>` +
+      `<div><h1>Niemand wartet auf dich</h1><p>${activity}</p></div></div>` +
+      `<div class="attention-totals"><span><strong>${active.length}</strong> aktiv</span>${recent}</div></section>`;
+  }
+
+  const queue = waiting.map(a => {
+    const context = [a.project, a.branch].filter(Boolean).join(' · ');
+    const status = agentVisual(a, a.project);
+    return `<button type="button" class="attention-session" data-act="open" data-agent="${esc(a.name)}">` +
+      `<span class="attention-session-avatar">${robotAvatar(a.name, 24)}</span>` +
+      `<span class="attention-session-copy"><strong>${esc(a.name)}</strong><span>${esc(context)}</span></span>` +
+      `<span class="attention-session-status">${visHtml(status)}</span>` +
+      `<span class="attention-session-open">Öffnen</span></button>`;
+  }).join('');
+  const title = waiting.length === 1
+    ? '1 Session braucht deine Entscheidung'
+    : `${waiting.length} Sessions brauchen deine Entscheidung`;
+  return `<section class="attention-summary has-waiting">` +
+    `<div class="attention-summary-lead"><span class="attention-summary-icon">${icon('lock')}</span>` +
+    `<div><h1>${title}</h1><p>Öffne eine Session, um direkt weiterzumachen.</p></div></div>` +
+    `<div class="attention-queue">${queue}</div></section>`;
+}
+
 function gitState(wt) {
   if (wt.branch === '(kein git)') return '';
   if (wt.clean) return `<span class="git-state clean">${icon('check')} sauber</span>`;
@@ -1255,9 +1321,9 @@ function worktreeRow(p, wt, idx, total) {
 
 function projectCard(p) {
   const rows = (p.worktrees || []).map((wt, i) => worktreeRow(p, wt, i, p.worktrees.length)).join('');
-  let mainCfg = '';
+  let projectTools = '';
   if (p.path) {
-    mainCfg = editingMain === p.name
+    const mainCfg = editingMain === p.name
       ? `<span class="maincfg"><input class="inline-input" id="main-input" value="${esc(p.mainBranch)}" placeholder="main">` +
         `<button class="btn tiny" data-act="mainsave" data-project="${esc(p.name)}">${icon('check')}</button>` +
         `<button class="btn tiny" data-act="maincancel">${icon('x')}</button></span>`
@@ -1266,16 +1332,16 @@ function projectCard(p) {
     const rmProj = confirmRemoveProject === p.name
       ? `<button class="btn danger confirm" data-act="rmproj2" data-project="${esc(p.name)}">Repo wirklich entfernen?</button>`
       : `<button class="btn danger" data-act="rmproj1" data-project="${esc(p.name)}" title="Repository aus magentic entfernen — löscht keine Dateien">${icon('x')} Repo</button>`;
-    mainCfg += `<span class="actions">` +
+    projectTools = `<div class="project-tools">${mainCfg}<span class="actions">` +
       `<button class="btn" data-act="showgraph" data-project="${esc(p.name)}" title="Git-Graph dieses Projekts — wo Worktrees abzweigen und zusammenlaufen">${developerIcon('git')} Graph</button>` +
       `<button class="btn" data-act="showboard" data-project="${esc(p.name)}" title="Board aus allen Spec-Ordnern — Plan, Tasks und was gerade läuft">${developerIcon('markdown')} Board</button>` +
       `<button class="btn" data-act="newsession" data-project="${esc(p.name)}" title="Neue Claude-Session im Projekt">${developerIcon('claude')} Session</button>` +
       `<button class="btn" data-act="newworktree" data-project="${esc(p.name)}" title="Neue Session in eigenem Worktree">${developerIcon('git')} Worktree</button>` +
       `<button class="btn" data-act="newterm" data-project="${esc(p.name)}" title="Reines Terminal im Projekt — Shell statt Claude">${developerIcon('bash')} Terminal</button>` +
-      `<button class="btn" data-act="deploy" data-project="${esc(p.name)}" title="Neue Claude-Session, die /deploy ausführt">${icon('rocket')} deploy</button>${rmProj}</span>`;
+      `<button class="btn" data-act="deploy" data-project="${esc(p.name)}" title="Neue Claude-Session, die /deploy ausführt">${icon('rocket')} deploy</button>${rmProj}</span></div>`;
   }
   return `<div class="card"><div class="card-head"><h2>${esc(p.name)}</h2>` +
-    `<span class="path">${esc(p.path || '')}</span>${mainCfg}</div><div class="rows">${rows}</div></div>`;
+    `<span class="path">${esc(p.path || '')}</span></div><div class="rows">${rows}</div>${projectTools}</div>`;
 }
 
 let deployStatus = null;
@@ -1447,7 +1513,7 @@ function renderOverview() {
     return;
   }
   const cards = (ov.projects || []).map(projectCard).join('');
-  overviewEl.innerHTML = `${deployCard()}${cards}` +
+  overviewEl.innerHTML = `${attentionOverview()}${cards}${deployCard()}` +
     `<div class="add-repo"><button class="btn" data-act="addproject" title="Git-Repository als Projekt hinzufügen">+ Repository hinzufügen…</button></div>` +
     `<div class="stamp">Stand ${esc(ov.generatedAt || '')}</div>`;
 }

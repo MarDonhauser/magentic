@@ -324,21 +324,32 @@ export function providerIcon(source) {
   return developerIcon(source);
 }
 
-export function sessionToolIcon(session) {
-  if (session?.term) return developerIcon('bash');
+const SESSION_TOOL_LABELS = Object.freeze({
+  claude: 'Claude Code',
+  openai: 'Codex',
+  gemini: 'Gemini CLI',
+  copilot: 'GitHub Copilot',
+  bash: 'Bash-Terminal',
+});
+
+export function sessionToolKey(session) {
+  if (session?.term) return 'bash';
   const identity = [
     session?.source,
     session?.provider,
     session?.tool,
     session?.command,
     session?.agent,
-    session?.name,
   ].filter(Boolean).join(' ');
-  return developerIcon(developerIconName(identity) || 'claude');
+  return developerIconName(identity) || 'claude';
 }
 
-export function developerIconStack(names) {
-  return `<span class="dev-icon-stack" aria-hidden="true">${names.map(developerIcon).join('')}</span>`;
+export function sessionToolLabel(session) {
+  return SESSION_TOOL_LABELS[sessionToolKey(session)] || 'Coding-Agent';
+}
+
+export function sessionToolIcon(session) {
+  return developerIcon(sessionToolKey(session));
 }
 
 export function mountDeveloperIcons(root = document) {
@@ -347,12 +358,9 @@ export function mountDeveloperIcons(root = document) {
     if (current) current.outerHTML = markup;
   };
   const slot = name => `<span class="dev-icon-slot">${developerIcon(name)}</span>`;
-  const providers = ['claude', 'openai', 'gemini', 'copilot'];
 
-  replace('#nav-timeline > .ico', `<span class="nav-dev-stack">${developerIconStack(providers)}</span>`);
   replace('#nav-graph > .ico', slot('git'));
   replace('#nav-board > .ico', slot('markdown'));
   replace('#nav-dock > .ico', slot('bash'));
   replace('#nav-stats > .ico', slot('claude'));
-  replace('#tl-head > span > .ico', `<span class="tl-dev-stack">${developerIconStack(providers)}</span>`);
 }

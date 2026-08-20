@@ -142,6 +142,49 @@ var shellCommands = map[string]bool{
 	"-zsh": true, "-bash": true, "login": true,
 }
 
+const (
+	AgentToolClaude  = "claude"
+	AgentToolCodex   = "codex"
+	AgentToolGemini  = "gemini"
+	AgentToolCopilot = "copilot"
+	AgentToolBash    = "bash"
+)
+
+// DetectAgentTool translates the command tmux reports for a pane into the
+// stable frontend identity used by developer-icons. Unknown commands stay
+// neutral instead of being mislabeled as Claude.
+func DetectAgentTool(paneCommand string, term bool) string {
+	if term {
+		return AgentToolBash
+	}
+	command := strings.ToLower(strings.TrimSpace(paneCommand))
+	command = strings.TrimPrefix(command, "-")
+	switch {
+	case command == "claude" || strings.HasPrefix(command, "claude-"):
+		return AgentToolClaude
+	case command == "codex" || strings.HasPrefix(command, "codex-"):
+		return AgentToolCodex
+	case command == "gemini" || strings.HasPrefix(command, "gemini-"):
+		return AgentToolGemini
+	case command == "copilot", command == "github-copilot":
+		return AgentToolCopilot
+	default:
+		return ""
+	}
+}
+
+func CollectAgentTools(agents []Agent) map[string]string {
+	infos := TmuxPaneInfos()
+	tools := make(map[string]string, len(agents))
+	for _, agent := range agents {
+		tool := DetectAgentTool(infos[SessionName(agent.Name)].Command, agent.IsTerm())
+		if tool != "" {
+			tools[agent.Name] = tool
+		}
+	}
+	return tools
+}
+
 var permissionDetails = []struct {
 	label    string
 	patterns []string

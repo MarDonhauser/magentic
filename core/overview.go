@@ -10,6 +10,7 @@ import (
 
 type OvAgent struct {
 	Name       string `json:"name"`
+	Tool       string `json:"tool,omitempty"`
 	Status     string `json:"status"`
 	Label      string `json:"label"`
 	Detail     string `json:"detail"`
@@ -64,6 +65,7 @@ type OvLater struct {
 	Project string `json:"project"`
 	Age     string `json:"age"`
 	Term    bool   `json:"term"`
+	Tool    string `json:"tool,omitempty"`
 }
 
 type Overview struct {
@@ -105,10 +107,14 @@ func BuildOverview(s *State) Overview {
 		s.AddAgent(a)
 	}
 	statuses, contents, activity := CollectStatuses(s.Agents)
-	return BuildOverviewFrom(s, statuses, contents, activity)
+	return BuildOverviewWithToolsFrom(s, statuses, contents, activity, CollectAgentTools(s.Agents))
 }
 
 func BuildOverviewFrom(s *State, statuses map[string]AgentStatus, contents map[string]string, activity map[string]time.Time) Overview {
+	return BuildOverviewWithToolsFrom(s, statuses, contents, activity, nil)
+}
+
+func BuildOverviewWithToolsFrom(s *State, statuses map[string]AgentStatus, contents map[string]string, activity map[string]time.Time, tools map[string]string) Overview {
 	gitCache := map[string]GitInfo{}
 	kept := s.Agents[:0]
 	removed := false
@@ -143,7 +149,7 @@ func BuildOverviewFrom(s *State, statuses map[string]AgentStatus, contents map[s
 			continue
 		}
 		later[a.Name] = true
-		ov.Later = append(ov.Later, OvLater{Name: a.Name, Project: a.Project, Age: FormatAge(a.LaterAt), Term: a.IsTerm()})
+		ov.Later = append(ov.Later, OvLater{Name: a.Name, Project: a.Project, Age: FormatAge(a.LaterAt), Term: a.IsTerm(), Tool: overviewAgentTool(a, tools)})
 	}
 	// Dock-Terminals bleiben aus den Zählern: sie sind Werkzeug, keine Sitzung,
 	// und tauchen deshalb auch in der Sitzungsliste nicht auf.
@@ -177,7 +183,7 @@ func BuildOverviewFrom(s *State, statuses map[string]AgentStatus, contents map[s
 			proj.MainConfigured = true
 		}
 		for i, wt := range wts {
-			owt := buildWorktree(s, statuses, activity, contents, assigned, wt, i == 0, proj.MainBranch, gitCache)
+			owt := buildWorktree(s, statuses, activity, contents, tools, assigned, wt, i == 0, proj.MainBranch, gitCache)
 			proj.Worktrees = append(proj.Worktrees, owt)
 		}
 		for _, a := range s.AgentsFor(p.Name) {
@@ -185,7 +191,7 @@ func BuildOverviewFrom(s *State, statuses map[string]AgentStatus, contents map[s
 				continue
 			}
 			assigned[a.Name] = true
-			proj.Worktrees[0].Agents = append(proj.Worktrees[0].Agents, toOvAgent(a, statuses, activity, contents, proj.MainBranch, gitCache))
+			proj.Worktrees[0].Agents = append(proj.Worktrees[0].Agents, toOvAgent(a, statuses, activity, contents, tools, proj.MainBranch, gitCache))
 		}
 		finishWarnings(&proj, statuses, s)
 		ov.Projects = append(ov.Projects, proj)
@@ -201,7 +207,7 @@ func BuildOverviewFrom(s *State, statuses map[string]AgentStatus, contents map[s
 			continue
 		}
 		hasOrphans = true
-		orphanWt.Agents = append(orphanWt.Agents, toOvAgent(a, statuses, activity, contents, "", gitCache))
+		orphanWt.Agents = append(orphanWt.Agents, toOvAgent(a, statuses, activity, contents, tools, "", gitCache))
 	}
 	if hasOrphans {
 		orphanWt.Branch = "—"
@@ -237,7 +243,7 @@ func cachedGit(cache map[string]GitInfo, dir string) GitInfo {
 	return gi
 }
 
-func buildWorktree(s *State, statuses map[string]AgentStatus, activity map[string]time.Time, contents map[string]string, assigned map[string]bool, wt WorktreeInfo, isMain bool, mainBranch string, gitCache map[string]GitInfo) OvWorktree {
+func buildWorktree(s *State, statuses map[string]AgentStatus, activity map[string]time.Time, contents map[string]string, tools map[string]string, assigned map[string]bool, wt WorktreeInfo, isMain bool, mainBranch string, gitCache map[string]GitInfo) OvWorktree {
 	git := cachedGit(gitCache, wt.Path)
 	owt := OvWorktree{
 		Path:      wt.Path,
@@ -264,13 +270,13 @@ func buildWorktree(s *State, statuses map[string]AgentStatus, activity map[strin
 	for _, a := range s.Agents {
 		if a.Dir == wt.Path && !assigned[a.Name] {
 			assigned[a.Name] = true
-			owt.Agents = append(owt.Agents, toOvAgent(a, statuses, activity, contents, mainBranch, gitCache))
+			owt.Agents = append(owt.Agents, toOvAgent(a, statuses, activity, contents, tools, mainBranch, gitCache))
 		}
 	}
 	return owt
 }
 
-func toOvAgent(a Agent, statuses map[string]AgentStatus, activity map[string]time.Time, contents map[string]string, mainBranch string, gitCache map[string]GitInfo) OvAgent {
+func toOvAgent(a Agent, statuses map[string]AgentStatus, activity map[string]time.Time, contents map[string]string, tools map[string]string, mainBranch string, gitCache map[string]GitInfo) OvAgent {
 	st := statuses[a.Name]
 	lastActive := a.CreatedAt
 	if act, ok := activity[a.Name]; ok {
@@ -294,6 +300,7 @@ func toOvAgent(a Agent, statuses map[string]AgentStatus, activity map[string]tim
 	}
 	return OvAgent{
 		Name:       a.Name,
+		Tool:       overviewAgentTool(a, tools),
 		Status:     statusKey(st),
 		Label:      st.Label(),
 		Detail:     detail,
@@ -310,6 +317,13 @@ func toOvAgent(a Agent, statuses map[string]AgentStatus, activity map[string]tim
 		Unread:     unread(st, a.SeenAt, lastActive),
 		Dock:       a.IsDock(),
 	}
+}
+
+func overviewAgentTool(a Agent, tools map[string]string) string {
+	if a.IsTerm() {
+		return AgentToolBash
+	}
+	return tools[a.Name]
 }
 
 func unread(st AgentStatus, seenAt, lastActive time.Time) bool {
