@@ -1886,6 +1886,19 @@ function attachHover(div, name) {
 
 let searchHits = [];
 
+function historyCoverageNotice(sources, summary) {
+  const degraded = (Array.isArray(sources) ? sources : [])
+    .filter(source => ['partial', 'unavailable'].includes(source?.state));
+  if (!degraded.length) return { degraded, html: '' };
+  const problems = degraded.flatMap(source => Array.isArray(source?.problems) ? source.problems : [])
+    .filter(Boolean);
+  const detail = problems.length ? ` title="${esc(problems.join(' · '))}"` : '';
+  return {
+    degraded,
+    html: `<div class="tl-coverage" role="status"${detail}>${icon('warn')}<span><strong>${esc(summary)}</strong> ${esc(degraded.map(source => source.source).join(', '))} konnte${degraded.length === 1 ? '' : 'n'} nicht vollständig gelesen werden.</span></div>`,
+  };
+}
+
 function highlightQuery(text, q) {
   const et = esc(text);
   const eq = esc(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1902,9 +1915,14 @@ async function runSearch() {
   if (q.length < 3) { res.innerHTML = '<div class="none">mindestens 3 Zeichen</div>'; return; }
   res.innerHTML = '<div class="none">suche in allen Transkripten…</div>';
   try {
-    searchHits = (await SearchTranscripts(q)) || [];
-    if (!searchHits.length) { res.innerHTML = '<div class="none">keine Treffer</div>'; return; }
-    res.innerHTML = searchHits.map((h, i) =>
+    const result = (await SearchTranscripts(q)) || {};
+    searchHits = Array.isArray(result.hits) ? result.hits : [];
+    const coverage = historyCoverageNotice(result.sources, 'Suche umfasst nur lesbare Quellen.');
+    if (!searchHits.length) {
+      res.innerHTML = coverage.html + `<div class="none">${coverage.degraded.length ? 'keine Treffer in den lesbaren Quellen' : 'keine Treffer'}</div>`;
+      return;
+    }
+    res.innerHTML = coverage.html + searchHits.map((h, i) =>
       `<div class="hit" data-hit="${i}">` +
       `<div class="hit-meta"><span class="hit-proj${h.projectKnown ? '' : ' unknown'}" title="${esc(h.attributionProblem || '')}">${esc(h.project)}</span>` +
       `<span class="hit-role ${h.role}">${h.role === 'user' ? 'Du' : `${providerIcon(h.provider)}${esc(h.provider || 'Coding-Agent')}`}</span>` +
@@ -1969,12 +1987,9 @@ async function refreshTimeline() {
 
 function renderTimeline() {
   const body = $('tl-body');
-  const degraded = tlSources.filter(source => ['partial', 'unavailable'].includes(source?.state));
-  const coverage = degraded.length
-    ? `<div class="tl-coverage" role="status">${icon('warn')}<span><strong>Verlauf teilweise verfügbar.</strong> ${esc(degraded.map(source => source.source).join(', '))} konnte${degraded.length === 1 ? '' : 'n'} nicht vollständig gelesen werden.</span></div>`
-    : '';
+  const coverage = historyCoverageNotice(tlSources, 'Verlauf teilweise verfügbar.');
   if (!tlEntries.length) {
-    body.innerHTML = coverage + `<div class="none">${degraded.length ? 'keine Prompts in den lesbaren Quellen' : 'keine Prompts aus unterstützten Sessions in den letzten 7 Tagen'}</div>`;
+    body.innerHTML = coverage.html + `<div class="none">${coverage.degraded.length ? 'keine Prompts in den lesbaren Quellen' : 'keine Prompts aus unterstützten Sessions in den letzten 7 Tagen'}</div>`;
     return;
   }
   let html = '', day = '';
@@ -1991,7 +2006,7 @@ function renderTimeline() {
       `<div class="tl-text">${esc(en.text)}</div></div></button>`;
   });
   const st = body.scrollTop;
-  body.innerHTML = coverage + html;
+  body.innerHTML = coverage.html + html;
   body.scrollTop = st;
 }
 

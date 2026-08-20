@@ -583,6 +583,12 @@ func attentionObservationState(snapshot ObservationSnapshot) AttentionObservatio
 	if snapshot.Availability == ObservationUnavailable {
 		return AttentionObservationUnavailable
 	}
+	// All-dead is an exact claim. A partial snapshot may contain only known
+	// absent Sessions while still lacking enough presence facts to make that
+	// claim for the whole Observation.
+	if snapshot.Availability == ObservationPartial {
+		return AttentionObservationPartial
+	}
 	if len(snapshot.Sessions) > 0 {
 		allAbsent := true
 		for _, observed := range snapshot.Sessions {
@@ -594,9 +600,6 @@ func attentionObservationState(snapshot ObservationSnapshot) AttentionObservatio
 		if allAbsent {
 			return AttentionObservationAllDead
 		}
-	}
-	if snapshot.Availability == ObservationPartial {
-		return AttentionObservationPartial
 	}
 	return AttentionObservationAvailable
 }

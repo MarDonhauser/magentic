@@ -60,22 +60,23 @@ func TestHandoffUsesCustomSourceAndTargetRuntimeNames(t *testing.T) {
 	source, target := customRuntimeAgents()
 	handoffTestState(t, source, target)
 
-	if err := (&App{}).HandoffSession(source.Name, target.Name); err != nil {
+	if err := (&App{}).HandoffSession(string(source.ID), string(target.ID)); err != nil {
 		t.Fatal(err)
 	}
 	assertLiteralTmuxTarget(t, logPath, core.TargetPane(customTargetRuntime))
 	assertNoTmuxTarget(t, logPath, core.TargetPane(core.SessionName(target.Name)))
 
-	wantSourceReference := `Magentic-/tmux-Session-ID (Suchreferenz): "` + customSourceRuntime + `"`
+	wantSourceID := `Magentic-SessionID: "` + string(source.ID) + `"`
+	wantSourceReference := `RuntimeName: "` + customSourceRuntime + `"`
 	wantSourcePane := `tmux-Pane-Ziel: "` + core.TargetPane(customSourceRuntime) + `"`
 	for _, call := range parseFakeTmuxCalls(t, logPath) {
 		if len(call) != 5 || call[0] != "send-keys" || call[3] != "-l" {
 			continue
 		}
-		if !strings.Contains(call[4], wantSourceReference) || !strings.Contains(call[4], wantSourcePane) {
+		if !strings.Contains(call[4], wantSourceID) || !strings.Contains(call[4], wantSourceReference) || !strings.Contains(call[4], wantSourcePane) {
 			t.Fatalf("handoff prompt did not preserve source RuntimeName:\n%s", call[4])
 		}
-		if strings.Contains(call[4], `Suchreferenz): "`+core.SessionName(source.Name)+`"`) {
+		if strings.Contains(call[4], `RuntimeName: "`+core.SessionName(source.Name)+`"`) {
 			t.Fatalf("handoff prompt recomputed runtime identity from display name:\n%s", call[4])
 		}
 		return

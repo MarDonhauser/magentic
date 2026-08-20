@@ -11,15 +11,29 @@ import (
 )
 
 type fakeLifecycleRuntime struct {
-	present      map[SessionID]bool
-	startErr     error
-	stopErr      error
-	deliverCalls int
-	onStart      func(Session)
-	onStop       func(Session)
+	present              map[SessionID]bool
+	runtimeNames         map[string]bool
+	startErr             error
+	stopErr              error
+	existsErr            error
+	renameErr            error
+	renameAppliesOnError bool
+	renameCalls          int
+	lastRenameFrom       string
+	lastRenameTo         string
+	deliverCalls         int
+	onStart              func(Session)
+	onStop               func(Session)
+	onRename             func(Session, string)
 }
 
 func (f *fakeLifecycleRuntime) Exists(_ context.Context, session Session) (bool, error) {
+	if f.existsErr != nil {
+		return false, f.existsErr
+	}
+	if f.runtimeNames != nil {
+		return f.runtimeNames[session.TmuxName()], nil
+	}
 	return f.present[session.ID], nil
 }
 
@@ -31,6 +45,9 @@ func (f *fakeLifecycleRuntime) Start(_ context.Context, session Session, _ strin
 		return f.startErr
 	}
 	f.present[session.ID] = true
+	if f.runtimeNames != nil {
+		f.runtimeNames[session.TmuxName()] = true
+	}
 	return nil
 }
 
@@ -42,7 +59,24 @@ func (f *fakeLifecycleRuntime) Stop(_ context.Context, session Session) error {
 		return f.stopErr
 	}
 	delete(f.present, session.ID)
+	if f.runtimeNames != nil {
+		delete(f.runtimeNames, session.TmuxName())
+	}
 	return nil
+}
+
+func (f *fakeLifecycleRuntime) Rename(_ context.Context, session Session, targetRuntime string) error {
+	f.renameCalls++
+	f.lastRenameFrom = session.TmuxName()
+	f.lastRenameTo = targetRuntime
+	if f.renameErr == nil || f.renameAppliesOnError {
+		delete(f.runtimeNames, session.TmuxName())
+		f.runtimeNames[targetRuntime] = true
+	}
+	if f.onRename != nil {
+		f.onRename(session, targetRuntime)
+	}
+	return f.renameErr
 }
 
 func (f *fakeLifecycleRuntime) DeliverInitial(_ context.Context, _ Session, _ string) (bool, error) {
@@ -72,7 +106,7 @@ func lifecycleHarness(t *testing.T) (*SessionLifecycle, *fakeLifecycleRuntime, *
 	t.Helper()
 	dir := t.TempDir()
 	registry := OpenRegistry(filepath.Join(dir, "state.json"))
-	runtime := &fakeLifecycleRuntime{present: map[SessionID]bool{}}
+	runtime := &fakeLifecycleRuntime{present: map[SessionID]bool{}, runtimeNames: map[string]bool{}}
 	ledgerPath := filepath.Join(dir, "lifecycle.json")
 	lifecycle := newSessionLifecycle(registry, runtime, fakeLifecycleRepositories{worktreePath: filepath.Join(dir, "project-agents", "hera")}, ledgerPath)
 	return lifecycle, runtime, registry, ledgerPath

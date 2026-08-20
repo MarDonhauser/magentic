@@ -170,6 +170,22 @@ func TestAttentionUsesKnownFactsFromPartialObservation(t *testing.T) {
 	}
 }
 
+func TestAttentionNeverCallsPartialObservationAllDead(t *testing.T) {
+	planner := NewAttentionPlanner(AttentionPlannerConfig{})
+	input := attentionTestInput(attentionTestStart, ObservationSnapshot{
+		Availability: ObservationPartial,
+		Sessions: []SessionObservation{{
+			SessionID: "known-absent", Availability: ObservationAvailable,
+			Presence: SessionPresenceAbsent, Status: StatusDead,
+			Attention: AttentionNone, Occupancy: OccupancyVacant,
+		}},
+	})
+	plan := planner.Plan(input)
+	if plan.Observation != AttentionObservationPartial {
+		t.Fatalf("partial Observation state = %q, want %q", plan.Observation, AttentionObservationPartial)
+	}
+}
+
 func TestAttentionPreservesBreakCadenceAndEscalation(t *testing.T) {
 	clock := attentionTestStart
 	planner := NewAttentionPlanner(AttentionPlannerConfig{Now: func() time.Time { return clock }})

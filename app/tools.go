@@ -155,18 +155,25 @@ type SearchHit struct {
 	Full               string `json:"full"`
 }
 
-func (a *App) SearchTranscripts(query string) ([]SearchHit, error) {
+// SearchResult keeps known hits and source coverage from one WorkHistory page
+// together, so an empty known subtotal is never mistaken for an exact zero.
+type SearchResult struct {
+	Hits    []SearchHit      `json:"hits"`
+	Sources []TimelineSource `json:"sources"`
+}
+
+func (a *App) SearchTranscripts(query string) (SearchResult, error) {
 	query = strings.TrimSpace(query)
 	if len(query) < 3 {
-		return nil, fmt.Errorf("mindestens 3 Zeichen")
+		return SearchResult{}, fmt.Errorf("mindestens 3 Zeichen")
 	}
 	st, err := core.LoadState()
 	if err != nil {
-		return nil, err
+		return SearchResult{}, err
 	}
 	history, err := core.OpenWorkHistory(core.WorkHistoryConfig{})
 	if err != nil {
-		return nil, err
+		return SearchResult{}, err
 	}
 	page, err := history.Events(context.Background(), core.HistoryAssociationsFromState(st), core.HistoryEventQuery{
 		Kinds: []core.HistoryEventKind{core.HistoryEventPrompt, core.HistoryEventOutput},
@@ -174,7 +181,7 @@ func (a *App) SearchTranscripts(query string) ([]SearchHit, error) {
 		Limit: 80,
 	})
 	if err != nil {
-		return nil, err
+		return SearchResult{}, err
 	}
 	qLower := strings.ToLower(query)
 	hits := make([]SearchHit, 0, len(page.Events))
@@ -214,7 +221,7 @@ func (a *App) SearchTranscripts(query string) ([]SearchHit, error) {
 			Snippet: snippetAround(text, idx, len(qLower)), Full: capStr(text, 6000),
 		})
 	}
-	return hits, nil
+	return SearchResult{Hits: hits, Sources: historyCoverageSources(page.Meta.Coverage)}, nil
 }
 
 type TimelineEntry struct {
@@ -240,6 +247,24 @@ type TimelineResult struct {
 	Sources []TimelineSource `json:"sources"`
 }
 
+func historyCoverageSources(coverage []core.HistoryProviderCoverage) []TimelineSource {
+	sources := make([]TimelineSource, 0, len(coverage))
+	for _, coverage := range coverage {
+		source := TimelineSource{Source: string(coverage.Provider), State: string(coverage.State)}
+		for _, problem := range coverage.Problems {
+			message := strings.TrimSpace(problem.Message)
+			if message == "" {
+				message = strings.TrimSpace(problem.Kind)
+			}
+			if message != "" {
+				source.Problems = append(source.Problems, message)
+			}
+		}
+		sources = append(sources, source)
+	}
+	return sources
+}
+
 var tlWeekdays = map[time.Weekday]string{
 	time.Monday: "Mo", time.Tuesday: "Di", time.Wednesday: "Mi",
 	time.Thursday: "Do", time.Friday: "Fr", time.Saturday: "Sa", time.Sunday: "So",
@@ -263,21 +288,7 @@ func (a *App) Timeline() (TimelineResult, error) {
 	if err != nil {
 		return TimelineResult{}, err
 	}
-	result := TimelineResult{Entries: timelineEntries(page)}
-	for _, coverage := range page.Meta.Coverage {
-		source := TimelineSource{Source: string(coverage.Provider), State: string(coverage.State)}
-		for _, problem := range coverage.Problems {
-			message := strings.TrimSpace(problem.Message)
-			if message == "" {
-				message = strings.TrimSpace(problem.Kind)
-			}
-			if message != "" {
-				source.Problems = append(source.Problems, message)
-			}
-		}
-		result.Sources = append(result.Sources, source)
-	}
-	return result, nil
+	return TimelineResult{Entries: timelineEntries(page), Sources: historyCoverageSources(page.Meta.Coverage)}, nil
 }
 
 func snippetAround(text string, idx, qlen int) string {

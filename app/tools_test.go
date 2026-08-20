@@ -102,12 +102,12 @@ func TestTimelineUsesNormalizedWorkHistoryForAllProviders(t *testing.T) {
 	if strings.Contains(strings.Join([]string{got.Entries[0].Text, got.Entries[1].Text, got.Entries[2].Text, got.Entries[3].Text}, "|"), "delegated") {
 		t.Fatalf("Timeline included delegated coding-agent work: %#v", got)
 	}
-	hits, err := (&App{}).SearchTranscripts("prompt")
+	search, err := (&App{}).SearchTranscripts("prompt")
 	if err != nil {
 		t.Fatal(err)
 	}
 	providers := map[string]bool{}
-	for _, hit := range hits {
+	for _, hit := range search.Hits {
 		providers[hit.Provider] = true
 		if !hit.ProjectKnown || hit.Project != "Stable project" {
 			t.Fatalf("search attribution = %#v", hit)
@@ -115,8 +115,11 @@ func TestTimelineUsesNormalizedWorkHistoryForAllProviders(t *testing.T) {
 	}
 	for _, provider := range []string{"Claude Code", "Codex", "Gemini CLI", "GitHub Copilot"} {
 		if !providers[provider] {
-			t.Fatalf("SearchTranscripts omitted %s: %#v", provider, hits)
+			t.Fatalf("SearchTranscripts omitted %s: %#v", provider, search.Hits)
 		}
+	}
+	if len(search.Sources) != 4 {
+		t.Fatalf("SearchTranscripts coverage = %#v, want all four providers", search.Sources)
 	}
 }
 
@@ -136,12 +139,12 @@ func TestStoredLinksAndSearchUseWorkHistory(t *testing.T) {
 		`{"type":"assistant","timestamp":"` + now.Format(time.RFC3339Nano) + `","cwd":"` + projectPath + `","sessionId":"claude-run","message":{"content":"See https://example.test/result"}}`,
 	}, "\n")+"\n")
 
-	hits, err := (&App{}).SearchTranscripts("normalized phrase")
+	search, err := (&App{}).SearchTranscripts("normalized phrase")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(hits) != 1 || hits[0].Project != "Search project" || hits[0].Role != "user" || !strings.Contains(hits[0].Full, "normalized phrase") {
-		t.Fatalf("normalized search hits = %#v", hits)
+	if len(search.Hits) != 1 || search.Hits[0].Project != "Search project" || search.Hits[0].Role != "user" || !strings.Contains(search.Hits[0].Full, "normalized phrase") {
+		t.Fatalf("normalized search hits = %#v", search.Hits)
 	}
 	links, err := (&App{}).SessionLinks("history-cutover-test-session")
 	if err != nil {
@@ -149,6 +152,37 @@ func TestStoredLinksAndSearchUseWorkHistory(t *testing.T) {
 	}
 	if len(links) != 1 || links[0].URL != "https://example.test/result" || links[0].Time == "" {
 		t.Fatalf("normalized stored links = %#v", links)
+	}
+}
+
+func TestSearchTranscriptsPreservesDegradedCoverageWithNoKnownHits(t *testing.T) {
+	home, _, _, statePath := configureHistoryAppTest(t)
+	writeAppState(t, statePath, core.State{})
+
+	// A discovered but malformed Claude transcript is partial. A provider root
+	// that exists as a file instead of a directory is unavailable.
+	writeAppFixture(t, filepath.Join(home, ".claude", "projects", "broken", "session.jsonl"), "{malformed}\n")
+	writeAppFixture(t, filepath.Join(home, ".gemini", "tmp"), "not a directory")
+
+	result, err := (&App{}).SearchTranscripts("needle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Hits) != 0 {
+		t.Fatalf("known hits = %#v, want none", result.Hits)
+	}
+
+	bySource := map[string]TimelineSource{}
+	for _, source := range result.Sources {
+		bySource[source.Source] = source
+	}
+	claude := bySource[string(core.HistoryProviderClaude)]
+	if claude.State != string(core.HistorySourcePartial) || len(claude.Problems) == 0 {
+		t.Fatalf("partial Claude coverage was lost: %#v", claude)
+	}
+	gemini := bySource[string(core.HistoryProviderGemini)]
+	if gemini.State != string(core.HistorySourceUnavailable) || len(gemini.Problems) == 0 {
+		t.Fatalf("unavailable Gemini coverage was lost: %#v", gemini)
 	}
 }
 

@@ -24,6 +24,13 @@ const (
 	SessionDesiredRemoved SessionDesiredState = "removed"
 )
 
+// LifecycleTransitionKind separates state convergence from a durable runtime
+// rename. The empty value is the state-transition format written by schema-v1
+// ledgers before rename intents existed.
+type LifecycleTransitionKind string
+
+const LifecycleTransitionRename LifecycleTransitionKind = "rename"
+
 type LifecyclePhase string
 
 const (
@@ -49,10 +56,12 @@ const (
 )
 
 type LifecycleAppliedState struct {
-	WorktreeReady   bool `json:"worktreeReady"`
-	BaselineKnown   bool `json:"baselineKnown"`
-	RuntimePresent  bool `json:"runtimePresent"`
-	RegistryUpdated bool `json:"registryUpdated"`
+	WorktreeReady       bool `json:"worktreeReady"`
+	BaselineKnown       bool `json:"baselineKnown"`
+	RuntimePresent      bool `json:"runtimePresent"`
+	RuntimeRenameSettled bool `json:"runtimeRenameSettled,omitempty"`
+	RuntimeRenamed      bool `json:"runtimeRenamed,omitempty"`
+	RegistryUpdated     bool `json:"registryUpdated"`
 }
 
 // LifecycleRecord is the compact desired/applied ledger entry for one
@@ -60,9 +69,12 @@ type LifecycleAppliedState struct {
 type LifecycleRecord struct {
 	TransitionID   string                `json:"transitionId"`
 	SessionID      SessionID             `json:"sessionId"`
+	TransitionKind LifecycleTransitionKind `json:"transitionKind,omitempty"`
 	Desired        SessionDesiredState   `json:"desired"`
 	Phase          LifecyclePhase        `json:"phase"`
 	Session        Session               `json:"session"`
+	RenameTo       string                `json:"renameTo,omitempty"`
+	RenameRuntimeTo string               `json:"renameRuntimeTo,omitempty"`
 	Project        Project               `json:"project,omitempty"`
 	CreateWorktree bool                  `json:"createWorktree,omitempty"`
 	StartMode      string                `json:"startMode,omitempty"`
@@ -133,6 +145,7 @@ type lifecycleRuntime interface {
 	Exists(context.Context, Session) (bool, error)
 	Start(context.Context, Session, string) error
 	Stop(context.Context, Session) error
+	Rename(context.Context, Session, string) error
 	DeliverInitial(context.Context, Session, string) (bool, error)
 }
 
@@ -280,6 +293,98 @@ func (l *SessionLifecycle) Resume(ctx context.Context, id SessionID, name string
 	return l.planExisting(ctx, id, name, SessionDesiredRunning)
 }
 
+// Rename durably coordinates the display-name change with the optional tmux
+// rename. RuntimeName is changed only after the target runtime postcondition
+// has been observed; an absent runtime keeps its existing opaque address.
+func (l *SessionLifecycle) Rename(ctx context.Context, id SessionID, name, newName string) (SessionLifecycleResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	newName = SanitizeName(newName)
+	if newName == "" {
+		return SessionLifecycleResult{}, errors.New("Session name is required")
+	}
+	snapshot, err := l.registry.Snapshot(ctx)
+	if err != nil {
+		return SessionLifecycleResult{}, err
+	}
+	state := snapshot.State()
+	idx := sessionIndex(&state, id, name)
+	if idx < 0 {
+		return SessionLifecycleResult{}, fmt.Errorf("Session %q not found", name)
+	}
+	session := state.Agents[idx]
+	advanced := LifecycleRecord{
+		SessionID: session.ID, Session: session, TransitionKind: LifecycleTransitionRename,
+		RenameTo: newName, RenameRuntimeTo: SessionName(newName),
+	}
+	err = l.withSessionTransition(ctx, session.ID, session.Name, func() error {
+		currentSnapshot, snapshotErr := l.registry.Snapshot(ctx)
+		if snapshotErr != nil {
+			return snapshotErr
+		}
+		currentState := currentSnapshot.State()
+		currentIndex := sessionIndex(&currentState, session.ID, session.Name)
+		if currentIndex < 0 {
+			return fmt.Errorf("Session %q not found", session.Name)
+		}
+		current := currentState.Agents[currentIndex]
+		if current.Name == newName {
+			latest, ok, readErr := l.recordForSession(ctx, current.ID)
+			if readErr != nil {
+				return readErr
+			}
+			if ok && latest.TransitionKind == LifecycleTransitionRename && latest.RenameTo == newName && latest.Phase != LifecycleConverged {
+				advanced, readErr = l.advanceRename(ctx, latest)
+				return readErr
+			}
+			advanced = convergedRenameRecord(current, newName, l.now())
+			return nil
+		}
+		if other := currentState.AgentByName(newName); other != nil && other.ID != current.ID {
+			return fmt.Errorf("Session %q already exists", newName)
+		}
+		desired := SessionDesiredRunning
+		if !current.LaterAt.IsZero() {
+			desired = SessionDesiredLater
+		}
+		now := l.now()
+		record := LifecycleRecord{
+			TransitionID: NewUUID(), SessionID: current.ID,
+			TransitionKind: LifecycleTransitionRename, Desired: desired,
+			Phase: LifecyclePlanned, Session: current,
+			RenameTo: newName, RenameRuntimeTo: SessionName(newName),
+			PromptDelivery: InitialPromptNotRequested,
+			Applied: LifecycleAppliedState{WorktreeReady: true},
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if _, putErr := l.putRecord(ctx, record, false); putErr != nil {
+			return putErr
+		}
+		advanced, snapshotErr = l.advanceRename(ctx, record)
+		return snapshotErr
+	})
+	return SessionLifecycleResult{Session: advanced.Session, Record: advanced}, err
+}
+
+func convergedRenameRecord(session Session, name string, now time.Time) LifecycleRecord {
+	desired := SessionDesiredRunning
+	if !session.LaterAt.IsZero() {
+		desired = SessionDesiredLater
+	}
+	return LifecycleRecord{
+		TransitionID: NewUUID(), SessionID: session.ID,
+		TransitionKind: LifecycleTransitionRename,
+		Desired: desired, Phase: LifecycleConverged,
+		Session: session, RenameTo: name, RenameRuntimeTo: session.RuntimeName,
+		PromptDelivery: InitialPromptNotRequested,
+		Applied: LifecycleAppliedState{
+			WorktreeReady: true, RuntimeRenameSettled: true, RegistryUpdated: true,
+		},
+		CreatedAt: now, UpdatedAt: now,
+	}
+}
+
 func (l *SessionLifecycle) planExisting(ctx context.Context, id SessionID, name string, desired SessionDesiredState) (SessionLifecycleResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -416,7 +521,9 @@ func (l *SessionLifecycle) advanceSerialized(ctx context.Context, expected Lifec
 			return nil
 		}
 		var advanceErr error
-		if latest.Desired == SessionDesiredRunning {
+		if latest.TransitionKind == LifecycleTransitionRename {
+			advanced, advanceErr = l.advanceRename(ctx, latest)
+		} else if latest.Desired == SessionDesiredRunning {
 			advanced, advanceErr = l.advanceRunning(ctx, latest)
 		} else {
 			advanced, advanceErr = l.advanceStopped(ctx, latest)
@@ -480,6 +587,146 @@ func (l *SessionLifecycle) withSessionTransition(ctx context.Context, id Session
 	digest := sha256.Sum256([]byte(key))
 	lockPath := filepath.Join(filepath.Dir(l.ledgerPath), ".lifecycle-session-locks", fmt.Sprintf("%x", digest[:]))
 	return withRegistryFileLock(ctx, lockPath, fn)
+}
+
+func (l *SessionLifecycle) advanceRename(ctx context.Context, expected LifecycleRecord) (LifecycleRecord, error) {
+	record, err := l.currentRecord(ctx, expected)
+	if err != nil {
+		return expected, err
+	}
+	record.Attempts++
+	record.LastError = ""
+	if record.TransitionKind != LifecycleTransitionRename || strings.TrimSpace(record.RenameTo) == "" {
+		return l.failRecord(ctx, record, errors.New("invalid Session rename intent"))
+	}
+	oldRuntime := strings.TrimSpace(record.Session.RuntimeName)
+	targetRuntime := strings.TrimSpace(record.RenameRuntimeTo)
+	if oldRuntime == "" || targetRuntime == "" {
+		return l.failRecord(ctx, record, errors.New("Session rename requires explicit runtime identities"))
+	}
+
+	registrySnapshot, err := l.registry.Snapshot(ctx)
+	if err != nil {
+		return l.failRecord(ctx, record, err)
+	}
+	state := registrySnapshot.State()
+	idx := sessionIndex(&state, record.SessionID, record.Session.Name)
+	if idx < 0 {
+		return l.failRecord(ctx, record, fmt.Errorf("Session %q not found", record.Session.Name))
+	}
+	registered := state.Agents[idx]
+	if registered.Name != record.Session.Name && registered.Name != record.RenameTo {
+		return l.failRecord(ctx, record, fmt.Errorf("Session display name changed to %q during rename", registered.Name))
+	}
+	if registered.RuntimeName != oldRuntime && registered.RuntimeName != targetRuntime {
+		return l.failRecord(ctx, record, fmt.Errorf("Session RuntimeName changed to %q during rename", registered.RuntimeName))
+	}
+	if other := state.AgentByName(record.RenameTo); other != nil && other.ID != record.SessionID {
+		return l.failRecord(ctx, record, fmt.Errorf("Session %q already exists", record.RenameTo))
+	}
+
+	if !record.Applied.RuntimeRenameSettled {
+		oldSession := record.Session
+		oldSession.RuntimeName = oldRuntime
+		oldExists, existsErr := l.runtime.Exists(ctx, oldSession)
+		if existsErr != nil {
+			return l.failRecord(ctx, record, existsErr)
+		}
+
+		targetExists := oldExists
+		if targetRuntime != oldRuntime && (oldExists || record.MayHaveApplied) {
+			targetSession := record.Session
+			targetSession.RuntimeName = targetRuntime
+			targetExists, existsErr = l.runtime.Exists(ctx, targetSession)
+			if existsErr != nil {
+				return l.failRecord(ctx, record, existsErr)
+			}
+		}
+
+		switch {
+		case targetRuntime == oldRuntime:
+			record.Applied.RuntimePresent = oldExists
+			record.Applied.RuntimeRenameSettled = true
+		case !oldExists:
+			// A prior attempt persisted MayHaveApplied before crossing the
+			// runtime Seam. If its target is present, the rename is proven; if
+			// both names are absent, retain the intended target because the
+			// external outcome is no longer distinguishable. On the first
+			// attempt, absence means there is no runtime to rename and the opaque
+			// old RuntimeName must remain unchanged.
+			record.Applied.RuntimePresent = record.MayHaveApplied && targetExists
+			record.Applied.RuntimeRenamed = record.MayHaveApplied
+			record.Applied.RuntimeRenameSettled = true
+		default:
+			if targetExists {
+				return l.failRecord(ctx, record, fmt.Errorf("tmux target %q already exists", targetRuntime))
+			}
+			for _, session := range state.Agents {
+				if session.ID != record.SessionID && session.RuntimeName == targetRuntime {
+					return l.failRecord(ctx, record, fmt.Errorf("RuntimeName %q belongs to Session %q", targetRuntime, session.Name))
+				}
+			}
+
+			// Persist ambiguity before crossing the external rename Seam. A
+			// crash after tmux applies the rename is reconciled by observing the
+			// old and target postconditions, never by blindly replaying it.
+			record.MayHaveApplied = true
+			if record, err = l.putRecord(ctx, record, true); err != nil {
+				return record, err
+			}
+			renameErr := l.runtime.Rename(ctx, oldSession, targetRuntime)
+
+			targetSession := record.Session
+			targetSession.RuntimeName = targetRuntime
+			targetExists, targetErr := l.runtime.Exists(ctx, targetSession)
+			oldExists, oldErr := l.runtime.Exists(ctx, oldSession)
+			if targetErr != nil || oldErr != nil {
+				postconditionErr := errors.Join(targetErr, oldErr)
+				if renameErr != nil {
+					postconditionErr = fmt.Errorf("rename failed: %v; postcondition unknown: %w", renameErr, postconditionErr)
+				}
+				return l.failRecord(ctx, record, postconditionErr)
+			}
+			if !targetExists || oldExists {
+				if renameErr == nil {
+					renameErr = fmt.Errorf("tmux rename postcondition not met (old=%t target=%t)", oldExists, targetExists)
+				}
+				return l.failRecord(ctx, record, renameErr)
+			}
+			record.Applied.RuntimePresent = true
+			record.Applied.RuntimeRenamed = true
+			record.Applied.RuntimeRenameSettled = true
+		}
+		record.Phase = LifecycleRuntimeReady
+		if record, err = l.putRecord(ctx, record, true); err != nil {
+			return record, err
+		}
+	}
+
+	registryRuntime := oldRuntime
+	if record.Applied.RuntimeRenamed {
+		registryRuntime = targetRuntime
+	}
+	changeResult, err := l.registry.Change(ctx, RenameRegisteredSessionRuntime(
+		record.SessionID, registered.Name, record.RenameTo, registryRuntime,
+	))
+	if err != nil {
+		return l.failRecord(ctx, record, err)
+	}
+	changedState := changeResult.Snapshot.State()
+	changedIndex := sessionIndex(&changedState, record.SessionID, record.RenameTo)
+	if changedIndex < 0 {
+		return l.failRecord(ctx, record, fmt.Errorf("Session %q was not present after Registry rename", record.RenameTo))
+	}
+	changed := changedState.Agents[changedIndex]
+	if changed.Name != record.RenameTo || changed.RuntimeName != registryRuntime {
+		return l.failRecord(ctx, record, fmt.Errorf("Registry rename postcondition not met for Session %q", record.RenameTo))
+	}
+	record.Session = changed
+	record.Applied.RegistryUpdated = true
+	record.Phase = LifecycleConverged
+	record.LastError = ""
+	return l.putRecord(ctx, record, true)
 }
 
 func (l *SessionLifecycle) advanceRunning(ctx context.Context, record LifecycleRecord) (LifecycleRecord, error) {
@@ -895,6 +1142,16 @@ func (tmuxLifecycleRuntime) Stop(ctx context.Context, session Session) error {
 	out, err := exec.CommandContext(ctx, "tmux", "kill-session", "-t", TargetSession(session.TmuxName())).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("tmux kill-session: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func (tmuxLifecycleRuntime) Rename(ctx context.Context, session Session, targetRuntime string) error {
+	out, err := exec.CommandContext(
+		ctx, "tmux", "rename-session", "-t", TargetSession(session.TmuxName()), targetRuntime,
+	).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tmux rename-session: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

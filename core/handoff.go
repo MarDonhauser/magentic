@@ -239,7 +239,7 @@ func validateHandoffTarget(session Session, observed SessionObservation) (string
 	if strings.TrimSpace(session.TmuxName()) == "" {
 		return "", false, fmt.Errorf("Ziel-Session %q besitzt keinen RuntimeName", session.Name)
 	}
-	if observed.Availability != ObservationAvailable {
+	if observed.Availability != ObservationAvailable && observed.Availability != ObservationPartial {
 		return "", false, fmt.Errorf("Observation der Ziel-Session %q ist nicht vollständig verfügbar", session.Name)
 	}
 	if observed.Presence != SessionPresencePresent {
