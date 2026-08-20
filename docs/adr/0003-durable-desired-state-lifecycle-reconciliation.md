@@ -17,3 +17,8 @@ target RuntimeNames are persisted before tmux is touched, and reconciliation
 uses the observed old/target postcondition to finish the Registry change without
 blindly replaying an ambiguous rename. An offline Session keeps its opaque
 RuntimeName; display identity never reconstructs runtime identity.
+
+Initial prompt delivery is recorded as an explicit applied fact. If delivery is
+unknown after a process or transport failure, reconciliation never sends the
+prompt automatically again: prompt delivery is not idempotent, so replay could
+duplicate work or instructions. A deliberate user retry creates a new intent.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -29,54 +30,247 @@ func refreshState(st *State) error {
 }
 
 func registerDiscovered(st *State) error {
-	discovered := DiscoverNew(st)
-	if len(discovered) == 0 {
-		return nil
-	}
-	result, err := OpenRegistry(StatePath()).Change(context.Background(), AddDiscoveredSessions(discovered))
-	if err != nil {
-		return err
-	}
-	*st = result.Snapshot.State()
-	return nil
+	return registerDiscoveredWithRuntime(context.Background(), st, tmuxRegistryDiscoveryRuntime{})
 }
 
-func DiscoverNew(s *State) []Agent {
+type RegistryDiscoveryAvailability string
+
+const (
+	RegistryDiscoveryAvailable   RegistryDiscoveryAvailability = "available"
+	RegistryDiscoveryPartial     RegistryDiscoveryAvailability = "partial"
+	RegistryDiscoveryUnavailable RegistryDiscoveryAvailability = "unavailable"
+)
+
+type RegistryDiscoveryProblem struct {
+	RuntimeName string `json:"runtimeName,omitempty"`
+	Operation   string `json:"operation"`
+	Message     string `json:"message"`
+}
+
+// RegistryDiscovery is evidence for adopting external runtimes into the
+// Registry. Sessions contains only complete facts; Problems retains every
+// runtime that could not be identified without inventing a directory or
+// creation time.
+type RegistryDiscovery struct {
+	ObservedAt   time.Time                     `json:"observedAt"`
+	Availability RegistryDiscoveryAvailability `json:"availability"`
+	Sessions     []Session                     `json:"sessions"`
+	Problems     []RegistryDiscoveryProblem    `json:"problems,omitempty"`
+}
+
+func (d RegistryDiscovery) Err() error {
+	if len(d.Problems) == 0 {
+		return nil
+	}
+	problems := make([]string, 0, len(d.Problems))
+	for _, problem := range d.Problems {
+		target := ""
+		if problem.RuntimeName != "" {
+			target = " " + strconv.Quote(problem.RuntimeName)
+		}
+		problems = append(problems, problem.Operation+target+": "+problem.Message)
+	}
+	return errors.New(strings.Join(problems, "; "))
+}
+
+// registryRuntimeSessionFact is raw Adapter evidence. It intentionally keeps
+// the timestamp textual: DiscoverNew must validate all fields before a fact
+// crosses the Registry Seam and becomes a durable Session.
+type registryRuntimeSessionFact struct {
+	RuntimeName string
+	Directory   string
+	CreatedUnix string
+}
+
+type registryDiscoveryRuntime interface {
+	ListSessions(context.Context) ([]string, error)
+	InspectSession(context.Context, string) (registryRuntimeSessionFact, error)
+}
+
+type tmuxRegistryDiscoveryRuntime struct{}
+
+func (tmuxRegistryDiscoveryRuntime) ListSessions(ctx context.Context) ([]string, error) {
+	out, err := runRegistryDiscoveryTmux(ctx, "list-sessions", "-F", "#{session_name}")
+	if err != nil {
+		return nil, err
+	}
+	trimmed := strings.TrimRight(out, "\r\n")
+	if trimmed == "" {
+		return nil, nil
+	}
+	lines := strings.Split(trimmed, "\n")
+	for i := range lines {
+		lines[i] = strings.TrimSuffix(lines[i], "\r")
+	}
+	return lines, nil
+}
+
+func (tmuxRegistryDiscoveryRuntime) InspectSession(ctx context.Context, runtimeName string) (registryRuntimeSessionFact, error) {
+	fact := registryRuntimeSessionFact{RuntimeName: runtimeName}
+	directory, err := runRegistryDiscoveryTmux(
+		ctx, "display-message", "-p", "-t", TargetPane(runtimeName), "#{pane_current_path}",
+	)
+	if err != nil {
+		return fact, fmt.Errorf("read pane directory: %w", err)
+	}
+	fact.Directory = strings.TrimRight(directory, "\r\n")
+	created, err := runRegistryDiscoveryTmux(
+		ctx, "display-message", "-p", "-t", TargetPane(runtimeName), "#{session_created}",
+	)
+	if err != nil {
+		return fact, fmt.Errorf("read creation time: %w", err)
+	}
+	fact.CreatedUnix = strings.TrimSpace(created)
+	return fact, nil
+}
+
+func runRegistryDiscoveryTmux(ctx context.Context, args ...string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	out, err := exec.CommandContext(ctx, "tmux", args...).CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(out))
+		if message != "" {
+			return "", fmt.Errorf("%w: %s", err, message)
+		}
+		return "", err
+	}
+	return string(out), nil
+}
+
+// DiscoverNew observes externally-created tmux runtimes without mutating the
+// Registry. Failed or malformed probes remain explicitly unknown and never
+// turn into durable Sessions.
+func DiscoverNew(ctx context.Context, s *State) RegistryDiscovery {
+	return discoverNewWithRuntime(ctx, s, tmuxRegistryDiscoveryRuntime{})
+}
+
+func discoverNewWithRuntime(ctx context.Context, s *State, runtime registryDiscoveryRuntime) RegistryDiscovery {
+	discovery := RegistryDiscovery{
+		ObservedAt:   time.Now().UTC(),
+		Availability: RegistryDiscoveryAvailable,
+	}
+	if s == nil {
+		discovery.Availability = RegistryDiscoveryUnavailable
+		discovery.Problems = append(discovery.Problems, RegistryDiscoveryProblem{
+			Operation: "read-registry", Message: "Registry snapshot is unavailable",
+		})
+		return discovery
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	known := map[string]bool{}
 	for _, a := range s.Agents {
 		known[a.TmuxName()] = true
 	}
-	var out []Agent
-	for _, sess := range TmuxListSessions() {
-		if known[sess] {
+	listed, err := runtime.ListSessions(ctx)
+	if err != nil {
+		discovery.Availability = RegistryDiscoveryUnavailable
+		discovery.Problems = append(discovery.Problems, RegistryDiscoveryProblem{
+			Operation: "list-sessions", Message: err.Error(),
+		})
+		return discovery
+	}
+	seen := make(map[string]bool, len(listed))
+	for _, runtimeName := range listed {
+		if !strings.HasPrefix(runtimeName, SessionPrefix) {
 			continue
 		}
-		name := strings.TrimPrefix(sess, SessionPrefix)
-		dir, _ := Tmux("display-message", "-p", "-t", TargetPane(sess), "#{pane_current_path}")
-		dir = strings.TrimSpace(dir)
-		createdRaw, _ := Tmux("display-message", "-p", "-t", TargetPane(sess), "#{session_created}")
-		ts, _ := strconv.ParseInt(strings.TrimSpace(createdRaw), 10, 64)
-		if ts == 0 {
-			ts = time.Now().Unix()
+		if seen[runtimeName] {
+			discovery.Problems = append(discovery.Problems, RegistryDiscoveryProblem{
+				RuntimeName: runtimeName, Operation: "parse-list-sessions", Message: "duplicate runtime name",
+			})
+			continue
 		}
-		proj := ""
-		worktree := false
-		for _, p := range s.Projects {
-			if dir == p.Path || strings.HasPrefix(dir, p.Path+string(os.PathSeparator)) {
-				proj = p.Name
-				worktree = dir != p.Path
-				break
-			}
-			base := p.Path + "-agents" + string(os.PathSeparator)
-			if strings.HasPrefix(dir, base) {
-				proj = p.Name
-				worktree = true
-				break
-			}
+		seen[runtimeName] = true
+		if known[runtimeName] {
+			continue
 		}
-		out = append(out, Agent{Name: name, Project: proj, Dir: dir, Worktree: worktree, RuntimeName: sess, CreatedAt: time.Unix(ts, 0)})
+		name := strings.TrimPrefix(runtimeName, SessionPrefix)
+		if strings.TrimSpace(name) == "" {
+			discovery.Problems = append(discovery.Problems, RegistryDiscoveryProblem{
+				RuntimeName: runtimeName, Operation: "parse-session-name", Message: "display name is empty",
+			})
+			continue
+		}
+		fact, err := runtime.InspectSession(ctx, runtimeName)
+		if err != nil {
+			discovery.Problems = append(discovery.Problems, RegistryDiscoveryProblem{
+				RuntimeName: runtimeName, Operation: "inspect-session", Message: err.Error(),
+			})
+			continue
+		}
+		if fact.RuntimeName != runtimeName {
+			discovery.Problems = append(discovery.Problems, RegistryDiscoveryProblem{
+				RuntimeName: runtimeName, Operation: "validate-session-fact", Message: "runtime identity changed during inspection",
+			})
+			continue
+		}
+		directory := filepath.Clean(fact.Directory)
+		if strings.TrimSpace(fact.Directory) == "" || !filepath.IsAbs(directory) {
+			discovery.Problems = append(discovery.Problems, RegistryDiscoveryProblem{
+				RuntimeName: runtimeName, Operation: "validate-pane-directory", Message: "pane directory is empty or not absolute",
+			})
+			continue
+		}
+		createdUnix, err := strconv.ParseInt(fact.CreatedUnix, 10, 64)
+		if err != nil || createdUnix <= 0 {
+			message := "creation time is not a positive Unix timestamp"
+			if err != nil {
+				message += ": " + err.Error()
+			}
+			discovery.Problems = append(discovery.Problems, RegistryDiscoveryProblem{
+				RuntimeName: runtimeName, Operation: "parse-session-created", Message: message,
+			})
+			continue
+		}
+		project, worktree := discoveredSessionProject(s.Projects, directory)
+		discovery.Sessions = append(discovery.Sessions, Session{
+			Name: name, ProjectID: project.ID, Project: project.Name, Dir: directory, Worktree: worktree,
+			RuntimeName: runtimeName, CreatedAt: time.Unix(createdUnix, 0),
+		})
 	}
-	return out
+	if len(discovery.Problems) > 0 {
+		discovery.Availability = RegistryDiscoveryPartial
+	}
+	return discovery
+}
+
+func discoveredSessionProject(projects []Project, directory string) (Project, bool) {
+	var matched Project
+	worktree := false
+	matchLength := -1
+	for _, project := range projects {
+		projectPath := filepath.Clean(project.Path)
+		if directory == projectPath || strings.HasPrefix(directory, projectPath+string(os.PathSeparator)) {
+			if len(projectPath) > matchLength {
+				matched = project
+				worktree = directory != projectPath
+				matchLength = len(projectPath)
+			}
+		}
+		managedRoot := filepath.Clean(project.Path + "-agents")
+		if strings.HasPrefix(directory, managedRoot+string(os.PathSeparator)) && len(managedRoot) > matchLength {
+			matched = project
+			worktree = true
+			matchLength = len(managedRoot)
+		}
+	}
+	return matched, worktree
+}
+
+func registerDiscoveredWithRuntime(ctx context.Context, st *State, runtime registryDiscoveryRuntime) error {
+	discovery := discoverNewWithRuntime(ctx, st, runtime)
+	if len(discovery.Sessions) > 0 {
+		result, err := OpenRegistry(StatePath()).Change(ctx, AddDiscoveredSessions(discovery.Sessions))
+		if err != nil {
+			return err
+		}
+		*st = result.Snapshot.State()
+	}
+	return discovery.Err()
 }
 
 func RestoreSessions(st *State) int {

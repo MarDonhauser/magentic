@@ -466,9 +466,9 @@ func parseObservedPanes(output string) (map[string]observedPane, []ObservationPr
 		}
 		pane := observedPane{
 			id: parts[1], command: strings.TrimSpace(parts[2]),
-			selected: strings.TrimSpace(parts[4]) == "1" && strings.TrimSpace(parts[5]) == "1",
+			selected: parts[4] == "1" && parts[5] == "1",
 		}
-		if stamp, err := strconv.ParseInt(strings.TrimSpace(parts[3]), 10, 64); err == nil && stamp > 0 {
+		if stamp, valid := parseObservedPositiveDecimal(parts[3]); valid {
 			pane.activity = time.Unix(stamp, 0).UTC()
 			pane.activityKnown = true
 		} else {
@@ -514,8 +514,20 @@ func parseObservedPanes(output string) (map[string]observedPane, []ObservationPr
 }
 
 func validObservedBinaryFact(value string) bool {
-	value = strings.TrimSpace(value)
 	return value == "0" || value == "1"
+}
+
+func parseObservedPositiveDecimal(value string) (int64, bool) {
+	if value == "" {
+		return 0, false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return 0, false
+		}
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	return parsed, err == nil && parsed > 0
 }
 
 func validObservedPaneID(id string) bool {

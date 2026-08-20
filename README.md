@@ -329,21 +329,26 @@ Kompatibilitäts-Adapter; neue Implementierungen gehen über die Module.
   Abfragen bleiben sichtbar unbekannt.
 - Worktrees landen unter `<projekt>-agents/<agentname>` neben dem Projektordner.
 - Konfiguration und Agent-Registry: `~/.config/magentic/state.json`
-- Gemeinsame Logik von TUI und App liegt in `core/` (State, tmux, Status,
-  Git, Overview, Usage, Aktionen, Git-Graph, Board, Statistik).
+- Gemeinsame Logik von TUI und App liegt in den tiefen Modulen unter `core/`:
+  Registry, Session Lifecycle, Observation, Repositories, WorkHistory,
+  Specifications, Attention sowie deren Projektionen für Overview, Git-Graph,
+  Board und Statistik.
 - Neue Sessions werden nach dem **Branch** benannt, auf dem das Verzeichnis
   steht — außer der Branch ist ein Integrationsbranch (`main`, `dev`,
   `master`, `develop`), dann greift der Projektname. Präfixe wie `agent/`
   oder `feature/` fallen weg.
-- Das **Board** liest die Spec-Ordner direkt vom Dateisystem — es gibt keine
-  eigene Datenhaltung. Jedes bekannte Layout wird geprüft, Quellen ohne Inhalt
-  fallen raus. Eine Session wird einem Change zugeordnet, wenn Branch,
-  Worktree-Ordner oder Session-Name zu dessen Ordnernamen passen. Neue Layouts
-  kommen über `specLayouts` in `core/board.go` dazu.
-- Die **Statistik** parst `~/.claude/projects/**/*.jsonl` (auch die
-  `subagents/`-Dateien, deren Tokens mitzählen, deren Zeilen aber nicht als
-  Prompt). Ergebnisse werden pro Datei über ModTime und Größe in
-  `~/.config/magentic/stats-cache.json` zwischengespeichert.
+- Das **Board** projiziert das Specifications-Modul; es besitzt keine zweite
+  Datenhaltung und keinen eigenen Parser. Die privaten Source-Adapter prüfen
+  jedes unterstützte Layout und physische Project-Containment. Laufende Arbeit
+  wird ausschließlich über die persistierte `SpecificationRef` plus eine
+  bekannte, lebende Observation zugeordnet. „Hieran arbeiten“ transportiert
+  nur ein opakes Start-Token, das Specifications unmittelbar vor dem Start
+  erneut auflöst.
+- Die **Statistik** liest Provider-Aktivität aus demselben normalisierten
+  WorkHistory-Index wie Verlauf, Suche und Links. Claude Code, Codex, Gemini CLI
+  und GitHub Copilot werden durch private Adapter vereinheitlicht; unlesbare
+  Quellen und nicht bepreisbare Modelle bleiben als teilweise oder unbekannt
+  sichtbar. Git-Commits und Identität kommen über das Repositories-Modul.
 
 ## Build
 

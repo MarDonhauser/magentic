@@ -429,10 +429,10 @@ func TestBuildBoardProjectionUsesOpaqueStartAndOptInArchive(t *testing.T) {
 	if current.ProjectID != "project-1" || len(current.Items) != 1 {
 		t.Fatalf("BuildBoard() = %#v", current)
 	}
-	if current.Items[0].Path != "" || current.Items[0].Reference == "" || current.Items[0].StartToken == "" {
-		t.Fatalf("current Board item leaked a path or omitted identity: %#v", current.Items[0])
+	if current.Items[0].Reference == "" || current.Items[0].StartToken == "" {
+		t.Fatalf("current Board item omitted opaque identity: %#v", current.Items[0])
 	}
-	if len(current.Sources) != 1 || current.Sources[0].Root != "" || current.Sources[0].Location != "openspec/changes" || current.Root != "" {
+	if len(current.Sources) != 1 || current.Sources[0].Location != "openspec/changes" {
 		t.Fatalf("Board source location = %#v", current.Sources)
 	}
 
@@ -446,7 +446,7 @@ func TestBuildBoardProjectionUsesOpaqueStartAndOptInArchive(t *testing.T) {
 			archived = item
 		}
 	}
-	if archived.ID == "" || archived.Column != ColDone || archived.StartToken != "" || archived.Path != "" {
+	if archived.ID == "" || archived.Column != ColDone || archived.StartToken != "" {
 		t.Fatalf("archived Board item = %#v", archived)
 	}
 }

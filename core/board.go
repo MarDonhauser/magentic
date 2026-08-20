@@ -21,7 +21,6 @@ type BoardItem struct {
 	ID         string                  `json:"id"`
 	Title      string                  `json:"title"`
 	Summary    string                  `json:"summary,omitempty"`
-	Path       string                  `json:"-"` // deprecated: use StartToken
 	Kind       string                  `json:"kind"`
 	Column     string                  `json:"column"`
 	Total      int                     `json:"total"`
@@ -38,7 +37,6 @@ type BoardItem struct {
 type BoardSource struct {
 	Kind         string   `json:"kind"`
 	Location     string   `json:"location"`
-	Root         string   `json:"-"` // deprecated: use Location
 	Items        int      `json:"items"`
 	Archived     int      `json:"archived"`
 	Specs        int      `json:"specs"`
@@ -50,7 +48,6 @@ type Board struct {
 	ProjectID ProjectID     `json:"projectId,omitempty"`
 	Project   string        `json:"project"`
 	Kind      string        `json:"kind"`
-	Root      string        `json:"-"`
 	Sources   []BoardSource `json:"sources,omitempty"`
 	Items     []BoardItem   `json:"items"`
 	Archived  int           `json:"archived"`

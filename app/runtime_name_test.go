@@ -38,8 +38,8 @@ func TestDiscoverNewUsesRegisteredRuntimeNameAsTmuxIdentity(t *testing.T) {
 	source, target := customRuntimeAgents()
 	state := &core.State{Agents: []core.Agent{source, target}}
 
-	if discovered := core.DiscoverNew(state); len(discovered) != 0 {
-		t.Fatalf("registered custom runtimes were rediscovered from display names: %#v", discovered)
+	if discovery := core.DiscoverNew(context.Background(), state); len(discovery.Sessions) != 0 {
+		t.Fatalf("registered custom runtimes were rediscovered from display names: %#v", discovery.Sessions)
 	}
 }
 

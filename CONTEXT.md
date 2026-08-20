@@ -22,7 +22,7 @@ An opaque Project-qualified handle that a UI may retain and ask Repositories to 
 _Avoid_: Worktree path, branch name, browser-supplied directory
 
 **RepositoryKnowledge**:
-The known, unknown, or inapplicable result of observing Git facts for a Project or Worktree.
+The known, partial, unknown, or explicitly not-a-repository result of observing Git facts for a Project or Worktree.
 _Avoid_: Empty value, false, clean
 
 **StatsCommitCoverage**:
@@ -105,6 +105,10 @@ _Avoid_: Change, Board item, card
 A Project- and source-qualified reference to a Specification using that source's native identity.
 _Avoid_: Specification path, title, bare ID
 
-**SpecificationState**:
-The source-derived position of a Specification as backlog, active, review, terminally done, or explicitly unknown when its source facts cannot support a stage.
+**SpecificationStage**:
+The source-derived position of a Specification as backlog, active, review, done, or explicitly unknown when its source facts cannot support a stage.
 _Avoid_: Task completion percentage, Board column guess
+
+**SpecificationLifecycle**:
+The stage, reason, archive fact, and terminal fact derived together from one Specification source reading.
+_Avoid_: Board column, inferred completion, task percentage

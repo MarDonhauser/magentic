@@ -65,15 +65,15 @@ var (
 	formatEuro      = core.FormatEuro
 	formatDurShort  = core.FormatDurShort
 
-	discoverNew          = core.DiscoverNew
-	createAgentSession   = core.CreateAgentSession
-	createTermSession    = core.CreateTermSession
+	discoverNew            = core.DiscoverNew
+	createAgentSession     = core.CreateAgentSession
+	createTermSession      = core.CreateTermSession
 	createTermSessionForID = core.CreateTermSessionForID
-	removeSession        = core.RemoveRegisteredSession
-	startSkillAgent      = core.StartSkillAgent
-	sendPromptWhenReady  = core.SendPromptWhenReady
-	sendSkillByID        = core.SendSkillByID
-	observeSessions      = core.Observe
+	removeSession          = core.RemoveRegisteredSession
+	startSkillAgent        = core.StartSkillAgent
+	sendPromptWhenReady    = core.SendPromptWhenReady
+	sendSkillByID          = core.SendSkillByID
+	observeSessions        = core.Observe
 
 	shortPath     = core.ShortPath
 	formatAge     = core.FormatAge

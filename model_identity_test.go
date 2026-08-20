@@ -11,7 +11,7 @@ import (
 func identityTestModel(session Agent) model {
 	project := Project{ID: session.ProjectID, Name: session.Project, Path: session.Dir}
 	return model{
-		state: &State{Projects: []Project{project}, Agents: []Agent{session}},
+		state:     &State{Projects: []Project{project}, Agents: []Agent{session}},
 		collapsed: map[string]bool{}, cursor: 1,
 	}
 }

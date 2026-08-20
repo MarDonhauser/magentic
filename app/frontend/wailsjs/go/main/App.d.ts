@@ -83,9 +83,9 @@ export function SearchTranscripts(arg1:string):Promise<main.SearchResult>;
 
 export function SendSkill(arg1:string,arg2:string):Promise<void>;
 
-export function SessionLinks(arg1:string):Promise<Array<main.LinkInfo>>;
+export function SessionLinks(arg1:string):Promise<main.SessionLinksResult>;
 
-export function SessionPreview(arg1:string):Promise<string>;
+export function SessionPreview(arg1:string):Promise<main.SessionPreviewResult>;
 
 export function SetActiveTerm(arg1:string):Promise<void>;
 

@@ -229,6 +229,7 @@ export namespace core {
 	    behind: number;
 	    divergenceKnown: boolean;
 	    merged: boolean;
+	    mergedKnown: boolean;
 	    agents?: string[];
 	
 	    static createFrom(source: any = {}) {
@@ -246,6 +247,7 @@ export namespace core {
 	        this.behind = source["behind"];
 	        this.divergenceKnown = source["divergenceKnown"];
 	        this.merged = source["merged"];
+	        this.mergedKnown = source["mergedKnown"];
 	        this.agents = source["agents"];
 	    }
 	}
@@ -1125,11 +1127,67 @@ export namespace main {
 	        this.url = source["url"];
 	    }
 	}
+	export class DeployRemoteProblem {
+	    project: string;
+	    state: string;
+	    operation: string;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DeployRemoteProblem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.project = source["project"];
+	        this.state = source["state"];
+	        this.operation = source["operation"];
+	        this.message = source["message"];
+	    }
+	}
+	export class DeployRemoteCoverage {
+	    state: string;
+	    projects: number;
+	    availableProjects: number;
+	    problems?: DeployRemoteProblem[];
+	
+	    static createFrom(source: any = {}) {
+	        return new DeployRemoteCoverage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.state = source["state"];
+	        this.projects = source["projects"];
+	        this.availableProjects = source["availableProjects"];
+	        this.problems = this.convertValues(source["problems"], DeployRemoteProblem);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class DeployStatus {
 	    azOk: boolean;
 	    azErr: string;
 	    azSub: string;
 	    azSubId: string;
+	    azRemoteCoverage: DeployRemoteCoverage;
 	    argoOk: boolean;
 	    argoServer: string;
 	    argoErr: string;
@@ -1146,6 +1204,7 @@ export namespace main {
 	        this.azErr = source["azErr"];
 	        this.azSub = source["azSub"];
 	        this.azSubId = source["azSubId"];
+	        this.azRemoteCoverage = this.convertValues(source["azRemoteCoverage"], DeployRemoteCoverage);
 	        this.argoOk = source["argoOk"];
 	        this.argoServer = source["argoServer"];
 	        this.argoErr = source["argoErr"];
@@ -1261,6 +1320,72 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class SessionLinksResult {
+	    links: LinkInfo[];
+	    sources: TimelineSource[];
+	
+	    static createFrom(source: any = {}) {
+	        return new SessionLinksResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.links = this.convertValues(source["links"], LinkInfo);
+	        this.sources = this.convertValues(source["sources"], TimelineSource);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class SessionPreviewResult {
+	    content: string;
+	    contentKnown: boolean;
+	    source: TimelineSource;
+	
+	    static createFrom(source: any = {}) {
+	        return new SessionPreviewResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.content = source["content"];
+	        this.contentKnown = source["contentKnown"];
+	        this.source = this.convertValues(source["source"], TimelineSource);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class TimelineEntry {
 	    agent: string;
 	    project: string;
@@ -1323,3 +1448,4 @@ export namespace main {
 	}
 
 }
+

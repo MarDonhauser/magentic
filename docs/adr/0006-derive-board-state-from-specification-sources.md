@@ -10,3 +10,8 @@ Source discovery and start resolution enforce physical Project containment so
 symlinked source roots cannot escape the Project. Active Board association uses
 the durable `SpecificationRef` persisted on a Session plus a known-live
 Observation; names, branches, paths, and dead runtimes are not substitutes.
+
+`SpecificationStartToken` is the caller-facing authority seam. Callers retain
+the opaque token, never a Specification path; `Specifications.ResolveStart`
+validates its Project/source identity and physical containment immediately
+before returning the controlled Lifecycle intent.

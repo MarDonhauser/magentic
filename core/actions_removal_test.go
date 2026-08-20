@@ -71,6 +71,30 @@ func TestWorktreeRemovalRejectsValidIdlePaneTaintedByMalformedRow(t *testing.T) 
 	}
 }
 
+func TestWorktreeRemovalRejectsMalformedScalarPaneFacts(t *testing.T) {
+	session := Agent{ID: "session-1", Name: "topic", RuntimeName: "mgt-topic"}
+	listings := []string{
+		"mgt-topic\t%4\tclaude\t+1787227200\t1\t1\n",
+		"mgt-topic\t%4\tclaude\t1787227200\t 1\t1\n",
+	}
+	for _, listing := range listings {
+		runner := &recordingObservationRunner{run: func(_ context.Context, args ...string) (string, error) {
+			switch args[0] {
+			case "list-panes":
+				return listing, nil
+			case "capture-pane":
+				return "Ready\nshift+tab to cycle\n", nil
+			default:
+				return "", errors.New("unexpected command")
+			}
+		}}
+		snapshot := observeWithRunner(context.Background(), []Session{session}, runner, testObservationConfig(time.Now()))
+		if err := validateWorktreeRemovalObservations([]Agent{session}, snapshot); err == nil {
+			t.Fatalf("malformed scalar pane fact authorized removal: listing=%q snapshot=%#v", listing, snapshot)
+		}
+	}
+}
+
 func TestWorktreeRemovalRequiresKnownSafeSessionState(t *testing.T) {
 	session := Agent{ID: "session-1", Name: "topic"}
 	tests := []struct {

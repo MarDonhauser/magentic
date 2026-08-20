@@ -117,30 +117,49 @@ func parseRepositoryIdentityValue(out, field string) (string, error) {
 
 func parseRepositoryOwnCommitSeries(out, email, name string) (RepositoryOwnCommitSeries, int) {
 	series := RepositoryOwnCommitSeries{}
-	malformed := 0
+	if out == "" {
+		return series, 0
+	}
+
 	normalized := strings.ReplaceAll(out, "\r\n", "\n")
-	if strings.Contains(normalized, "\r") {
+	finalTerminated := strings.HasSuffix(normalized, "\x1e") || strings.HasSuffix(normalized, "\x1e\n")
+	malformed := 0
+	if !finalTerminated {
 		malformed++
+		// Even malformed/truncated pretty-format output retains Git's one
+		// structural line ending. Keep the otherwise-valid record as a known
+		// subtotal, but never trim more than that single framing byte.
+		normalized = strings.TrimSuffix(normalized, "\n")
 	}
-	normalized = strings.TrimRight(normalized, "\n")
-	if normalized == "" {
-		return series, malformed
-	}
-	if !strings.HasSuffix(normalized, "\x1e") {
-		malformed++
-	}
-	for _, raw := range strings.Split(normalized, "\x1e") {
-		record := strings.Trim(raw, "\r\n")
-		if record == "" {
+	records := strings.Split(normalized, "\x1e")
+	for recordIndex, raw := range records {
+		// Git separates pretty-format records with a line feed after the record
+		// terminator. Remove only that framing byte: trimming either edge would
+		// conceal a corrupt timestamp or author field.
+		if recordIndex > 0 && strings.HasPrefix(raw, "\n") {
+			raw = strings.TrimPrefix(raw, "\n")
+		}
+		if recordIndex == len(records)-1 && finalTerminated {
+			if raw != "" {
+				malformed++
+			}
 			continue
 		}
-		fields := strings.Split(record, "\x1f")
+		if raw == "" {
+			malformed++
+			continue
+		}
+		fields := strings.Split(raw, "\x1f")
 		if len(fields) != 3 {
 			malformed++
 			continue
 		}
 		seconds, err := strconv.ParseInt(fields[0], 10, 64)
-		if err != nil || seconds < 0 {
+		if err != nil || !repositoryDecimal(fields[0]) || strconv.FormatInt(seconds, 10) != fields[0] {
+			malformed++
+			continue
+		}
+		if !validRepositoryOwnCommitIdentityField(fields[1]) || !validRepositoryOwnCommitIdentityField(fields[2]) {
 			malformed++
 			continue
 		}
@@ -150,6 +169,15 @@ func parseRepositoryOwnCommitSeries(out, email, name string) (RepositoryOwnCommi
 	}
 	sort.Slice(series.Timestamps, func(i, j int) bool { return series.Timestamps[i] < series.Timestamps[j] })
 	return series, malformed
+}
+
+func validRepositoryOwnCommitIdentityField(value string) bool {
+	for _, char := range value {
+		if char < ' ' || char == '\x7f' {
+			return false
+		}
+	}
+	return true
 }
 
 func repositoryCommitMatchesIdentity(commitEmail, commitName, email, name string) bool {

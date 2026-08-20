@@ -115,6 +115,15 @@ func TestRepositoriesOwnCommitsSinceValidatesRecordsAndKeepsKnownSubtotal(t *tes
 		{name: "missing terminator", log: "1700000000\x1fme@example.com\x1fMe\n", wantTimestamps: []int64{1700000000}},
 		{name: "invalid timestamp", log: "1700000000\x1fme@example.com\x1fMe\x1enot-a-time\x1fme@example.com\x1fMe\x1e", wantTimestamps: []int64{1700000000}},
 		{name: "negative timestamp", log: "-1\x1fme@example.com\x1fMe\x1e"},
+		{name: "plus timestamp", log: "+1700000000\x1fme@example.com\x1fMe\x1e"},
+		{name: "leading zero timestamp", log: "01700000000\x1fme@example.com\x1fMe\x1e"},
+		{name: "email line feed", log: "1700000000\x1fme@exam\nple.com\x1fMe\x1e"},
+		{name: "name line feed before terminator", log: "1700000000\x1fme@example.com\x1fMe\n\x1e"},
+		{name: "email carriage return", log: "1700000000\x1fme@exam\rple.com\x1fMe\x1e"},
+		{name: "name CRLF", log: "1700000000\x1fme@example.com\x1fMe\r\nOther\x1e"},
+		{name: "email tab", log: "1700000000\x1fme@\texample.com\x1fMe\x1e"},
+		{name: "name NUL", log: "1700000000\x1fme@example.com\x1fMe\x00Other\x1e"},
+		{name: "name delete", log: "1700000000\x1fme@example.com\x1fMe\x7fOther\x1e"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
