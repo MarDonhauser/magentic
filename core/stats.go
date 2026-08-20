@@ -84,7 +84,7 @@ type StatsCommitProblem struct {
 
 // StatsCommitCoverage describes whether Commits is an exact total or only a
 // known subtotal. A repository counts as available only when both its Git log
-// and at least one local Git identity field can be read.
+// and at least one effective Git identity field can be read.
 type StatsCommitCoverage struct {
 	State                 HistorySourceState   `json:"state"`
 	Repositories          int                  `json:"repositories"`

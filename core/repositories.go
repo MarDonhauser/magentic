@@ -116,6 +116,9 @@ type RepositoryWorktreeTarget struct {
 // WorktreeDiff reports a human-readable checkout diff without collapsing
 // command failures into a clean result.
 func (r *Repositories) WorktreeDiff(ctx context.Context, target RepositoryWorktree) RepositoryFact[string] {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	dir := strings.TrimSpace(target.Path)
 	if dir == "" {
 		return repositoryUnknownFact[string]("diff", errors.New("resolved Worktree path is required"))

@@ -45,3 +45,14 @@ func TestStoreObservationKeepsAnImmutableSnapshot(t *testing.T) {
 		t.Fatalf("cached Observation was mutated through caller slices: %#v", cached)
 	}
 }
+
+func TestAttentionDockBadgeLabelPreservesPartialCount(t *testing.T) {
+	partial := core.AttentionDockBadge{Update: true, Complete: false, Count: 1, Label: "1"}
+	if got := attentionDockBadgeLabel(partial); got != "1+" {
+		t.Fatalf("partial Dock badge = %q, want lower bound", got)
+	}
+	exact := core.AttentionDockBadge{Update: true, Complete: true, Count: 1, Label: "1"}
+	if got := attentionDockBadgeLabel(exact); got != "1" {
+		t.Fatalf("exact Dock badge = %q", got)
+	}
+}

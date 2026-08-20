@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"magentic/core"
 )
 
 var (
@@ -111,8 +112,8 @@ func (m model) renderPanel(content string, w, h int, focused bool) string {
 
 func (m model) renderHeader() string {
 	counts := map[AgentStatus]int{}
-	for _, st := range m.poll.statuses {
-		counts[st]++
+	for _, session := range m.state.Agents {
+		counts[m.statusFor(session)]++
 	}
 	title := styleTitle.Render(" ⚡ magentic ")
 	agentsSeg := ""
@@ -125,6 +126,9 @@ func (m model) renderHeader() string {
 		styleWarn.Render("◆"), counts[StatusBlocked],
 		styleDim.Render("○"), counts[StatusIdle],
 		styleErr.Render("✗"), counts[StatusExited]+counts[StatusDead])
+	if counts[StatusUnknown] > 0 {
+		stats += fmt.Sprintf("   %s %d unbekannt", styleDim.Render("?"), counts[StatusUnknown])
+	}
 	if zg := m.poll.zeitgeist; zg.Active {
 		sym, sty := "▶", styleOK
 		if zg.State == "paused" {
@@ -148,12 +152,17 @@ func (m model) projectLine(r treeRow, w int) string {
 		name = r.project.Name
 		count = len(m.state.AgentsFor(r.project.Name))
 		key = r.project.Name
-		if git, ok := m.poll.git[r.project.Path]; ok && git.IsRepo {
-			if git.Clean() {
+		repository := m.repositoryFactsForProject(*r.project)
+		if repository.presence == core.RepositoryKnown {
+			if repository.changes.Known() && repository.changes.Value.Clean() {
 				dirty = styleDim.Render(" ✓")
-			} else {
+			} else if repository.changes.Known() {
 				dirty = styleWarn.Render(" ±")
+			} else {
+				dirty = styleDim.Render(" ?")
 			}
+		} else if repository.presence == core.RepositoryUnknown {
+			dirty = styleDim.Render(" ?")
 		}
 	}
 	arrow := "▾"
@@ -166,23 +175,24 @@ func (m model) projectLine(r treeRow, w int) string {
 }
 
 func (m model) agentLine(a Agent, w int) string {
-	st := m.poll.statuses[a.Name]
+	st := m.statusFor(a)
 	icon := statusStyle(st).Render(st.Icon())
 	nameW := m.maxAgentNameLen()
 	name := pad(trunc(a.Name, nameW), nameW+1)
 	status := statusStyle(st).Render(pad(st.Label(), 8))
 	lastActive := a.CreatedAt
-	if act, ok := m.poll.activity[a.Name]; ok {
-		lastActive = act
+	if observation, ok := m.observationFor(a); ok && observation.ActivityKnown {
+		lastActive = observation.Activity
 	}
 	age := pad(formatAge(lastActive), 7)
-	marks := "  "
-	if sc, ok := m.poll.session[a.Name]; ok {
-		if len(sc.Files) == 0 && sc.Commits == 0 {
-			marks = styleDim.Render("✓ ")
-		} else {
-			marks = styleWarn.Render("± ")
-		}
+	marks := styleDim.Render("? ")
+	switch m.sessionChangeMark(a) {
+	case sessionChangesClean:
+		marks = styleDim.Render("✓ ")
+	case sessionChangesDirty:
+		marks = styleWarn.Render("± ")
+	case sessionChangesNotRepository:
+		marks = "  "
 	}
 	wt := " "
 	if a.Worktree {
@@ -315,18 +325,25 @@ func (m model) detailContent(w, h int) ([]string, int) {
 			projName = "—"
 		}
 		add(styleTitle.Render(a.Name) + styleDim.Render(" · "+projName))
-		st := m.poll.statuses[a.Name]
+		observation, observed := m.observationFor(*a)
+		st := StatusUnknown
+		if observed {
+			st = observation.Status
+		}
 		wtNote := ""
 		if a.Worktree {
 			wtNote = styleDim.Render(" · ⑂ worktree")
 		}
 		active := ""
-		if act, ok := m.poll.activity[a.Name]; ok {
-			active = " · aktiv " + formatAgeWord(act)
+		if observed && observation.ActivityKnown {
+			active = " · aktiv " + formatAgeWord(observation.Activity)
 		}
 		add(statusStyle(st).Render(st.Icon()+" "+st.Label()) + styleDim.Render(" · seit "+formatAge(a.CreatedAt)+active) + wtNote)
-		if d := m.poll.details[a.Name]; d != "" {
-			add(styleAgents.Render("◍ " + d))
+		if observed && observation.Detail != "" {
+			add(styleAgents.Render("◍ " + observation.Detail))
+		}
+		if !observed || observation.Availability != core.ObservationAvailable {
+			add(styleDim.Render("? Runtime-Status nicht vollständig verfügbar"))
 		}
 		add(styleDim.Render(shortPath(a.Dir)))
 		add("")
@@ -335,23 +352,29 @@ func (m model) detailContent(w, h int) ([]string, int) {
 		add(styleTitle.Render(proj.Name))
 		add(styleDim.Render(shortPath(proj.Path)))
 		add("")
-		m.addRepoGit(proj.Path, add)
+		m.addRepoGit(*proj, add)
 	}
 	add("")
 
-	if a != nil && m.poll.preview != "" {
+	if a != nil {
+		observation, observed := m.observationFor(*a)
+		previewKnown := observed && observation.ContentKnown
+		preview := observation.Content
 		remaining := h - len(lines) - 1
-		if remaining > 3 {
+		if remaining > 3 && previewKnown && preview != "" {
 			previewStart = len(lines)
 			label := "Terminal · klick zum Öffnen "
 			add(styleSection.Render("Terminal") + styleDim.Render(" · klick zum Öffnen "+strings.Repeat("─", max(0, w-len([]rune(label))-9))))
-			pv := strings.Split(strings.TrimRight(m.poll.preview, "\n"), "\n")
+			pv := strings.Split(strings.TrimRight(preview, "\n"), "\n")
 			if len(pv) > remaining {
 				pv = pv[len(pv)-remaining:]
 			}
 			for _, l := range pv {
 				add(styleDim.Render(strings.ReplaceAll(l, "\t", "  ")))
 			}
+		} else if remaining > 3 && observed && observation.Presence == core.SessionPresencePresent && !previewKnown {
+			add(styleSection.Render("Terminal"))
+			add(" " + styleDim.Render("Inhalt unbekannt"))
 		}
 	}
 	if len(lines) > h {
@@ -360,90 +383,290 @@ func (m model) detailContent(w, h int) ([]string, int) {
 	return lines, previewStart
 }
 
-func (m model) addAgentGit(a *Agent, w int, add func(string)) {
-	git, ok := m.poll.git[a.Dir]
-	if !ok || !git.IsRepo {
-		add(styleSection.Render("Git"))
-		add(" " + styleDim.Render("kein Git-Repo"))
-		return
+type tuiRepositoryFacts struct {
+	presence   core.RepositoryKnowledge
+	problem    string
+	checkout   core.RepositoryFact[core.RepositoryCheckout]
+	changes    core.RepositoryFact[core.RepositoryWorkingChanges]
+	divergence core.RepositoryFact[core.RepositoryDivergence]
+	delta      *core.RepositoryBaselineDelta
+}
+
+func (m model) repositoryFactsForAgent(session Agent) tuiRepositoryFacts {
+	key := sessionKey(session)
+	if inspection, ok := m.poll.inspections[key]; ok {
+		return tuiRepositoryFacts{
+			presence:   inspection.Presence,
+			problem:    repositoryProblemMessage(inspection.Problem),
+			checkout:   inspection.Checkout,
+			changes:    inspection.Changes,
+			divergence: inspection.Divergence,
+			delta:      inspection.Delta,
+		}
 	}
-	sc := m.poll.session[a.Name]
+	if problem, ok := m.poll.inspectionProblem[key]; ok {
+		return tuiRepositoryFacts{presence: core.RepositoryUnknown, problem: problem}
+	}
+	if worktree, ok := surveyedWorktree(*m.state, m.poll.repositories, session); ok {
+		return tuiRepositoryFacts{
+			presence:   core.RepositoryKnown,
+			checkout:   worktree.Checkout,
+			changes:    worktree.Changes,
+			divergence: worktree.Divergence,
+		}
+	}
+	if repository, ok := surveyProject(*m.state, m.poll.repositories, session); ok {
+		problem := repositoryProblemMessage(repository.Problem)
+		if problem == "" && repository.Worktrees.Problem != nil {
+			problem = repository.Worktrees.Problem.Message
+		}
+		return tuiRepositoryFacts{presence: repository.Presence, problem: problem}
+	}
+	return tuiRepositoryFacts{presence: core.RepositoryUnknown, problem: m.poll.repositoryProblem}
+}
+
+func (m model) repositoryFactsForProject(project Project) tuiRepositoryFacts {
+	repository, ok := surveyedProject(m.poll.repositories, project)
+	if !ok {
+		return tuiRepositoryFacts{presence: core.RepositoryUnknown, problem: m.poll.repositoryProblem}
+	}
+	facts := tuiRepositoryFacts{
+		presence: repository.Presence,
+		problem:  repositoryProblemMessage(repository.Problem),
+	}
+	if repository.Presence != core.RepositoryKnown || !repository.Worktrees.Known() {
+		if facts.problem == "" && repository.Worktrees.Problem != nil {
+			facts.problem = repository.Worktrees.Problem.Message
+		}
+		return facts
+	}
+	var selected *core.RepositoryWorktree
+	for i := range repository.Worktrees.Value {
+		worktree := &repository.Worktrees.Value[i]
+		if samePath(worktree.Path, project.Path) {
+			selected = worktree
+			break
+		}
+		if selected == nil && worktree.Main {
+			selected = worktree
+		}
+	}
+	if selected == nil {
+		facts.presence = core.RepositoryUnknown
+		facts.problem = "Project checkout is missing from repository Survey"
+		return facts
+	}
+	facts.checkout = selected.Checkout
+	facts.changes = selected.Changes
+	facts.divergence = selected.Divergence
+	return facts
+}
+
+func repositoryProblemMessage(problem *core.RepositoryProblem) string {
+	if problem == nil {
+		return ""
+	}
+	return problem.Message
+}
+
+type sessionChangeKnowledge int
+
+const (
+	sessionChangesUnknown sessionChangeKnowledge = iota
+	sessionChangesClean
+	sessionChangesDirty
+	sessionChangesNotRepository
+)
+
+type tuiSessionChangeFacts struct {
+	baseline bool
+	paths    core.RepositoryFact[[]string]
+	commits  core.RepositoryFact[int]
+}
+
+func sessionChanges(session Agent, repository tuiRepositoryFacts) tuiSessionChangeFacts {
+	result := tuiSessionChangeFacts{baseline: session.BaseCommit != ""}
+	if result.baseline {
+		if repository.delta != nil {
+			result.paths = repository.delta.Paths
+			result.commits = repository.delta.Commits
+		}
+		return result
+	}
+	if repository.changes.Known() {
+		result.paths = core.RepositoryFact[[]string]{
+			State: core.RepositoryKnown,
+			Value: append([]string(nil), repository.changes.Value.Paths...),
+		}
+	}
+	return result
+}
+
+func (m model) sessionChangeMark(session Agent) sessionChangeKnowledge {
+	repository := m.repositoryFactsForAgent(session)
+	if repository.presence == core.RepositoryNotRepository {
+		return sessionChangesNotRepository
+	}
+	if repository.presence != core.RepositoryKnown {
+		return sessionChangesUnknown
+	}
+	changes := sessionChanges(session, repository)
+	if changes.paths.Known() && len(changes.paths.Value) > 0 {
+		return sessionChangesDirty
+	}
+	if changes.commits.Known() && changes.commits.Value > 0 {
+		return sessionChangesDirty
+	}
+	if changes.baseline && (!changes.paths.Known() || !changes.commits.Known()) {
+		return sessionChangesUnknown
+	}
+	if changes.paths.Known() {
+		return sessionChangesClean
+	}
+	return sessionChangesUnknown
+}
+
+func (m model) addAgentGit(session *Agent, w int, add func(string)) {
+	repository := m.repositoryFactsForAgent(*session)
 	label := "Git · diese Session"
-	if !sc.Known {
-		label = "Git · gesamt (Session-Start unbekannt)"
+	if session.BaseCommit == "" {
+		label = "Git · Arbeitsbaum (Session-Start unbekannt)"
 	}
 	add(styleSection.Render(label))
-	ab := ""
-	if git.Ahead > 0 {
-		ab += fmt.Sprintf(" ↑%d", git.Ahead)
+	if !renderRepositoryPresence(repository, add) {
+		return
 	}
-	if git.Behind > 0 {
-		ab += fmt.Sprintf(" ↓%d", git.Behind)
-	}
-	add(" " + styleText.Render(git.Branch) + styleWarn.Render(ab))
-	if len(sc.Files) == 0 && sc.Commits == 0 {
+	renderRepositoryHead(repository, add)
+
+	changes := sessionChanges(*session, repository)
+	if changes.baseline && changes.paths.Known() && changes.commits.Known() &&
+		len(changes.paths.Value) == 0 && changes.commits.Value == 0 {
 		add(" " + styleOK.Render("✓ nichts geändert"))
 		return
 	}
-	summary := []string{}
-	if sc.Commits > 0 {
+	if !changes.baseline && changes.paths.Known() && len(changes.paths.Value) == 0 {
+		add(" " + styleOK.Render("✓ Arbeitsbaum sauber"))
+		return
+	}
+
+	var known []string
+	if changes.commits.Known() && changes.commits.Value > 0 {
 		word := "Commits"
-		if sc.Commits == 1 {
+		if changes.commits.Value == 1 {
 			word = "Commit"
 		}
-		summary = append(summary, fmt.Sprintf("%d %s", sc.Commits, word))
+		known = append(known, fmt.Sprintf("%d %s", changes.commits.Value, word))
 	}
-	if len(sc.Files) > 0 {
+	if changes.paths.Known() && len(changes.paths.Value) > 0 {
 		word := "Dateien"
-		if len(sc.Files) == 1 {
+		if len(changes.paths.Value) == 1 {
 			word = "Datei"
 		}
-		summary = append(summary, fmt.Sprintf("%d %s geändert", len(sc.Files), word))
+		known = append(known, fmt.Sprintf("%d %s geändert", len(changes.paths.Value), word))
 	}
-	add(" " + styleWarn.Render("± "+strings.Join(summary, " · ")))
+	if len(known) > 0 {
+		add(" " + styleWarn.Render("± "+strings.Join(known, " · ")))
+	}
+	var unknown []string
+	if !changes.paths.Known() {
+		unknown = append(unknown, "Dateien")
+	}
+	if changes.baseline && !changes.commits.Known() {
+		unknown = append(unknown, "Commits")
+	}
+	if len(unknown) > 0 {
+		add(" " + styleDim.Render("? "+strings.Join(unknown, " und ")+" unbekannt"))
+	}
 	maxFiles := 6
-	for i, f := range sc.Files {
+	for i, file := range changes.paths.Value {
 		if i == maxFiles {
-			add("   " + styleDim.Render(fmt.Sprintf("… +%d weitere", len(sc.Files)-maxFiles)))
+			add("   " + styleDim.Render(fmt.Sprintf("… +%d weitere", len(changes.paths.Value)-maxFiles)))
 			break
 		}
-		add("   " + styleDim.Render(trunc(f, w-4)))
+		add("   " + styleDim.Render(trunc(file, w-4)))
 	}
 }
 
-func (m model) addRepoGit(dir string, add func(string)) {
+func (m model) addRepoGit(project Project, add func(string)) {
 	add(styleSection.Render("Git"))
-	git, ok := m.poll.git[dir]
-	if !ok || !git.IsRepo {
-		add(" " + styleDim.Render("kein Git-Repo"))
+	repository := m.repositoryFactsForProject(project)
+	if !renderRepositoryPresence(repository, add) {
 		return
 	}
-	ab := ""
-	if git.Ahead > 0 {
-		ab += fmt.Sprintf(" ↑%d", git.Ahead)
+	renderRepositoryHead(repository, add)
+	if !repository.changes.Known() {
+		add(" " + styleDim.Render("? Arbeitsbaum-Status unbekannt"))
+		return
 	}
-	if git.Behind > 0 {
-		ab += fmt.Sprintf(" ↓%d", git.Behind)
-	}
-	add(" " + styleText.Render(git.Branch) + styleWarn.Render(ab))
-	if git.Clean() {
+	changes := repository.changes.Value
+	if changes.Clean() {
 		add(" " + styleOK.Render("✓ sauber"))
-	} else {
-		parts := []string{}
-		if git.Staged > 0 {
-			parts = append(parts, fmt.Sprintf("%d staged", git.Staged))
-		}
-		if git.Modified > 0 {
-			parts = append(parts, fmt.Sprintf("%d geändert", git.Modified))
-		}
-		if git.Untracked > 0 {
-			parts = append(parts, fmt.Sprintf("%d neu", git.Untracked))
-		}
-		add(" " + styleWarn.Render("± "+strings.Join(parts, " · ")))
+		return
 	}
-	if git.LastMsg != "" {
-		add(" " + styleDim.Render("⌥ "+git.LastMsg))
+	parts := []string{}
+	if changes.Staged > 0 {
+		parts = append(parts, fmt.Sprintf("%d staged", changes.Staged))
 	}
+	if changes.Modified > 0 {
+		parts = append(parts, fmt.Sprintf("%d geändert", changes.Modified))
+	}
+	if changes.Untracked > 0 {
+		parts = append(parts, fmt.Sprintf("%d neu", changes.Untracked))
+	}
+	if changes.Conflicted > 0 {
+		parts = append(parts, fmt.Sprintf("%d Konflikte", changes.Conflicted))
+	}
+	add(" " + styleWarn.Render("± "+strings.Join(parts, " · ")))
+}
+
+func renderRepositoryPresence(repository tuiRepositoryFacts, add func(string)) bool {
+	switch repository.presence {
+	case core.RepositoryKnown:
+		return true
+	case core.RepositoryNotRepository:
+		add(" " + styleDim.Render("kein Git-Repo"))
+	default:
+		add(" " + styleDim.Render("? Git-Status unbekannt"))
+	}
+	return false
+}
+
+func renderRepositoryHead(repository tuiRepositoryFacts, add func(string)) {
+	checkout := "? Checkout unbekannt"
+	checkoutStyle := styleDim
+	if repository.checkout.Known() {
+		checkoutStyle = styleText
+		switch repository.checkout.Value.Kind {
+		case core.RepositoryBranchCheckout:
+			checkout = repository.checkout.Value.Branch
+			if checkout == "" {
+				checkout = "? Branch unbekannt"
+				checkoutStyle = styleDim
+			}
+		case core.RepositoryDetached:
+			checkout = "detached HEAD"
+		case core.RepositoryUnborn:
+			checkout = "unborn HEAD"
+		case core.RepositoryBare:
+			checkout = "bare Repository"
+		default:
+			checkout = "? Checkout unbekannt"
+			checkoutStyle = styleDim
+		}
+	}
+	divergence := styleDim.Render(" ↑↓?")
+	if repository.divergence.Known() {
+		value := repository.divergence.Value
+		divergence = ""
+		if value.Ahead > 0 {
+			divergence += fmt.Sprintf(" ↑%d", value.Ahead)
+		}
+		if value.Behind > 0 {
+			divergence += fmt.Sprintf(" ↓%d", value.Behind)
+		}
+		divergence = styleWarn.Render(divergence)
+	}
+	add(" " + checkoutStyle.Render(checkout) + divergence)
 }
 
 func (m model) renderFooter() string {

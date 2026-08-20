@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -263,7 +264,10 @@ func TestSpecificationReferenceAndStartTokenAreStableAndControlled(t *testing.T)
 	if err != nil {
 		t.Fatalf("ResolveStart() error = %v", err)
 	}
-	wantDirectory := filepath.Join(secondRoot, "specs", "001-login")
+	wantDirectory, err := filepath.EvalSymlinks(filepath.Join(secondRoot, "specs", "001-login"))
+	if err != nil {
+		t.Fatalf("canonicalize expected Specification directory: %v", err)
+	}
 	if intent.SpecificationDirectory != wantDirectory || intent.Reference != second.Specifications[0].Reference {
 		t.Fatalf("ResolveStart() = %#v, want directory %q", intent, wantDirectory)
 	}
@@ -305,19 +309,77 @@ func TestSpecificationLifecycleOnlyUsesTerminalFactsForDone(t *testing.T) {
 	}
 }
 
-func TestBuildBoardPreservesRepositoryDiagnosticsWithPartialResult(t *testing.T) {
+func TestUnreadableSpecificationTasksRemainPartialAndUnknownOnBoard(t *testing.T) {
 	root := t.TempDir()
-	writeSpecificationTestFile(t, root, []string{"specs", "001-login", "tasks.md"}, "- [ ] Implement\n")
-	state := &State{
-		Projects: []Project{{ID: "project-1", Name: "demo", Path: root}},
-		Agents:   []Session{{Name: "001-login", Project: "demo", Dir: root}},
+	tasksPath := writeSpecificationTestFile(t, root, []string{"specs", "001-login", "tasks.md"}, "- [ ] Implement\n")
+	filesystem := faultSpecificationsFilesystem{
+		specificationsFilesystem: osSpecificationsFilesystem{},
+		readFileErrors: map[string]error{
+			filepath.Clean(tasksPath): errors.New("tasks unreadable"),
+		},
 	}
-	board := BuildBoard(state, "demo")
-	if len(board.Items) != 1 {
-		t.Fatalf("BuildBoard() lost partial result: %#v", board)
+	discovery, err := newSpecifications(filesystem, builtinSpecificationSourceAdapters()...).Discover(
+		context.Background(),
+		Project{ID: "project-1", Name: "demo", Path: root},
+		SpecificationQuery{Sources: []SpecificationSourceKind{SpecificationSpecKit}},
+	)
+	if err != nil {
+		t.Fatalf("Discover() error = %v", err)
 	}
-	if !strings.Contains(board.Err, "Worktree-Zuordnung") {
-		t.Fatalf("BuildBoard() diagnostics = %q", board.Err)
+	specification := specificationByID(t, discovery, "001-login")
+	if specification.Availability != SpecificationPartial || specification.Lifecycle.Stage != SpecificationStageUnknown {
+		t.Fatalf("unreadable tasks Specification = %#v", specification)
+	}
+	item := boardItemFromSpecification(specification, nil)
+	if item.Column != ColUnknown || len(item.Problems) == 0 {
+		t.Fatalf("Board projection hid unknown/partial state: %#v", item)
+	}
+}
+
+func TestSessionSpecificationReferenceJSONCompatibility(t *testing.T) {
+	var legacy Session
+	if err := json.Unmarshal([]byte(`{"id":"session-1","name":"legacy","project":"demo","dir":"/tmp/demo"}`), &legacy); err != nil {
+		t.Fatalf("decode legacy Session: %v", err)
+	}
+	if legacy.SpecificationRef != "" {
+		t.Fatalf("legacy Session unexpectedly gained SpecificationRef %q", legacy.SpecificationRef)
+	}
+
+	want := SpecificationRef("specification:v1:project-1:spec-kit:current:001-login")
+	encoded, err := json.Marshal(Session{ID: "session-2", Name: "worker", SpecificationRef: want})
+	if err != nil {
+		t.Fatalf("encode linked Session: %v", err)
+	}
+	var decoded Session
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("decode linked Session: %v", err)
+	}
+	if decoded.SpecificationRef != want {
+		t.Fatalf("SpecificationRef round trip = %q, want %q", decoded.SpecificationRef, want)
+	}
+}
+
+func TestSpecificationReferenceSurvivesLifecycleAndRegistry(t *testing.T) {
+	lifecycle, _, registry, _ := lifecycleHarness(t)
+	project := registerLifecycleProject(t, registry)
+	reference := SpecificationRef("specification:v1:project-1:spec-kit:current:001-login")
+	result, err := lifecycle.Provision(context.Background(), SessionProvision{
+		Project: project, Name: "spec-worker", Directory: project.Path,
+		SpecificationRef: reference,
+	})
+	if err != nil {
+		t.Fatalf("Provision() error = %v", err)
+	}
+	if result.Session.SpecificationRef != reference {
+		t.Fatalf("Provision() SpecificationRef = %q, want %q", result.Session.SpecificationRef, reference)
+	}
+	snapshot, err := registry.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Registry Snapshot() error = %v", err)
+	}
+	sessions := snapshot.State().Agents
+	if len(sessions) != 1 || sessions[0].SpecificationRef != reference {
+		t.Fatalf("Registry Session association = %#v", sessions)
 	}
 }
 

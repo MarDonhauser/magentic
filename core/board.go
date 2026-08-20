@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -65,6 +64,7 @@ const (
 	ColActive  = "active"
 	ColReview  = "review"
 	ColDone    = "done"
+	ColUnknown = "unknown"
 )
 
 var taskLineRe = regexp.MustCompile(`^\s*[-*]\s+\[([ xX~/-])\]\s+(.*)$`)
@@ -156,9 +156,6 @@ func boardItemFromSpecification(specification Specification, agents []agentCtx) 
 		Updated:    specificationUpdatedString(specification.UpdatedAt),
 		Problems:   formatSpecificationProblems(specification.Problems),
 	}
-	if specification.Lifecycle.Stage == SpecificationStageUnknown {
-		item.Column = ColBacklog
-	}
 	for _, task := range specification.Tasks {
 		item.Tasks = append(item.Tasks, BoardTask{
 			Text:    task.Text,
@@ -167,7 +164,7 @@ func boardItemFromSpecification(specification Specification, agents []agentCtx) 
 		})
 	}
 	for _, agent := range agents {
-		if specification.Lifecycle.Terminal || !matchesItem(agent, specification.ID, "") {
+		if specification.Lifecycle.Terminal || !matchesItem(agent, specification.Reference) {
 			continue
 		}
 		item.Agents = append(item.Agents, agent.name)
@@ -182,28 +179,33 @@ func boardItemFromSpecification(specification Specification, agents []agentCtx) 
 }
 
 type agentCtx struct {
-	name   string
-	branch string
-	dir    string
+	name             string
+	branch           string
+	dir              string
+	specificationRef SpecificationRef
 }
 
 func liveAgentContext(ctx context.Context, state *State, project Project) ([]agentCtx, []string) {
 	var sessions []Session
 	for _, session := range state.AgentsFor(project.Name) {
-		if session.LaterAt.IsZero() {
+		if session.LaterAt.IsZero() && session.SpecificationRef != "" {
 			sessions = append(sessions, session)
 		}
 	}
 	if len(sessions) == 0 {
 		return nil, nil
 	}
+	sessions, observationProblems := liveSpecificationSessions(sessions, Observe(ctx, sessions))
+	if len(sessions) == 0 {
+		return nil, observationProblems
+	}
 
 	survey, err := NewRepositories().Survey(ctx, []Project{project})
 	if err != nil {
-		return agentContextWithoutBranches(sessions), []string{"Worktree-Zuordnung: " + err.Error()}
+		return agentContextWithoutBranches(sessions), append(observationProblems, "Worktree-Zuordnung: "+err.Error())
 	}
 	if len(survey.Projects) != 1 {
-		return agentContextWithoutBranches(sessions), []string{"Worktree-Zuordnung: Repository-Ergebnis fehlt"}
+		return agentContextWithoutBranches(sessions), append(observationProblems, "Worktree-Zuordnung: Repository-Ergebnis fehlt")
 	}
 	observed := survey.Projects[0]
 	if observed.Presence != RepositoryKnown || !observed.Worktrees.Known() {
@@ -211,13 +213,13 @@ func liveAgentContext(ctx context.Context, state *State, project Project) ([]age
 		if observed.Problem != nil {
 			message = observed.Problem.Message
 		}
-		return agentContextWithoutBranches(sessions), []string{"Worktree-Zuordnung: " + message}
+		return agentContextWithoutBranches(sessions), append(observationProblems, "Worktree-Zuordnung: "+message)
 	}
 
 	var result []agentCtx
-	var problems []string
+	problems := observationProblems
 	for _, session := range sessions {
-		agent := agentCtx{name: session.Name, dir: session.Dir}
+		agent := agentCtx{name: session.Name, dir: session.Dir, specificationRef: session.SpecificationRef}
 		if worktree, found := repositoryWorktreeForDirectory(observed.Worktrees.Value, session.Dir); found {
 			if worktree.Checkout.Known() && worktree.Checkout.Value.Kind == RepositoryBranchCheckout {
 				agent.branch = worktree.Checkout.Value.Branch
@@ -232,10 +234,39 @@ func liveAgentContext(ctx context.Context, state *State, project Project) ([]age
 	return result, problems
 }
 
+func liveSpecificationSessions(sessions []Session, snapshot ObservationSnapshot) ([]Session, []string) {
+	byID := make(map[SessionID]SessionObservation, len(snapshot.Sessions))
+	for _, observation := range snapshot.Sessions {
+		byID[observation.SessionID] = observation
+	}
+	var live []Session
+	var problems []string
+	for _, session := range sessions {
+		if session.SpecificationRef == "" {
+			continue
+		}
+		observation, found := byID[session.ID]
+		if !found || observation.Availability == ObservationUnavailable || observation.Presence == SessionPresenceUnknown {
+			problems = append(problems, "Session-Beobachtung für "+session.Name+": Laufzeit unbekannt")
+			continue
+		}
+		if observation.Presence == SessionPresenceAbsent {
+			continue
+		}
+		switch observation.Status {
+		case StatusRunning, StatusAgents, StatusBlocked, StatusIdle:
+			live = append(live, session)
+		case StatusUnknown:
+			problems = append(problems, "Session-Beobachtung für "+session.Name+": Status unbekannt")
+		}
+	}
+	return live, problems
+}
+
 func agentContextWithoutBranches(sessions []Session) []agentCtx {
 	result := make([]agentCtx, 0, len(sessions))
 	for _, session := range sessions {
-		result = append(result, agentCtx{name: session.Name, dir: session.Dir})
+		result = append(result, agentCtx{name: session.Name, dir: session.Dir, specificationRef: session.SpecificationRef})
 	}
 	return result
 }
@@ -259,28 +290,8 @@ func boardColumn(item BoardItem) string {
 	return string(lifecycle.Stage)
 }
 
-func matchesItem(agent agentCtx, id, _ string) bool {
-	slug := normalizeSlug(id)
-	if slug == "" {
-		return false
-	}
-	if normalizeSlug(agent.branch) == slug || strings.Contains(normalizeSlug(agent.branch), slug) {
-		return true
-	}
-	if normalizeSlug(filepath.Base(agent.dir)) == slug {
-		return true
-	}
-	return normalizeSlug(agent.name) == slug
-}
-
-func normalizeSlug(value string) string {
-	var builder strings.Builder
-	for _, character := range strings.ToLower(value) {
-		if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') {
-			builder.WriteRune(character)
-		}
-	}
-	return builder.String()
+func matchesItem(agent agentCtx, reference SpecificationRef) bool {
+	return reference != "" && agent.specificationRef == reference
 }
 
 func parseTasks(path string) []BoardTask {

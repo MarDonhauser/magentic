@@ -27,22 +27,27 @@ func timelineEntries(page core.HistoryEventPage) []TimelineEntry {
 		}
 		occurredAt := event.OccurredAt.Value
 		local := occurredAt.In(time.Local)
-		project := "ohne Projekt"
+		project := "Projekt unbekannt"
+		projectKnown := false
+		attributionProblem := event.Attribution.ProjectName.Reason
 		if event.Attribution.ProjectName.State == core.HistoryFactKnown && event.Attribution.ProjectName.Value != "" {
 			project = event.Attribution.ProjectName.Value
+			projectKnown = true
+			attributionProblem = ""
+		} else if event.Attribution.ProjectName.State == core.HistoryFactKnown {
+			project = "ohne Projekt"
+			projectKnown = true
+			attributionProblem = ""
 		}
 		agent := ""
 		if event.Attribution.SessionName.State == core.HistoryFactKnown {
 			agent = event.Attribution.SessionName.Value
 		}
 		out = append(out, TimelineEntry{
-			Agent:   agent,
-			Project: project,
-			Source:  event.Provider.Label(),
-			Day:     tlWeekdays[local.Weekday()] + " " + local.Format("02.01."),
-			Time:    local.Format("15:04"),
-			TimeRaw: occurredAt.UTC().Format(time.RFC3339Nano),
-			Text:    capStr(event.Text.Value, 500),
+			Agent: agent, Project: project, ProjectKnown: projectKnown, AttributionProblem: attributionProblem,
+			Source: event.Provider.Label(), Day: tlWeekdays[local.Weekday()] + " " + local.Format("02.01."),
+			Time: local.Format("15:04"), TimeRaw: occurredAt.UTC().Format(time.RFC3339Nano),
+			Text: capStr(event.Text.Value, 500),
 		})
 	}
 	return out

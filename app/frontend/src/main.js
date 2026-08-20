@@ -398,7 +398,12 @@ function setComposerHint(message, reset = true) {
 }
 
 function updateTermComposer(a, visual, gone) {
-  termStateEl.className = '';
+  const activeStatus = a?.status;
+  const hideState = !gone
+    && (a?.term || activeStatus === 'term')
+    && !['blocked', 'running', 'agents'].includes(activeStatus);
+  termStateEl.className = hideState ? 'is-hidden' : '';
+  termsEl.classList.toggle('without-session-state', hideState);
   let stateIcon = 'check';
   let title = 'Bereit für deine nächste Nachricht';
   let detail = 'Nutze den Composer oder arbeite direkt im Terminal weiter.';
@@ -418,13 +423,9 @@ function updateTermComposer(a, visual, gone) {
     stateIcon = 'clock';
     title = 'Session arbeitet';
     detail = 'Neue Nachrichten werden an dieselbe laufende Session gesendet.';
-  } else if (a?.term || a?.status === 'term') {
-    stateIcon = 'terminal';
-    title = 'Terminal bereit';
-    detail = 'Befehle kannst du hier senden oder direkt im Terminal eingeben.';
   }
 
-  termStateIconEl.innerHTML = stateIcon === 'terminal' ? developerIcon('bash') : icon(stateIcon);
+  termStateIconEl.innerHTML = icon(stateIcon);
   termStateTitleEl.textContent = title;
   termStateDetailEl.textContent = detail;
   termPromptEl.placeholder = activeTerm ? `Nachricht an ${activeTerm} …` : 'Nachricht an die Session …';
@@ -2130,8 +2131,8 @@ async function runSearch() {
     if (!searchHits.length) { res.innerHTML = '<div class="none">keine Treffer</div>'; return; }
     res.innerHTML = searchHits.map((h, i) =>
       `<div class="hit" data-hit="${i}">` +
-      `<div class="hit-meta"><span class="hit-proj">${esc(h.project)}</span>` +
-      `<span class="hit-role ${h.role}">${h.role === 'user' ? 'Du' : `${developerIcon('claude')}Claude`}</span>` +
+      `<div class="hit-meta"><span class="hit-proj${h.projectKnown ? '' : ' unknown'}" title="${esc(h.attributionProblem || '')}">${esc(h.project)}</span>` +
+      `<span class="hit-role ${h.role}">${h.role === 'user' ? 'Du' : `${providerIcon(h.provider)}${esc(h.provider || 'Coding-Agent')}`}</span>` +
       `<span class="hit-time">${esc(h.time)}</span></div>` +
       `<div class="hit-snippet">${highlightQuery(h.snippet, q)}</div></div>`
     ).join('');
@@ -2146,7 +2147,7 @@ $('search-results').addEventListener('click', e => {
   const hit = e.target.closest('.hit[data-hit]');
   if (!hit) return;
   const h = searchHits[parseInt(hit.dataset.hit)];
-  if (h) showModal(`${h.project} · ${h.role === 'user' ? 'Du' : 'Claude'} · ${h.time}`, h.full, false);
+  if (h) showModal(`${h.project} · ${h.role === 'user' ? 'Du' : (h.provider || 'Coding-Agent')} · ${h.time}`, h.full, false);
 });
 
 let tlEntries = [];
@@ -2211,7 +2212,7 @@ function renderTimeline() {
     const who = en.agent ? `<span class="tl-agent">${esc(en.agent)}</span>` : '';
     html += `<button type="button" class="tl-row" data-i="${i}" title="Session öffnen oder Prompt anzeigen">` +
       `<span class="tl-time">${esc(en.time)}</span>` +
-      `<div class="tl-main"><div class="tl-meta">${source}${who}<span class="tl-proj">${esc(en.project)}</span></div>` +
+      `<div class="tl-main"><div class="tl-meta">${source}${who}<span class="tl-proj${en.projectKnown ? '' : ' unknown'}" title="${esc(en.attributionProblem || '')}">${esc(en.project)}</span></div>` +
       `<div class="tl-text">${esc(en.text)}</div></div></button>`;
   });
   const st = body.scrollTop;

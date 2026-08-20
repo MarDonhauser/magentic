@@ -82,15 +82,16 @@ type LifecycleSnapshot struct {
 }
 
 type SessionProvision struct {
-	Project        Project
-	Name           string
-	Directory      string
-	Worktree       bool
-	CreateWorktree bool
-	Kind           SessionKind
-	Presentation   SessionPresentation
-	Purpose        SessionPurpose
-	InitialPrompt  string
+	Project          Project
+	Name             string
+	Directory        string
+	Worktree         bool
+	CreateWorktree   bool
+	Kind             SessionKind
+	Presentation     SessionPresentation
+	Purpose          SessionPurpose
+	SpecificationRef SpecificationRef
+	InitialPrompt    string
 }
 
 type SessionLifecycleResult struct {
@@ -224,7 +225,7 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 		ID: SessionID(NewUUID()), Name: name, ProjectID: request.Project.ID,
 		Project: request.Project.Name, Dir: filepath.Clean(request.Directory),
 		Worktree: request.Worktree || request.CreateWorktree, SessionKind: kind,
-		Presentation: presentation, Purpose: purpose,
+		Presentation: presentation, Purpose: purpose, SpecificationRef: request.SpecificationRef,
 		RuntimeName: SessionName(name), CreatedAt: now,
 	}
 	if request.Directory == "" && !request.CreateWorktree {

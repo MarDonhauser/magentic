@@ -170,6 +170,33 @@ func TestRepositoriesResolveWorktreeRefreshesAndKeepsPathsPrivate(t *testing.T) 
 	}
 }
 
+func TestRepositoriesWorktreeDiffKeepsFailureDistinctFromClean(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "topic")
+	t.Run("known diff", func(t *testing.T) {
+		runner := &repositoriesRecordingRunner{t: t, steps: []repositoriesRunnerStep{
+			{dir: dir, args: []string{"status", "--short"}, output: " M tracked.go\n?? new.go\n"},
+			{dir: dir, args: []string{"diff", "HEAD"}, output: "diff --git a/tracked.go b/tracked.go\n"},
+			{dir: dir, args: []string{"ls-files", "--others", "--exclude-standard"}, output: "new.go\n"},
+		}}
+		fact := newRepositories(runner).WorktreeDiff(context.Background(), RepositoryWorktree{Path: dir})
+		runner.assertDone()
+		if !fact.Known() || !strings.Contains(fact.Value, "tracked.go") || !strings.Contains(fact.Value, "+ new.go") {
+			t.Fatalf("WorktreeDiff() = %#v", fact)
+		}
+	})
+
+	t.Run("command failure", func(t *testing.T) {
+		runner := &repositoriesRecordingRunner{t: t, steps: []repositoriesRunnerStep{{
+			dir: dir, args: []string{"status", "--short"}, err: errors.New("git unavailable"),
+		}}}
+		fact := newRepositories(runner).WorktreeDiff(context.Background(), RepositoryWorktree{Path: dir})
+		runner.assertDone()
+		if fact.Known() || fact.Problem == nil || fact.Value == "Keine Änderungen." {
+			t.Fatalf("WorktreeDiff failure became clean: %#v", fact)
+		}
+	})
+}
+
 func TestRepositoriesSurveyDistinguishesUnknownFromNotRepository(t *testing.T) {
 	projectPath := filepath.Join(t.TempDir(), "project")
 	tests := []struct {

@@ -54,7 +54,15 @@ func (a *App) WorktreeDiff(project, reference string) (string, error) {
 }
 
 func (a *App) SessionPreview(name string) string {
-	sn := core.SessionName(name)
+	st, err := core.LoadState()
+	if err != nil {
+		return ""
+	}
+	session := st.AgentByName(name)
+	if session == nil {
+		return ""
+	}
+	sn := session.TmuxName()
 	if !core.TmuxHasSession(sn) {
 		return ""
 	}
@@ -87,6 +95,7 @@ func (a *App) SessionLinks(name string) ([]LinkInfo, error) {
 	}
 	seen := map[string]bool{}
 	var out []LinkInfo
+	runtimeName := ""
 	add := func(l LinkInfo) {
 		if seen[l.URL] {
 			return
@@ -95,6 +104,7 @@ func (a *App) SessionLinks(name string) ([]LinkInfo, error) {
 		out = append(out, l)
 	}
 	if session := st.AgentByName(name); session != nil {
+		runtimeName = session.TmuxName()
 		history, err := core.OpenWorkHistory(core.WorkHistoryConfig{})
 		if err != nil {
 			return nil, err
@@ -122,9 +132,8 @@ func (a *App) SessionLinks(name string) ([]LinkInfo, error) {
 			add(LinkInfo{URL: link.URL, Time: when})
 		}
 	}
-	sn := core.SessionName(name)
-	if core.TmuxHasSession(sn) {
-		for _, u := range extractURLs(core.TmuxCapturePaneJoined(sn, 3000)) {
+	if runtimeName != "" && core.TmuxHasSession(runtimeName) {
+		for _, u := range extractURLs(core.TmuxCapturePaneJoined(runtimeName, 3000)) {
 			add(LinkInfo{URL: u})
 		}
 	}
@@ -135,12 +144,15 @@ func (a *App) SessionLinks(name string) ([]LinkInfo, error) {
 }
 
 type SearchHit struct {
-	Project string `json:"project"`
-	Role    string `json:"role"`
-	Time    string `json:"time"`
-	TimeRaw string `json:"timeRaw"`
-	Snippet string `json:"snippet"`
-	Full    string `json:"full"`
+	Project            string `json:"project"`
+	ProjectKnown       bool   `json:"projectKnown"`
+	AttributionProblem string `json:"attributionProblem,omitempty"`
+	Provider           string `json:"provider"`
+	Role               string `json:"role"`
+	Time               string `json:"time"`
+	TimeRaw            string `json:"timeRaw"`
+	Snippet            string `json:"snippet"`
+	Full               string `json:"full"`
 }
 
 func (a *App) SearchTranscripts(query string) ([]SearchHit, error) {
@@ -157,10 +169,9 @@ func (a *App) SearchTranscripts(query string) ([]SearchHit, error) {
 		return nil, err
 	}
 	page, err := history.Events(context.Background(), core.HistoryAssociationsFromState(st), core.HistoryEventQuery{
-		Providers: []core.HistoryProvider{core.HistoryProviderClaude},
-		Kinds:     []core.HistoryEventKind{core.HistoryEventPrompt, core.HistoryEventOutput},
-		Text:      query,
-		Limit:     80,
+		Kinds: []core.HistoryEventKind{core.HistoryEventPrompt, core.HistoryEventOutput},
+		Text:  query,
+		Limit: 80,
 	})
 	if err != nil {
 		return nil, err
@@ -176,9 +187,17 @@ func (a *App) SearchTranscripts(query string) ([]SearchHit, error) {
 		if idx < 0 {
 			continue
 		}
-		project := "ohne Projekt"
+		project := "Projekt unbekannt"
+		projectKnown := false
+		attributionProblem := event.Attribution.ProjectName.Reason
 		if event.Attribution.ProjectName.State == core.HistoryFactKnown && event.Attribution.ProjectName.Value != "" {
 			project = event.Attribution.ProjectName.Value
+			projectKnown = true
+			attributionProblem = ""
+		} else if event.Attribution.ProjectName.State == core.HistoryFactKnown {
+			project = "ohne Projekt"
+			projectKnown = true
+			attributionProblem = ""
 		}
 		role := "assistant"
 		if event.Role == core.HistoryRoleDeveloper {
@@ -190,25 +209,24 @@ func (a *App) SearchTranscripts(query string) ([]SearchHit, error) {
 			displayTime = event.OccurredAt.Value.In(time.Local).Format("02.01. 15:04")
 		}
 		hits = append(hits, SearchHit{
-			Project: project,
-			Role:    role,
-			Time:    displayTime,
-			TimeRaw: timeRaw,
-			Snippet: snippetAround(text, idx, len(qLower)),
-			Full:    capStr(text, 6000),
+			Project: project, ProjectKnown: projectKnown, AttributionProblem: attributionProblem,
+			Provider: event.Provider.Label(), Role: role, Time: displayTime, TimeRaw: timeRaw,
+			Snippet: snippetAround(text, idx, len(qLower)), Full: capStr(text, 6000),
 		})
 	}
 	return hits, nil
 }
 
 type TimelineEntry struct {
-	Agent   string `json:"agent"`
-	Project string `json:"project"`
-	Source  string `json:"source"`
-	Day     string `json:"day"`
-	Time    string `json:"time"`
-	TimeRaw string `json:"timeRaw"`
-	Text    string `json:"text"`
+	Agent              string `json:"agent"`
+	Project            string `json:"project"`
+	ProjectKnown       bool   `json:"projectKnown"`
+	AttributionProblem string `json:"attributionProblem,omitempty"`
+	Source             string `json:"source"`
+	Day                string `json:"day"`
+	Time               string `json:"time"`
+	TimeRaw            string `json:"timeRaw"`
+	Text               string `json:"text"`
 }
 
 type TimelineSource struct {
@@ -228,7 +246,10 @@ var tlWeekdays = map[time.Weekday]string{
 }
 
 func (a *App) Timeline() (TimelineResult, error) {
-	st, _ := core.LoadState()
+	st, err := core.LoadState()
+	if err != nil {
+		return TimelineResult{}, err
+	}
 	history, err := core.OpenWorkHistory(core.WorkHistoryConfig{})
 	if err != nil {
 		return TimelineResult{}, err

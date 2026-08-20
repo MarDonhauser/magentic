@@ -12,6 +12,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"magentic/core"
 )
 
 type rowKind int
@@ -50,20 +51,50 @@ const (
 )
 
 type pollResult struct {
-	statuses   map[string]AgentStatus
-	git        map[string]GitInfo
-	session    map[string]SessionChanges
-	activity   map[string]time.Time
-	details    map[string]string
-	preview    string
-	discovered []Agent
-	diskState  *State
-	zeitgeist  ZgInfo
+	observation       core.ObservationSnapshot
+	observed          map[tuiSessionKey]core.SessionObservation
+	repositories      core.RepositoriesSurvey
+	repositoryProblem string
+	inspections       map[tuiSessionKey]core.RepositoryInspection
+	inspectionProblem map[tuiSessionKey]string
+	discovered        []Agent
+	diskState         *State
+	zeitgeist         ZgInfo
+}
+
+// tuiSessionKey keeps durable Session identity through display-name changes.
+// The name fallback is confined to legacy in-process fixtures without IDs.
+type tuiSessionKey string
+
+func sessionKey(a Agent) tuiSessionKey {
+	if a.ID != "" {
+		return tuiSessionKey("id\x00" + string(a.ID))
+	}
+	return tuiSessionKey("name\x00" + a.Name)
+}
+
+func sameSession(a, b Agent) bool {
+	if a.ID != "" && b.ID != "" {
+		return a.ID == b.ID
+	}
+	return a.Name == b.Name
+}
+
+type tuiObservationReader func(context.Context, []core.Session) core.ObservationSnapshot
+
+type tuiRepositoryReader interface {
+	Survey(context.Context, []core.Project) (core.RepositoriesSurvey, error)
+	Inspect(context.Context, core.RepositoryInspectRequest) (core.RepositoryInspection, error)
 }
 
 type tickMsg time.Time
 type pollMsg pollResult
-type previewMsg struct{ name, content string }
+type previewMsg struct {
+	key          tuiSessionKey
+	observation  core.SessionObservation
+	availability core.ObservationAvailability
+	problems     []core.ObservationProblem
+}
 type attachDoneMsg struct{ err error }
 type usageTickMsg time.Time
 type usageMsg UsageInfo
@@ -111,25 +142,33 @@ func reconcile(s *State) {
 	}
 }
 
-func (m *model) handleStatusChanges(old map[string]AgentStatus) {
+func (m *model) handleStatusChanges(old map[tuiSessionKey]core.SessionObservation) {
 	if old == nil {
 		return
 	}
-	for name, st := range m.poll.statuses {
-		if pending, ok := m.notifyPending[name]; ok {
-			delete(m.notifyPending, name)
+	for _, session := range m.state.Agents {
+		key := sessionKey(session)
+		observed, found := m.poll.observed[key]
+		st := StatusUnknown
+		if found {
+			st = observed.Status
+		}
+		pendingKey := string(key)
+		if pending, ok := m.notifyPending[pendingKey]; ok && st != StatusUnknown {
+			delete(m.notifyPending, pendingKey)
 			if st == pending {
-				notifyDesktop("magentic · "+name, "Agent ist fertig — bereit für den nächsten Prompt", "Ping")
+				notifyDesktop("magentic · "+session.Name, "Agent ist fertig — bereit für den nächsten Prompt", "Ping")
 			}
 		}
-		prev, seen := old[name]
-		if !seen || prev == st {
+		previous, seen := old[key]
+		if !seen || previous.Status == st {
 			continue
 		}
+		prev := previous.Status
 		if st == StatusBlocked && (prev == StatusRunning || prev == StatusAgents || prev == StatusShell || prev == StatusIdle) {
-			notifyDesktop("magentic · "+name, "Agent wartet auf deine Eingabe", "Glass")
+			notifyDesktop("magentic · "+session.Name, "Agent wartet auf deine Eingabe", "Glass")
 		} else if (prev == StatusRunning || prev == StatusAgents || prev == StatusShell) && st == StatusIdle {
-			m.notifyPending[name] = StatusIdle
+			m.notifyPending[pendingKey] = StatusIdle
 		}
 	}
 }
@@ -146,7 +185,7 @@ func (m model) orphanAgents() []Agent {
 
 func (m model) sortAgents(agents []Agent) []Agent {
 	sort.SliceStable(agents, func(i, j int) bool {
-		return statusRank(m.poll.statuses[agents[i].Name]) < statusRank(m.poll.statuses[agents[j].Name])
+		return statusRank(m.statusFor(agents[i])) < statusRank(m.statusFor(agents[j]))
 	})
 	return agents
 }
@@ -258,40 +297,13 @@ func tick() tea.Cmd {
 	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
+const tuiPollTimeout = 5 * time.Second
+
 func pollCmd(state State, selected *Agent) tea.Cmd {
 	return func() tea.Msg {
-		res := pollResult{git: map[string]GitInfo{}, session: map[string]SessionChanges{}, details: map[string]string{}}
-		statuses, contents, activity := CollectStatuses(state.Agents)
-		res.statuses = statuses
-		res.activity = activity
-		for name, st := range statuses {
-			if st == StatusAgents {
-				if n := backgroundAgentCount(lastLines(contents[name], 25)); n > 0 {
-					res.details[name] = agentsDetail(n)
-				}
-			}
-			if st == StatusShell {
-				if n := backgroundShellCount(lastLines(contents[name], 25)); n > 0 {
-					res.details[name] = shellDetail(n)
-				}
-			}
-		}
-		for _, a := range state.Agents {
-			if selected != nil && a.Name == selected.Name {
-				res.preview = contents[a.Name]
-			}
-			if _, ok := res.git[a.Dir]; !ok {
-				res.git[a.Dir] = CollectGitInfo(a.Dir)
-			}
-			if gi := res.git[a.Dir]; gi.IsRepo {
-				res.session[a.Name] = CollectSessionChanges(a, gi)
-			}
-		}
-		for _, p := range state.Projects {
-			if _, ok := res.git[p.Path]; !ok {
-				res.git[p.Path] = CollectGitInfo(p.Path)
-			}
-		}
+		ctx, cancel := context.WithTimeout(context.Background(), tuiPollTimeout)
+		defer cancel()
+		res := collectPollModuleFacts(ctx, state, selected, core.Observe, core.NewRepositories())
 		res.discovered = discoverNew(&state)
 		res.zeitgeist = zeitgeistInfo()
 		if disk, err := LoadState(); err == nil {
@@ -299,6 +311,169 @@ func pollCmd(state State, selected *Agent) tea.Cmd {
 		}
 		return pollMsg(res)
 	}
+}
+
+// collectPollModuleFacts is the TUI's private Adapter over the Observation and
+// Repositories Modules. Tests replace the two local-substitutable dependencies;
+// production callers receive one coherent Observation and one repository pass.
+func collectPollModuleFacts(
+	ctx context.Context,
+	state State,
+	selected *Agent,
+	observe tuiObservationReader,
+	repositories tuiRepositoryReader,
+) pollResult {
+	result := pollResult{
+		observed:          make(map[tuiSessionKey]core.SessionObservation, len(state.Agents)),
+		inspections:       make(map[tuiSessionKey]core.RepositoryInspection),
+		inspectionProblem: make(map[tuiSessionKey]string),
+	}
+
+	prepared := prepareObservationSessions(state.Agents)
+	result.observation = observe(ctx, prepared)
+	observedByID := make(map[core.SessionID]core.SessionObservation, len(result.observation.Sessions))
+	for _, observation := range result.observation.Sessions {
+		observedByID[observation.SessionID] = observation
+	}
+	for i, session := range state.Agents {
+		if observation, ok := observedByID[prepared[i].ID]; ok {
+			result.observed[sessionKey(session)] = observation
+		}
+	}
+
+	survey, err := repositories.Survey(ctx, state.Projects)
+	if err != nil {
+		result.repositoryProblem = err.Error()
+	} else {
+		result.repositories = survey
+	}
+
+	for _, session := range state.Agents {
+		_, representedBySurvey := surveyedWorktree(state, result.repositories, session)
+		needsInspection := session.BaseCommit != "" || !representedBySurvey ||
+			(selected != nil && sameSession(session, *selected))
+		if !needsInspection {
+			continue
+		}
+		request := core.RepositoryInspectRequest{
+			Directory:  session.Dir,
+			MainBranch: surveyedMainBranch(state, result.repositories, session),
+		}
+		if session.BaseCommit != "" {
+			request.Against = &core.RepositoryBaseline{
+				Directory:  session.Dir,
+				Head:       session.BaseCommit,
+				DirtyPaths: append([]string(nil), session.BaseDirty...),
+			}
+		}
+		inspection, inspectErr := repositories.Inspect(ctx, request)
+		key := sessionKey(session)
+		if inspectErr != nil {
+			result.inspectionProblem[key] = inspectErr.Error()
+			continue
+		}
+		result.inspections[key] = inspection
+	}
+	return result
+}
+
+func prepareObservationSessions(sessions []Agent) []core.Session {
+	prepared := append([]core.Session(nil), sessions...)
+	used := make(map[core.SessionID]bool, len(prepared))
+	for _, session := range prepared {
+		if session.ID != "" {
+			used[session.ID] = true
+		}
+	}
+	for i := range prepared {
+		if prepared[i].ID != "" {
+			continue
+		}
+		for suffix := 0; ; suffix++ {
+			candidate := core.SessionID(fmt.Sprintf("__tui_fixture_%d_%d", i, suffix))
+			if !used[candidate] {
+				prepared[i].ID = candidate
+				used[candidate] = true
+				break
+			}
+		}
+	}
+	return prepared
+}
+
+func surveyProject(state State, survey core.RepositoriesSurvey, session Agent) (core.RepositoryProjectSurvey, bool) {
+	var project *Project
+	if session.ProjectID != "" {
+		project = state.ProjectByID(session.ProjectID)
+	}
+	if project == nil && session.Project != "" {
+		project = state.ProjectByName(session.Project)
+	}
+	if project == nil {
+		return core.RepositoryProjectSurvey{}, false
+	}
+	return surveyedProject(survey, *project)
+}
+
+func surveyedProject(survey core.RepositoriesSurvey, project Project) (core.RepositoryProjectSurvey, bool) {
+	for _, repository := range survey.Projects {
+		if project.ID != "" && repository.ID != "" && repository.ID == project.ID {
+			return repository, true
+		}
+	}
+	for _, repository := range survey.Projects {
+		if repository.Name == project.Name || samePath(repository.Path, project.Path) {
+			return repository, true
+		}
+	}
+	return core.RepositoryProjectSurvey{}, false
+}
+
+func surveyedWorktree(state State, survey core.RepositoriesSurvey, session Agent) (core.RepositoryWorktree, bool) {
+	repository, ok := surveyProject(state, survey, session)
+	if !ok || repository.Presence != core.RepositoryKnown || !repository.Worktrees.Known() {
+		return core.RepositoryWorktree{}, false
+	}
+	for _, worktree := range repository.Worktrees.Value {
+		if samePath(worktree.Path, session.Dir) {
+			return worktree, true
+		}
+	}
+	return core.RepositoryWorktree{}, false
+}
+
+func surveyedMainBranch(state State, survey core.RepositoriesSurvey, session Agent) string {
+	if repository, ok := surveyProject(state, survey, session); ok && repository.MainBranch.Known() {
+		return repository.MainBranch.Value
+	}
+	if session.ProjectID != "" {
+		if project := state.ProjectByID(session.ProjectID); project != nil {
+			return project.MainBranch
+		}
+	}
+	if project := state.ProjectByName(session.Project); project != nil {
+		return project.MainBranch
+	}
+	return ""
+}
+
+func samePath(a, b string) bool {
+	if strings.TrimSpace(a) == "" || strings.TrimSpace(b) == "" {
+		return false
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
+}
+
+func (m model) observationFor(session Agent) (core.SessionObservation, bool) {
+	observation, ok := m.poll.observed[sessionKey(session)]
+	return observation, ok
+}
+
+func (m model) statusFor(session Agent) AgentStatus {
+	if observation, ok := m.observationFor(session); ok {
+		return observation.Status
+	}
+	return StatusUnknown
 }
 
 func (m model) Init() tea.Cmd {
@@ -315,9 +490,25 @@ func (m *model) previewNow() tea.Cmd {
 		return nil
 	}
 	m.previewPending = true
-	name := a.Name
+	return previewObservationCmd(*a, core.Observe)
+}
+
+func previewObservationCmd(session Agent, observe tuiObservationReader) tea.Cmd {
 	return func() tea.Msg {
-		return previewMsg{name, TmuxCapturePane(tmuxSessionName(name), 0)}
+		prepared := prepareObservationSessions([]Agent{session})
+		snapshot := observe(context.Background(), prepared)
+		message := previewMsg{
+			key:          sessionKey(session),
+			availability: snapshot.Availability,
+			problems:     append([]core.ObservationProblem(nil), snapshot.Problems...),
+		}
+		for _, observation := range snapshot.Sessions {
+			if observation.SessionID == prepared[0].ID {
+				message.observation = observation
+				break
+			}
+		}
+		return message
 	}
 }
 
@@ -335,8 +526,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.pollNow(), tick())
 	case previewMsg:
 		m.previewPending = false
-		if a := m.selectedAgent(); a != nil && a.Name == msg.name {
-			m.poll.preview = msg.content
+		if a := m.selectedAgent(); a != nil && sessionKey(*a) == msg.key {
+			if m.poll.observed == nil {
+				m.poll.observed = make(map[tuiSessionKey]core.SessionObservation)
+			}
+			m.poll.observed[msg.key] = msg.observation
 			return m, nil
 		}
 		return m, m.previewNow()
@@ -347,13 +541,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case pollMsg:
 		m.pollBusy = false
-		oldStatuses := m.poll.statuses
+		oldObservations := m.poll.observed
 		var selName string
 		if a := m.selectedAgent(); a != nil {
 			selName = a.Name
 		}
 		m.poll = pollResult(msg)
-		m.handleStatusChanges(oldStatuses)
+		m.handleStatusChanges(oldObservations)
 		if m.poll.diskState != nil {
 			m.state = m.poll.diskState
 		}
@@ -613,7 +807,7 @@ func (m model) sendSkillToSelected(cmd string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	sn := tmuxSessionName(a.Name)
-	st := m.poll.statuses[a.Name]
+	st := m.statusFor(*a)
 	if !TmuxHasSession(sn) || st == StatusExited || st == StatusDead {
 		m.setFlash("Claude läuft in dieser Session nicht mehr", true)
 		return m, nil
@@ -846,7 +1040,6 @@ func (m model) renameAgent(newName string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.state = changed.Snapshot.MutableState()
-	delete(m.poll.statuses, m.renameFrom)
 	m.setFlash(fmt.Sprintf("%s → %s", m.renameFrom, newName), false)
 	return m, m.pollNow()
 }
@@ -870,7 +1063,6 @@ func (m model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setFlash(err.Error(), true)
 			return m, nil
 		}
-		delete(m.poll.statuses, a.Name)
 		m.ensureSelectable()
 		m.setFlash(fmt.Sprintf("Agent %q beendet%s", a.Name, note), false)
 		return m, m.pollNow()

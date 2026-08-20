@@ -124,7 +124,7 @@ func (a *App) watchLoop() {
 
 func executeAttentionPlan(plan core.AttentionPlan) {
 	if plan.DockBadge.Update {
-		setDockBadge(plan.DockBadge.Label)
+		setDockBadge(attentionDockBadgeLabel(plan.DockBadge))
 	}
 	for _, notification := range plan.Notifications {
 		core.NotifyDesktop(notification.Title, notification.Message, notification.Sound)
@@ -140,4 +140,11 @@ func executeAttentionPlan(plan core.AttentionPlan) {
 	if plan.BringToFront {
 		bringToFront()
 	}
+}
+
+func attentionDockBadgeLabel(badge core.AttentionDockBadge) string {
+	if badge.Label != "" && !badge.Complete {
+		return badge.Label + "+"
+	}
+	return badge.Label
 }

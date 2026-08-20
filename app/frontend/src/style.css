@@ -69,6 +69,7 @@
   --radius-control: 8px;
   --radius-panel: 12px;
   --radius-composer: 16px;
+  --sidebar-w: 250px;
   --titlebar-h: 40px;
   --duration-fast: 150ms;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -179,7 +180,7 @@ html, body {
 }
 
 .titlebar-rail {
-  width: 250px;
+  width: var(--sidebar-w);
   flex: none;
   display: flex;
   align-items: center;
@@ -228,7 +229,7 @@ html, body {
 #layout { display: flex; height: calc(100% - var(--titlebar-h)); }
 
 #sidebar {
-  width: 250px;
+  width: var(--sidebar-w);
   flex: none;
   position: relative;
   display: flex;
@@ -818,6 +819,14 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
   border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
   border-radius: var(--radius-panel);
   background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+#term-session-state.is-hidden {
+  display: none;
+}
+
+#terms:not(.hydra).without-session-state > .term-wrap {
+  bottom: 154px;
 }
 
 #term-session-state.is-waiting {

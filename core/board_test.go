@@ -68,23 +68,64 @@ func TestBoardColumn(t *testing.T) {
 	}
 }
 
-func TestMatchesItem(t *testing.T) {
-	id := "reqspec-v2-default-activation"
+func TestMatchesItemRequiresDurableSpecificationReference(t *testing.T) {
+	reference := SpecificationRef("specification:v1:project-1:spec-kit:current:reqspec-v2-default-activation")
 	cases := []struct {
-		name string
-		a    agentCtx
-		want bool
+		name      string
+		agent     agentCtx
+		candidate SpecificationRef
+		want      bool
 	}{
-		{"Branch identisch", agentCtx{branch: "reqspec-v2-default-activation"}, true},
-		{"Branch mit Präfix", agentCtx{branch: "agent/reqspec-v2-default-activation"}, true},
-		{"Worktree-Ordner", agentCtx{dir: "/tmp/req.pilot-agents/reqspec-v2-default-activation"}, true},
-		{"Session-Name", agentCtx{name: "reqspec-v2-default-activation"}, true},
-		{"fremder Branch", agentCtx{branch: "main", dir: "/tmp/req.pilot", name: "req-pilot"}, false},
+		{"exact Reference", agentCtx{specificationRef: reference}, reference, true},
+		{"same slug in Branch", agentCtx{branch: "agent/reqspec-v2-default-activation"}, reference, false},
+		{"same slug in Worktree", agentCtx{dir: "/tmp/req.pilot-agents/reqspec-v2-default-activation"}, reference, false},
+		{"same slug in Session name", agentCtx{name: "reqspec-v2-default-activation"}, reference, false},
+		{"different Reference", agentCtx{specificationRef: "specification:v1:project-1:spec-kit:current:other"}, reference, false},
+		{"empty candidate", agentCtx{specificationRef: reference}, "", false},
 	}
 	for _, c := range cases {
-		if got := matchesItem(c.a, id, ""); got != c.want {
+		if got := matchesItem(c.agent, c.candidate); got != c.want {
 			t.Errorf("%s: %v, erwartet %v", c.name, got, c.want)
 		}
+	}
+}
+
+func TestLiveSpecificationSessionsRequiresKnownLiveObservation(t *testing.T) {
+	reference := SpecificationRef("specification:v1:project-1:spec-kit:current:login")
+	sessions := []Session{
+		{ID: "live", Name: "live", SpecificationRef: reference},
+		{ID: "dead", Name: "dead", SpecificationRef: reference},
+		{ID: "unknown", Name: "unknown", SpecificationRef: reference},
+		{ID: "legacy", Name: "login", SpecificationRef: ""},
+	}
+	snapshot := ObservationSnapshot{Sessions: []SessionObservation{
+		{SessionID: "live", Availability: ObservationAvailable, Presence: SessionPresencePresent, Status: StatusIdle},
+		{SessionID: "dead", Availability: ObservationAvailable, Presence: SessionPresenceAbsent, Status: StatusDead},
+		{SessionID: "unknown", Availability: ObservationUnavailable, Presence: SessionPresenceUnknown, Status: StatusUnknown},
+		{SessionID: "legacy", Availability: ObservationAvailable, Presence: SessionPresencePresent, Status: StatusRunning},
+	}}
+
+	live, problems := liveSpecificationSessions(sessions, snapshot)
+	if len(live) != 1 || live[0].ID != "live" {
+		t.Fatalf("liveSpecificationSessions() = %#v, want only the known-live linked Session", live)
+	}
+	if len(problems) != 1 {
+		t.Fatalf("liveSpecificationSessions() problems = %#v, want one unknown-runtime diagnostic", problems)
+	}
+}
+
+func TestBoardPreservesUnknownSpecificationStage(t *testing.T) {
+	reference := SpecificationRef("specification:v1:project-1:spec-kit:current:login")
+	item := boardItemFromSpecification(Specification{
+		Reference: reference,
+		ID:        "login",
+		Lifecycle: SpecificationLifecycle{Stage: SpecificationStageUnknown},
+	}, []agentCtx{{name: "slug-collision", branch: "agent/login"}})
+	if item.Column != ColUnknown {
+		t.Fatalf("Board column = %q, want %q", item.Column, ColUnknown)
+	}
+	if len(item.Agents) != 0 {
+		t.Fatalf("slug collision falsely marked Specification active: %#v", item.Agents)
 	}
 }
 

@@ -540,7 +540,15 @@ func (a *App) ReopenSession(name string) error {
 }
 
 func (a *App) OpenTerm(name string, cols, rows int) error {
-	session := core.SessionName(name)
+	st, err := core.LoadState()
+	if err != nil {
+		return err
+	}
+	registered := st.AgentByName(name)
+	if registered == nil {
+		return fmt.Errorf("unbekannte Session: %s", name)
+	}
+	session := registered.TmuxName()
 	if !core.TmuxHasSession(session) {
 		return fmt.Errorf("Session %q existiert nicht mehr", name)
 	}

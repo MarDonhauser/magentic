@@ -61,25 +61,26 @@ const KindTerm = "term"
 const KindDock = "dock"
 
 type Session struct {
-	ID           SessionID           `json:"id,omitempty"`
-	Name         string              `json:"name"`
-	ProjectID    ProjectID           `json:"project_id,omitempty"`
-	Project      string              `json:"project"`
-	Dir          string              `json:"dir"`
-	Worktree     bool                `json:"worktree"`
-	Kind         string              `json:"kind,omitempty"` // legacy transport field
-	SessionKind  SessionKind         `json:"session_kind,omitempty"`
-	Presentation SessionPresentation `json:"presentation,omitempty"`
-	Purpose      SessionPurpose      `json:"purpose,omitempty"`
-	RuntimeName  string              `json:"runtime_name,omitempty"`
-	CreatedAt    time.Time           `json:"created_at"`
-	BaseCommit   string              `json:"base_commit,omitempty"`
-	BaseDirty    []string            `json:"base_dirty,omitempty"`
-	SessionID    string              `json:"session_id,omitempty"` // legacy Claude run identifier
-	AgentRuns    []AgentRunRef       `json:"agent_runs,omitempty"`
-	DeployAt     time.Time           `json:"deploy_at,omitzero"`
-	LaterAt      time.Time           `json:"later_at,omitzero"`
-	SeenAt       time.Time           `json:"seen_at,omitzero"`
+	ID               SessionID           `json:"id,omitempty"`
+	Name             string              `json:"name"`
+	ProjectID        ProjectID           `json:"project_id,omitempty"`
+	Project          string              `json:"project"`
+	Dir              string              `json:"dir"`
+	Worktree         bool                `json:"worktree"`
+	Kind             string              `json:"kind,omitempty"` // legacy transport field
+	SessionKind      SessionKind         `json:"session_kind,omitempty"`
+	Presentation     SessionPresentation `json:"presentation,omitempty"`
+	Purpose          SessionPurpose      `json:"purpose,omitempty"`
+	SpecificationRef SpecificationRef    `json:"specification_ref,omitempty"`
+	RuntimeName      string              `json:"runtime_name,omitempty"`
+	CreatedAt        time.Time           `json:"created_at"`
+	BaseCommit       string              `json:"base_commit,omitempty"`
+	BaseDirty        []string            `json:"base_dirty,omitempty"`
+	SessionID        string              `json:"session_id,omitempty"` // legacy Claude run identifier
+	AgentRuns        []AgentRunRef       `json:"agent_runs,omitempty"`
+	DeployAt         time.Time           `json:"deploy_at,omitzero"`
+	LaterAt          time.Time           `json:"later_at,omitzero"`
+	SeenAt           time.Time           `json:"seen_at,omitzero"`
 }
 
 // Agent remains as a source-compatible name while callers migrate to Session.

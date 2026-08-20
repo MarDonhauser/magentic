@@ -59,7 +59,7 @@ func registerDiscovered(st *State) error {
 func DiscoverNew(s *State) []Agent {
 	known := map[string]bool{}
 	for _, a := range s.Agents {
-		known[SessionName(a.Name)] = true
+		known[a.TmuxName()] = true
 	}
 	var out []Agent
 	for _, sess := range TmuxListSessions() {
@@ -89,7 +89,7 @@ func DiscoverNew(s *State) []Agent {
 				break
 			}
 		}
-		out = append(out, Agent{Name: name, Project: proj, Dir: dir, Worktree: worktree, CreatedAt: time.Unix(ts, 0)})
+		out = append(out, Agent{Name: name, Project: proj, Dir: dir, Worktree: worktree, RuntimeName: sess, CreatedAt: time.Unix(ts, 0)})
 	}
 	return out
 }
@@ -276,6 +276,10 @@ func SendSlashCommand(session, cmd string) {
 }
 
 func StartSkillAgent(st *State, dir, prompt, kind, nameHint string) (string, error) {
+	return startSkillAgent(st, dir, prompt, kind, nameHint, "")
+}
+
+func startSkillAgent(st *State, dir, prompt, kind, nameHint string, specificationRef SpecificationRef) (string, error) {
 	if err := registerDiscovered(st); err != nil {
 		return "", err
 	}
@@ -301,7 +305,7 @@ func StartSkillAgent(st *State, dir, prompt, kind, nameHint string) (string, err
 	result, err := lifecycleForState(st).Provision(context.Background(), SessionProvision{
 		Project: project, Name: name, Directory: dir,
 		Worktree: project.Path != "" && filepath.Clean(dir) != filepath.Clean(project.Path),
-		Kind:     SessionKindCodingAgent, Purpose: purpose, InitialPrompt: prompt,
+		Kind:     SessionKindCodingAgent, Purpose: purpose, SpecificationRef: specificationRef, InitialPrompt: prompt,
 	})
 	if err != nil {
 		return "", err
@@ -314,14 +318,20 @@ func StartSkillAgent(st *State, dir, prompt, kind, nameHint string) (string, err
 }
 
 func SendSkill(name, cmd string) error {
-	sn := SessionName(name)
+	st, err := LoadState()
+	if err != nil {
+		return err
+	}
+	session := st.AgentByName(name)
+	if session == nil {
+		return fmt.Errorf("unbekannte Session: %s", name)
+	}
+	sn := session.TmuxName()
 	if name == "" || !TmuxHasSession(sn) {
 		return fmt.Errorf("Session läuft nicht mehr")
 	}
-	if st, err := LoadState(); err == nil {
-		if a := st.AgentByName(name); a != nil && a.IsTerm() {
-			return fmt.Errorf("%s ist eine Terminal-Session — dort läuft kein Claude", name)
-		}
+	if session.IsTerm() {
+		return fmt.Errorf("%s ist eine Terminal-Session — dort läuft kein Claude", name)
 	}
 	infos := TmuxPaneInfos()
 	info, exists := infos[sn]
@@ -369,7 +379,7 @@ func BuildSessionHandoffPrompt(source Agent, tool string) string {
 	if providerSessionRef == "" {
 		providerSessionRef = "(nicht gespeichert — read-only über die tmux-Suchreferenz ermitteln)"
 	}
-	tmuxSessionID := SessionName(source.Name)
+	tmuxSessionID := source.TmuxName()
 	tmuxPaneTarget := TargetPane(tmuxSessionID)
 	claudeTranscript := "~/.claude/projects/*/<provider-session-id>.jsonl"
 	if providerSessionID != "" {
@@ -438,7 +448,7 @@ func handoffAITool(command string) string {
 }
 
 func handoffSourceTool(source Agent, infos map[string]PaneInfo) (string, error) {
-	info, running := infos[SessionName(source.Name)]
+	info, running := infos[source.TmuxName()]
 	detected := ""
 	if running {
 		detected = handoffAITool(info.Command)
@@ -503,7 +513,7 @@ func HandoffSession(st *State, sourceName, targetName string) error {
 		return err
 	}
 
-	targetSession := SessionName(target.Name)
+	targetSession := target.TmuxName()
 	targetInfo, exists := infos[targetSession]
 	if !exists {
 		return validateHandoffTargetStatus(target.Name, StatusDead)
@@ -564,7 +574,7 @@ func StartSpecificationSession(st *State, intent SpecificationStartIntent) (stri
 		return "", fmt.Errorf("unvollst\u00e4ndiger Specification-Start")
 	}
 	prompt := specificationWorkPrompt(intent)
-	return StartSkillAgent(st, intent.ProjectDirectory, prompt, "", intent.ID)
+	return startSkillAgent(st, intent.ProjectDirectory, prompt, "", intent.ID, intent.Reference)
 }
 
 func specificationWorkPrompt(intent SpecificationStartIntent) string {
