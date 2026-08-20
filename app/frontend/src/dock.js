@@ -4,6 +4,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { BrowserOpenURL } from '../wailsjs/runtime/runtime';
+import { developerIcon } from './avatar.js';
 
 const STORE_KEY = 'magentic.dock';
 const DEFAULT_HEIGHT = 280;
@@ -207,13 +208,18 @@ function addTab(name) {
   label.className = 'dk-name';
   label.textContent = name;
 
+  const tool = document.createElement('span');
+  tool.className = 'dk-tool';
+  tool.setAttribute('aria-hidden', 'true');
+  tool.innerHTML = developerIcon('bash');
+
   const x = document.createElement('button');
   x.className = 'dk-x';
   x.type = 'button';
   x.textContent = '×';
   x.title = 'Tab schließen';
 
-  el.append(dot, label, x);
+  el.append(dot, tool, label, x);
   tabsEl.appendChild(el);
 
   const pane = document.createElement('div');
@@ -380,6 +386,10 @@ function buildDom() {
 
   const empty = document.createElement('div');
   empty.className = 'dk-empty';
+  const emptyIcon = document.createElement('div');
+  emptyIcon.className = 'dk-empty-icon';
+  emptyIcon.setAttribute('aria-hidden', 'true');
+  emptyIcon.innerHTML = developerIcon('bash');
   const emptyText = document.createElement('div');
   emptyText.textContent = 'Kein Terminal geöffnet';
   const emptyBtn = document.createElement('button');
@@ -390,7 +400,7 @@ function buildDom() {
   const hint = document.createElement('div');
   hint.className = 'dk-hint';
   hint.textContent = '⌃` schließt das Dock · ⌘⌥←/→ wechselt den Tab';
-  empty.append(emptyText, emptyBtn, hint);
+  empty.append(emptyIcon, emptyText, emptyBtn, hint);
   bodyEl.appendChild(empty);
 
   dockEl.append(grip, bar, bodyEl);

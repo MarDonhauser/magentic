@@ -1,4 +1,5 @@
 import './board.css';
+import { developerIcon } from './avatar.js';
 
 const COLUMNS = [
   { key: 'backlog', label: 'Geplant' },
@@ -101,7 +102,7 @@ function agentsHtml(item, opts) {
     const face = art ? `<span class="bd-agent-face">${art}</span>` : '';
     const tag = clickable ? 'button' : 'span';
     const attrs = clickable ? ` type="button" data-act="agent" data-agent="${esc(name)}" title="Session ${esc(name)} öffnen"` : '';
-    return `<${tag} class="bd-agent${face ? '' : ' bd-agent-plain'}"${attrs}>${face}<span class="bd-agent-name">${esc(name)}</span></${tag}>`;
+    return `<${tag} class="bd-agent${face ? '' : ' bd-agent-plain'}"${attrs}>${face}${developerIcon('claude')}<span class="bd-agent-name">${esc(name)}</span></${tag}>`;
   }).join('');
   return `<div class="bd-agents"><span class="bd-live-dot" aria-hidden="true"></span>${chips}</div>`;
 }
@@ -109,14 +110,14 @@ function agentsHtml(item, opts) {
 function badgesHtml(item, multi) {
   const out = [];
   if (multi && item.kind) {
-    out.push(`<span class="bd-badge bd-badge-kind" title="Quelle: ${esc(item.kind)}">${esc(kindLabel(item.kind))}</span>`);
+    out.push(`<span class="bd-badge bd-badge-kind" title="Quelle: ${esc(item.kind)}">${developerIcon('markdown')}${esc(kindLabel(item.kind))}</span>`);
   }
   const specs = Number(item.specs) || 0;
-  if (specs > 0) out.push(`<span class="bd-badge" title="${specs} Spec-Datei(en) in diesem Change">${icon('spec')}${specs}</span>`);
+  if (specs > 0) out.push(`<span class="bd-badge" title="${specs} Spec-Datei(en) in diesem Change">${developerIcon('markdown')}${specs}</span>`);
   if (item.hasPlan) out.push(`<span class="bd-badge" title="${item.kind === 'speckit' ? 'plan.md vorhanden' : 'design.md vorhanden'}">${icon('plan')}Plan</span>`);
   const branches = list(item.branches).filter(Boolean);
   if (branches.length) {
-    out.push(`<span class="bd-badge" title="${esc(branches.join('\n'))}">${icon('branch')}${branches.length}</span>`);
+    out.push(`<span class="bd-badge" title="${esc(branches.join('\n'))}">${developerIcon('git')}${branches.length}</span>`);
   }
   const age = relTime(item.updated);
   if (age) out.push(`<span class="bd-badge bd-badge-age" title="zuletzt geändert ${esc(item.updated)}">${icon('clock')}${esc(age)}</span>`);
@@ -127,7 +128,7 @@ function badgesHtml(item, multi) {
 function actionsHtml(item, opts) {
   const out = [];
   if (typeof opts.onStart === 'function') {
-    out.push(`<button type="button" class="bd-act bd-act-start" data-act="start">${icon('play')}Arbeiten</button>`);
+    out.push(`<button type="button" class="bd-act bd-act-start" data-act="start">${developerIcon('claude')}Arbeiten</button>`);
   }
   if (typeof opts.onReveal === 'function' && item.path) {
     out.push(`<button type="button" class="bd-act" data-act="reveal" title="Ordner im Finder zeigen">${icon('folder')}</button>`);
@@ -217,14 +218,14 @@ function columnHtml(col, items, opts, multi) {
 function sourcesHtml(sources) {
   if (sources.length < 2) {
     const one = sources[0];
-    return `<span class="bd-kind">${esc(kindLabel(one?.kind))}</span>` +
+    return `<span class="bd-kind">${developerIcon('markdown')}${esc(kindLabel(one?.kind))}</span>` +
       (one?.root ? `<span class="bd-root" title="${esc(one.root)}">${esc(one.root)}</span>` : '');
   }
   const chips = sources.map(s => {
     const off = hiddenKinds.has(s.kind);
     return `<button type="button" class="bd-kind bd-kind-btn${off ? ' is-off' : ''}" data-act="kind" data-kind="${esc(s.kind)}"` +
       ` title="${esc(s.root)}\n\nKlick blendet diese Quelle ${off ? 'wieder ein' : 'aus'}">` +
-      `${esc(kindLabel(s.kind))}<span class="bd-kind-n">${Number(s.items) || 0}</span></button>`;
+      `${developerIcon('markdown')}${esc(kindLabel(s.kind))}<span class="bd-kind-n">${Number(s.items) || 0}</span></button>`;
   }).join('');
   return `<div class="bd-kinds">${chips}</div>`;
 }
@@ -259,7 +260,7 @@ function headHtml(board, items, sources) {
 function noneHtml(board) {
   return `<div class="bd bd-none">
     <div class="bd-none-box">
-      <span class="bd-none-ico">${icon('empty')}</span>
+      <span class="bd-none-ico">${developerIcon('markdown')}</span>
       <h2>Keine Spec-Ordner in ${esc(board.project)}</h2>
       <p>Keines der bekannten Spec-Layouts gefunden — deshalb gibt es hier nichts zu zeigen.</p>
       <p class="bd-none-hint">Lege einen dieser Ordner an, dann erscheinen die Changes automatisch als Karten. Mehrere Systeme nebeneinander sind kein Problem — das Board liest alle.</p>

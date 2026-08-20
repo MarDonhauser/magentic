@@ -12,11 +12,15 @@
   margin-bottom: 16px;
 }
 .st-head h1 {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   font-size: 19px;
   font-weight: 650;
   margin: 0;
   letter-spacing: -0.01em;
 }
+.st-head h1 .dev-icon { width: 18px; height: 18px; }
 .st-sub {
   color: var(--muted);
   font-size: 12px;
@@ -134,10 +138,14 @@
   margin-bottom: 10px;
 }
 .st-card-head h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 14px;
   font-weight: 650;
   margin: 0;
 }
+.st-card-head h2 .dev-icon { width: 14px; height: 14px; }
 .st-card-head .st-note {
   color: var(--muted);
   font-size: 11.5px;

@@ -11,12 +11,16 @@
   min-width: 0;
 }
 .gg-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-weight: 650;
   font-size: 14px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.gg-title .dev-icon { width: 14px; height: 14px; }
 .gg-head-meta {
   margin-left: auto;
   flex: none;

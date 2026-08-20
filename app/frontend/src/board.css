@@ -37,6 +37,9 @@
 }
 
 .bd-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 2px 8px;
   border-radius: 999px;
   background: var(--accent-soft);
@@ -45,6 +48,7 @@
   font-weight: 600;
   letter-spacing: 0.03em;
 }
+.bd-kind .dev-icon { width: 12px; height: 12px; }
 
 .bd-kinds { display: flex; gap: 6px; flex-wrap: wrap; }
 
@@ -385,6 +389,7 @@ span.bd-agent { cursor: inherit; }
 }
 .bd-agent-face svg,
 .bd-agent-face img { width: 100%; height: 100%; display: block; }
+.bd-agent > .dev-icon { width: 11px; height: 11px; }
 .bd-agent-plain { padding-left: 8px; }
 
 .bd-agent-name {
@@ -450,6 +455,7 @@ span.bd-agent { cursor: inherit; }
   text-overflow: ellipsis;
 }
 .bd-badge .bd-ico { color: var(--muted); }
+.bd-badge .dev-icon { width: 11px; height: 11px; }
 .bd-badge-age { background: transparent; color: var(--muted); padding-left: 0; }
 
 .bd-actions {
@@ -485,6 +491,7 @@ span.bd-agent { cursor: inherit; }
   background-image: linear-gradient(var(--accent-soft), var(--accent-soft));
 }
 .bd-act-start .bd-ico { width: 0.85em; height: 0.85em; }
+.bd-act .dev-icon { width: 12px; height: 12px; }
 
 .bd-tasks {
   margin-top: 10px;
@@ -583,6 +590,7 @@ span.bd-agent { cursor: inherit; }
   margin-bottom: 12px;
 }
 .bd-none-ico .bd-ico { width: 22px; height: 22px; }
+.bd-none-ico .dev-icon { width: 25px; height: 25px; }
 
 .bd-none-box h2 {
   margin: 0 0 8px;

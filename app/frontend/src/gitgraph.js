@@ -1,4 +1,5 @@
 import './gitgraph.css';
+import { developerIcon } from './avatar.js';
 
 const ROW_H = 30;
 const LANE_W = 16;
@@ -278,7 +279,7 @@ export function renderGitGraph(el, graph, opts = {}) {
 
   const parts = [];
   parts.push(`<div class="gg-head">`
-    + `<span class="gg-title">${esc(g.project || 'Git-Graph')}</span>`
+    + `<span class="gg-title">${developerIcon('git')}${esc(g.project || 'Git-Graph')}</span>`
     + `<span class="gg-chip gg-branch is-main" style="--gg-c:var(--accent)" data-branch="${esc(mainName)}">${ico('branch')}<span class="gg-chip-label">${esc(mainName)}</span></span>`
     + (commits.length ? `<span class="gg-head-meta">${commits.length} Commits · ${laneCount} ${laneCount === 1 ? 'Spur' : 'Spuren'}</span>` : '')
     + `</div>`);

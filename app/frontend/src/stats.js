@@ -1,4 +1,5 @@
 import './stats.css';
+import { developerIcon } from './avatar.js';
 
 const SERIES = ['#02ac9c', '#d97530', '#0f9fdc', '#c08a01', '#c863e4', '#71a547'];
 const RAMP = ['#213d38', '#27544e', '#2b6d64', '#2e877c', '#2fa294', '#2fbdad', '#2bd9c6'];
@@ -658,7 +659,7 @@ export function renderStats(el, stats, opts = {}) {
   const last = d.length ? longDate(d[d.length - 1].date) : '';
   const busiest = d.find((x) => x.date === t.busiestDay);
   const head =
-    `<div class="st-head"><div><h1>Statistik</h1>` +
+    `<div class="st-head"><div><h1>${developerIcon('claude')} Statistik</h1>` +
     `<div class="st-sub">${d.length ? `${esc(first)} – ${esc(last)} · <b>${esc(nf0.format(t.days))}</b> ${t.days === 1 ? 'Tag' : 'Tage'}` : 'kein Zeitraum'}` +
     `${busiest ? ` · aktivster Tag <b>${esc(busiest.weekday)}, ${esc(longDate(busiest.date))}</b> (${esc(nf0.format(busiest.prompts))} Prompts)` : ''}</div></div>` +
     `<div class="st-head-r">${rangeBtns}</div></div>` +
@@ -732,7 +733,7 @@ export function renderStats(el, stats, opts = {}) {
       `<div class="st-card"><div class="st-card-head"><h2>Projekte</h2>` +
         `<span class="st-note">nach Tokens${activeCount ? ` · <span style="color:var(--accent)">●</span> aktive Session` : ''}</span></div>` +
         `<div class="st-plot" data-plot="projects"></div></div>` +
-      `<div class="st-card"><div class="st-card-head"><h2>Modelle</h2>` +
+      `<div class="st-card"><div class="st-card-head"><h2>${developerIcon('claude')} Modelle</h2>` +
         `<span class="st-note">Kostenanteil</span></div>` +
         `<div class="st-plot" data-plot="models"></div>` +
         modelTable(modelsSorted, modelCost, slotOf) +

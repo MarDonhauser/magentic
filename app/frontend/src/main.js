@@ -16,12 +16,19 @@ import {
   Breaks, BreakHeartbeat, TakeBreak, EndBreak, SnoozeBreak, BreakConfig, SetBreakConfig, BreakOver,
 } from '../wailsjs/go/main/App';
 import { EventsOn, EventsOff, BrowserOpenURL, ClipboardSetText } from '../wailsjs/runtime/runtime';
-import { robotAvatar } from './avatar.js';
+import {
+  developerIcon,
+  mountDeveloperIcons,
+  providerIcon,
+  robotAvatar,
+  sessionToolIcon,
+} from './avatar.js';
 import { renderGitGraph } from './gitgraph.js';
 import { renderBoard } from './board.js';
 import { renderStats } from './stats.js';
 import { mountDock, toggleDock, isDockOpen, openInDock, closeDockTab, dockTabs, refitDock } from './dock.js';
 import { mountBreaks, updateBreaks, openBreak, openBreakSettings, isBreakOpen } from './breaks.js';
+mountDeveloperIcons();
 
 const STATUS = {
   running: { color: 'var(--good)', label: 'läuft' },
@@ -137,6 +144,11 @@ const ICONS = {
 
 function icon(name) {
   return `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+}
+
+function sessionToolMark(session) {
+  const label = session?.term ? 'Bash-Terminal' : 'Claude Code';
+  return `<span class="dev-tool-mark" role="img" aria-label="${label}" title="${label}">${sessionToolIcon(session)}</span>`;
 }
 
 function visHtml(v) {
@@ -316,8 +328,8 @@ function updateTermBar() {
   termBarEl.innerHTML =
     `<button class="btn tiny" id="tb-back" title="Übersicht (⌘0)">‹ Übersicht</button>` +
     `<span class="tb-avatar">${robotAvatar(activeTerm, 24)}</span>` +
+    sessionToolMark(a) +
     `<span class="dot" style="background:${v.color}"></span>` +
-    (a?.term ? `<span class="kind" title="Terminal-Session — hier läuft kein Claude">${icon('terminal')}</span>` : '') +
     `<span class="tb-name">${esc(activeTerm)}</span>` +
     (a?.branch ? `<span class="tb-branch${a.worktree ? ' wt' : ''}" title="Branch ${esc(a.branch)}${a.worktree ? ' · eigener Worktree' : ''}">${icon('gitbranch')}${esc(a.branch)}</span>` : '') +
     `<span class="tb-st">${visHtml(v)}</span>` +
@@ -395,7 +407,7 @@ function updateTermComposer(a, visual, gone) {
     detail = 'Befehle kannst du hier senden oder direkt im Terminal eingeben.';
   }
 
-  termStateIconEl.innerHTML = icon(stateIcon);
+  termStateIconEl.innerHTML = stateIcon === 'terminal' ? developerIcon('bash') : icon(stateIcon);
   termStateTitleEl.textContent = title;
   termStateDetailEl.textContent = detail;
   termPromptEl.placeholder = activeTerm ? `Nachricht an ${activeTerm} …` : 'Nachricht an die Session …';
@@ -590,7 +602,7 @@ async function showGraph(project) {
 
 async function loadGraph() {
   const el = $('graph-view');
-  const head = `<div class="view-head"><h2>${icon('gitbranch')} Git-Graph</h2>` +
+  const head = `<div class="view-head"><h2>${developerIcon('git')} Git-Graph</h2>` +
     projectTabs(graphProject, 'graphproj') +
     `<button class="btn tiny" data-act="graphreload" title="Graph neu laden">↻</button></div>`;
   if (!graphProject) { el.innerHTML = head + `<div class="none" style="padding:24px">Kein Projekt registriert.</div>`; return; }
@@ -621,7 +633,7 @@ async function showBoard(project) {
 
 async function loadBoard() {
   const el = $('board-view');
-  const head = `<div class="view-head"><h2>${icon('square')} Board</h2>` +
+  const head = `<div class="view-head"><h2>${developerIcon('markdown')} Board</h2>` +
     projectTabs(boardProject, 'boardproj') +
     `<button class="btn tiny" data-act="boardreload" title="Specs neu einlesen">↻</button></div>`;
   if (!boardProject) { el.innerHTML = head + `<div class="none" style="padding:24px">Kein Projekt registriert.</div>`; return; }
@@ -727,11 +739,11 @@ function updateHydraBar() {
   termBarEl.innerHTML =
     `<button class="btn tiny" id="tb-back" title="Übersicht (⌘0)">‹ Übersicht</button>` +
     `<span class="dot" style="background:var(--accent)"></span>` +
-    `<span class="tb-name">🐙 Hydra · ${esc(hydraProject)}</span>` +
+    `<span class="tb-name">${developerIcon('claude')} Hydra · ${esc(hydraProject)}</span>` +
     `<span class="tb-st">${n} ${n === 1 ? 'Session' : 'Sessions'} parallel</span>` +
     `<span class="tb-actions">` +
-    `<button class="btn tiny" id="tb-add" title="Neue Session in ${esc(hydraProject)} — erscheint direkt im Raster">+ Session</button>` +
-    `<button class="btn tiny" id="tb-term" title="Reines Terminal in ${esc(hydraProject)} — Shell statt Claude">${icon('terminal')} Terminal</button></span>`;
+    `<button class="btn tiny" id="tb-add" title="Neue Session in ${esc(hydraProject)} — erscheint direkt im Raster">${developerIcon('claude')} Session</button>` +
+    `<button class="btn tiny" id="tb-term" title="Reines Terminal in ${esc(hydraProject)} — Shell statt Claude">${developerIcon('bash')} Terminal</button></span>`;
   $('tb-back').onclick = showOverview;
   $('tb-add').onclick = async () => {
     try {
@@ -760,6 +772,7 @@ function ensureHydraHead(t) {
   head.className = 'hydra-head';
   head.innerHTML =
     `<span class="hh-avatar">${robotAvatar(t.name, 18)}</span>` +
+    sessionToolMark(agentInfo(t.name)) +
     `<span class="dot"></span><span class="hh-name">${esc(t.name)}</span>` +
     `<span class="hh-status"></span>` +
     `<button class="hh-max" title="Session groß öffnen">⤢</button>` +
@@ -1012,7 +1025,7 @@ function renderSidebar() {
         `<span class="savatar${dead ? ' dim' : ''}">${robotAvatar(a.name, 26)}</span>` +
         `<span class="sbody">` +
           `<span class="srow">` +
-            (a.term ? `<span class="kind">${icon('terminal')}</span>` : '') +
+            sessionToolMark(a) +
             `<span class="sname">${esc(a.name)}</span>` +
             branchChip(a) +
           `</span>` +
@@ -1048,7 +1061,7 @@ function renderSidebar() {
       div.title = `„${l.name}" wieder öffnen` + (l.project ? ` · ${l.project}` : '');
       div.innerHTML =
         `<span class="savatar dim">${robotAvatar(l.name, 20)}</span>` +
-        (l.term ? `<span class="kind">${icon('terminal')}</span>` : '') +
+        sessionToolMark(l) +
         `<span class="sname">${esc(l.name)}</span>` +
         (l.project ? `<span class="sstatus">${esc(l.project)}</span>` : '') +
         `<span class="sage">${esc(l.age)}</span>`;
@@ -1062,7 +1075,11 @@ function renderSidebar() {
   }
 
   const u = ov?.usage;
-  usageBoxEl.innerHTML = u ? usageBar('5h', u.fiveHour, '↻ ' + u.fiveHourReset) + usageBar('7d', u.sevenDay, '↻ ' + u.sevenDayReset) : '';
+  usageBoxEl.innerHTML = u
+    ? `<div class="usage-source">${developerIcon('claude')}<span>Claude-Limits</span></div>` +
+      usageBar('5h', u.fiveHour, '↻ ' + u.fiveHourReset) +
+      usageBar('7d', u.sevenDay, '↻ ' + u.sevenDayReset)
+    : '';
   attentionBar();
   syncDockNav();
 }
@@ -1173,12 +1190,11 @@ function agentPill(a, project) {
     ? `<button class="btn tiny" data-act="done" data-agent="${esc(a.name)}" title="/done — Arbeit committen und auf dev bringen">${icon('check')} done</button>`
     : '';
   const open = a.status !== 'dead'
-    ? `<button class="btn tiny" data-act="open" data-agent="${esc(a.name)}" title="Terminal öffnen">${icon('terminal')}</button>`
+    ? `<button class="btn tiny" data-act="open" data-agent="${esc(a.name)}" title="Terminal öffnen">${developerIcon('bash')}</button>`
     : '';
-  const kind = a.term ? `<span class="kind" title="Terminal-Session — hier läuft kein Claude">${icon('terminal')}</span>` : '';
   return `<span class="pill${a.status === 'blocked' ? ' waiting' : ''}${a.unread ? ' unread' : ''}">` +
     `<span class="pill-avatar">${robotAvatar(a.name, 18)}</span>` +
-    `<span class="dot" style="background:${v.color}"></span>${kind}` +
+    `<span class="dot" style="background:${v.color}"></span>${sessionToolMark(a)}` +
     `<span class="name">${esc(a.name)}</span>` +
     `<span class="st">${visHtml(v)}</span>` +
     `<span class="age">${esc(a.age)}</span>${open}${done}</span>`;
@@ -1251,11 +1267,11 @@ function projectCard(p) {
       ? `<button class="btn danger confirm" data-act="rmproj2" data-project="${esc(p.name)}">Repo wirklich entfernen?</button>`
       : `<button class="btn danger" data-act="rmproj1" data-project="${esc(p.name)}" title="Repository aus magentic entfernen — löscht keine Dateien">${icon('x')} Repo</button>`;
     mainCfg += `<span class="actions">` +
-      `<button class="btn" data-act="showgraph" data-project="${esc(p.name)}" title="Git-Graph dieses Projekts — wo Worktrees abzweigen und zusammenlaufen">${icon('gitbranch')} Graph</button>` +
-      `<button class="btn" data-act="showboard" data-project="${esc(p.name)}" title="Board aus allen Spec-Ordnern — Plan, Tasks und was gerade läuft">${icon('square')} Board</button>` +
-      `<button class="btn" data-act="newsession" data-project="${esc(p.name)}" title="Neue Claude-Session im Projekt">+ Session</button>` +
-      `<button class="btn" data-act="newworktree" data-project="${esc(p.name)}" title="Neue Session in eigenem Worktree">${icon('gitbranch')} Worktree</button>` +
-      `<button class="btn" data-act="newterm" data-project="${esc(p.name)}" title="Reines Terminal im Projekt — Shell statt Claude">${icon('terminal')} Terminal</button>` +
+      `<button class="btn" data-act="showgraph" data-project="${esc(p.name)}" title="Git-Graph dieses Projekts — wo Worktrees abzweigen und zusammenlaufen">${developerIcon('git')} Graph</button>` +
+      `<button class="btn" data-act="showboard" data-project="${esc(p.name)}" title="Board aus allen Spec-Ordnern — Plan, Tasks und was gerade läuft">${developerIcon('markdown')} Board</button>` +
+      `<button class="btn" data-act="newsession" data-project="${esc(p.name)}" title="Neue Claude-Session im Projekt">${developerIcon('claude')} Session</button>` +
+      `<button class="btn" data-act="newworktree" data-project="${esc(p.name)}" title="Neue Session in eigenem Worktree">${developerIcon('git')} Worktree</button>` +
+      `<button class="btn" data-act="newterm" data-project="${esc(p.name)}" title="Reines Terminal im Projekt — Shell statt Claude">${developerIcon('bash')} Terminal</button>` +
       `<button class="btn" data-act="deploy" data-project="${esc(p.name)}" title="Neue Claude-Session, die /deploy ausführt">${icon('rocket')} deploy</button>${rmProj}</span>`;
   }
   return `<div class="card"><div class="card-head"><h2>${esc(p.name)}</h2>` +
@@ -1369,11 +1385,11 @@ function deployCard() {
       `<span class="path">lade…</span></div></div>`;
   }
   const azChip = ds.azOk
-    ? `<span class="ds-chip ok">Azure ✓</span>`
-    : `<span class="ds-chip bad" title="${esc(ds.azErr)}">Azure ✗</span>` +
+    ? `<span class="ds-chip ok">${developerIcon('azure')} Azure ✓</span>`
+    : `<span class="ds-chip bad" title="${esc(ds.azErr)}">${developerIcon('azure')} Azure ✗</span>` +
       `<button class="btn tiny" data-act="azlogin">az login</button>`;
   const subChip = ds.azSub
-    ? `<button class="ds-chip sub" data-act="azsub" title="Azure-Subscription wechseln · ${esc(ds.azSub)}\n${esc(ds.azSubId)}">${icon('cloud')} ${esc(shortSub(ds.azSub))} ▾</button>`
+    ? `<button class="ds-chip sub" data-act="azsub" title="Azure-Subscription wechseln · ${esc(ds.azSub)}\n${esc(ds.azSubId)}">${developerIcon('azure')} ${esc(shortSub(ds.azSub))} ▾</button>`
     : '';
   const argoChip = ds.argoOk
     ? `<span class="ds-chip ok" title="${esc(ds.argoServer)}">Argo ✓</span>`
@@ -1398,8 +1414,8 @@ function deployCard() {
     `${azChip}${subChip}${argoChip}${watching}` +
     `<span class="actions"><span class="path">${esc(deployStamp)}</span>` +
     `<button class="btn tiny" data-act="dsrefresh" title="Status neu laden">↻</button></span></div>` +
-    `<div class="ds-cols"><div class="ds-col"><div class="ds-title">Azure DevOps Builds</div>${builds}</div>` +
-    `<div class="ds-col"><div class="ds-title">ArgoCD</div>${argoHtml}</div></div></div>`;
+    `<div class="ds-cols"><div class="ds-col"><div class="ds-title">${developerIcon('azure')} Azure DevOps Builds</div>${builds}</div>` +
+    `<div class="ds-col"><div class="ds-title">${developerIcon('kubernetes')} ArgoCD</div>${argoHtml}</div></div></div>`;
 }
 
 let dsLoading = false;
@@ -1635,7 +1651,7 @@ async function runSearch() {
     res.innerHTML = searchHits.map((h, i) =>
       `<div class="hit" data-hit="${i}">` +
       `<div class="hit-meta"><span class="hit-proj">${esc(h.project)}</span>` +
-      `<span class="hit-role ${h.role}">${h.role === 'user' ? 'Du' : 'Claude'}</span>` +
+      `<span class="hit-role ${h.role}">${h.role === 'user' ? 'Du' : `${developerIcon('claude')}Claude`}</span>` +
       `<span class="hit-time">${esc(h.time)}</span></div>` +
       `<div class="hit-snippet">${highlightQuery(h.snippet, q)}</div></div>`
     ).join('');
@@ -1704,7 +1720,7 @@ function renderTimeline() {
       day = en.day;
       html += `<div class="tl-day">${esc(day)}</div>`;
     }
-    const source = en.source ? `<span class="tl-source">${esc(en.source)}</span>` : '';
+    const source = en.source ? `<span class="tl-source">${providerIcon(en.source)}${esc(en.source)}</span>` : '';
     const who = en.agent ? `<span class="tl-agent">${esc(en.agent)}</span>` : '';
     html += `<button type="button" class="tl-row" data-i="${i}" title="Session öffnen oder Prompt anzeigen">` +
       `<span class="tl-time">${esc(en.time)}</span>` +
@@ -1739,17 +1755,18 @@ function hideMenu() {
 
 function showMenu(x, y, name, status) {
   menuFor = name;
+  const session = agentInfo(name) || (ov?.later || []).find(item => item.name === name);
   if (status === 'later') {
     menuEl.innerHTML =
-      `<div class="mi-head">${esc(name)}</div>` +
+      `<div class="mi-head">${sessionToolMark(session)}${esc(name)}</div>` +
       `<div class="mi" data-mi="reopen">${icon('play')} Wieder öffnen</div>` +
       `<div class="mi danger" data-mi="kill">${icon('x')} Endgültig entfernen</div>`;
   } else {
     const done = ['idle', 'running'].includes(status)
       ? `<div class="mi" data-mi="done">${icon('check')} /done senden</div>` : '';
     menuEl.innerHTML =
-      `<div class="mi-head">${esc(name)}</div>` +
-      `<div class="mi" data-mi="open">${icon('terminal')} Terminal öffnen</div>` + done +
+      `<div class="mi-head">${sessionToolMark(session)}${esc(name)}</div>` +
+      `<div class="mi" data-mi="open">${developerIcon('bash')} Terminal öffnen</div>` + done +
       `<div class="mi" data-mi="later">${icon('clock')} Für später schließen</div>` +
       `<div class="mi danger" data-mi="kill">${icon('x')} Session beenden</div>`;
   }
@@ -1870,7 +1887,7 @@ async function openLinksMenu(anchor) {
 
 async function openSubPicker(anchor) {
   const r = anchor.getBoundingClientRect();
-  subMenuEl.innerHTML = `<div class="mi-head">Azure-Subscription</div><div class="mi muted">lade…</div>`;
+  subMenuEl.innerHTML = `<div class="mi-head">${developerIcon('azure')} Azure-Subscription</div><div class="mi muted">lade…</div>`;
   subMenuEl.style.display = 'block';
   subMenuEl.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 360)) + 'px';
   subMenuEl.style.top = (r.bottom + 6) + 'px';
@@ -1878,12 +1895,12 @@ async function openSubPicker(anchor) {
   try { accs = await AzAccounts(); } catch { accs = []; }
   if (subMenuEl.style.display === 'none') return;
   if (!accs.length) {
-    subMenuEl.innerHTML = `<div class="mi-head">Azure-Subscription</div>` +
+    subMenuEl.innerHTML = `<div class="mi-head">${developerIcon('azure')} Azure-Subscription</div>` +
       `<div class="mi muted">keine gefunden — erst „az login"</div>`;
     return;
   }
   const cur = deployStatus?.azSubId || '';
-  subMenuEl.innerHTML = `<div class="mi-head">Subscription wechseln</div>` +
+  subMenuEl.innerHTML = `<div class="mi-head">${developerIcon('azure')} Subscription wechseln</div>` +
     accs.map(s => {
       const active = s.id === cur || (!cur && s.isDefault);
       return `<div class="mi${active ? ' active' : ''}" data-sub="${esc(s.id)}" title="${esc(s.id)}">` +
