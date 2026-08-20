@@ -104,16 +104,23 @@ type promptTargetObservation struct {
 	Input        promptInputState
 }
 
+type observationReader func(context.Context, []Session) ObservationSnapshot
+
 // observePromptTarget adapts a runtime-only prompt transport target to one
 // fresh, targeted Observation. The scoped SessionID exists only to preserve
-// Observation's stable join semantics for this single probe.
-func observePromptTarget(ctx context.Context, runtimeName string) promptTargetObservation {
+// Observation's stable join semantics for this single probe. The reader is an
+// explicit seam so a caller's coherent Observation Adapter is also used for
+// delivery-time revalidation.
+func observePromptTarget(ctx context.Context, runtimeName string, observe observationReader) promptTargetObservation {
+	if observe == nil {
+		observe = Observe
+	}
 	target := Session{
 		ID:          SessionID("prompt-target:" + runtimeName),
 		Name:        strings.TrimPrefix(runtimeName, SessionPrefix),
 		RuntimeName: runtimeName,
 	}
-	return promptTargetObservationFromSnapshot(target, Observe(ctx, []Session{target}))
+	return promptTargetObservationFromSnapshot(target, observe(ctx, []Session{target}))
 }
 
 func promptTargetObservationFromSnapshot(target Session, snapshot ObservationSnapshot) promptTargetObservation {

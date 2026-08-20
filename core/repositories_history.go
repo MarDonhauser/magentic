@@ -57,7 +57,9 @@ func parseRepositoryCommitHistory(out string) ([]RepositoryCommit, error) {
 	if strings.Contains(normalized, "\r") {
 		return nil, errors.New("malformed commit history: unexpected carriage return")
 	}
-	normalized = strings.TrimRight(normalized, "\n")
+	if strings.HasSuffix(normalized, "\n") {
+		normalized = strings.TrimSuffix(normalized, "\n")
+	}
 	if normalized == "" || !strings.HasSuffix(normalized, "\x1e") {
 		return nil, errors.New("malformed commit history: missing final record terminator")
 	}
@@ -72,7 +74,13 @@ func parseRepositoryCommitHistory(out string) ([]RepositoryCommit, error) {
 			continue
 		}
 		recordNumber := recordIndex + 1
-		record := strings.Trim(raw, "\n")
+		record := raw
+		if recordIndex > 0 {
+			if !strings.HasPrefix(record, "\n") {
+				return nil, fmt.Errorf("malformed commit record %d boundary", recordNumber)
+			}
+			record = strings.TrimPrefix(record, "\n")
+		}
 		if record == "" || strings.Contains(record, "\n") {
 			return nil, fmt.Errorf("malformed commit record %d boundary", recordNumber)
 		}

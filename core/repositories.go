@@ -713,9 +713,13 @@ func parseRepositoriesTopology(out string) ([]repositoriesTopologyWorktree, erro
 		current = nil
 		return nil
 	}
-	for lineIndex, line := range strings.Split(normalized, "\n") {
+	lines := strings.Split(strings.TrimSuffix(normalized, "\n"), "\n")
+	for lineIndex, line := range lines {
 		lineNumber := lineIndex + 1
 		if line == "" {
+			if current == nil {
+				return nil, fmt.Errorf("unexpected Worktree record separator at topology line %d", lineNumber)
+			}
 			if err := flush(); err != nil {
 				return nil, err
 			}
@@ -737,7 +741,7 @@ func parseRepositoriesTopology(out string) ([]repositoriesTopologyWorktree, erro
 			if current == nil || current.seenHead || current.seenCheckout || current.seenLocked || current.seenPrunable {
 				return nil, fmt.Errorf("duplicate or misplaced HEAD at topology line %d", lineNumber)
 			}
-			head := strings.TrimSpace(strings.TrimPrefix(line, "HEAD "))
+			head := strings.TrimPrefix(line, "HEAD ")
 			if !validRepositoryObjectID(head) {
 				return nil, fmt.Errorf("invalid HEAD at topology line %d", lineNumber)
 			}
@@ -747,7 +751,7 @@ func parseRepositoriesTopology(out string) ([]repositoriesTopologyWorktree, erro
 			if current == nil || !current.seenHead || current.seenCheckout || current.seenLocked || current.seenPrunable {
 				return nil, fmt.Errorf("duplicate or misplaced branch at topology line %d", lineNumber)
 			}
-			branchRef := strings.TrimSpace(strings.TrimPrefix(line, "branch "))
+			branchRef := strings.TrimPrefix(line, "branch ")
 			if !validRepositoryBranchRef(branchRef) {
 				return nil, fmt.Errorf("invalid branch at topology line %d", lineNumber)
 			}
@@ -805,11 +809,18 @@ func parseRepositoriesTopology(out string) ([]repositoriesTopologyWorktree, erro
 }
 
 func decodeRepositoriesTopologyValue(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "", errors.New("topology value is empty")
 	}
 	if raw[0] != '"' {
+		if strings.TrimSpace(raw) != raw {
+			return "", errors.New("topology value has surrounding whitespace")
+		}
+		for _, character := range raw {
+			if character < ' ' || character == '\x7f' {
+				return "", errors.New("topology value contains a control character")
+			}
+		}
 		return raw, nil
 	}
 	if len(raw) < 2 || raw[len(raw)-1] != '"' {
@@ -929,7 +940,6 @@ func parseRepositoriesStatus(out string) (repositoriesStatus, error) {
 	seenChanges := false
 	seenPaths := map[string]bool{}
 	addPath := func(path string) {
-		path = strings.TrimSpace(path)
 		if path == "" || seenPaths[path] {
 			return
 		}
@@ -995,41 +1005,59 @@ func parseRepositoriesStatus(out string) (repositoriesStatus, error) {
 		case strings.HasPrefix(line, "1 "):
 			seenChanges = true
 			fields := strings.SplitN(line, " ", 9)
-			if len(fields) != 9 || !validRepositoryXY(fields[1]) || strings.TrimSpace(fields[8]) == "" {
+			if len(fields) != 9 || !validRepositoryChangedXY(fields[1], false) ||
+				!validRepositorySubmodule(fields[2]) || !validRepositoryModes(fields[3:6]) ||
+				!validRepositoryOIDSet(fields[6:8]) {
 				return repositoriesStatus{}, fmt.Errorf("invalid ordinary change at status line %d", lineNumber+1)
 			}
+			path, err := decodeRepositoryStatusPath(fields[8])
+			if err != nil {
+				return repositoriesStatus{}, fmt.Errorf("invalid ordinary path at status line %d: %w", lineNumber+1, err)
+			}
 			countRepositoryXY(&result.Changes, fields[1])
-			addPath(decodeRepositoryPath(fields[8]))
+			addPath(path)
 		case strings.HasPrefix(line, "2 "):
 			seenChanges = true
 			fields := strings.SplitN(line, " ", 10)
-			if len(fields) != 10 || !validRepositoryXY(fields[1]) {
+			if len(fields) != 10 || !validRepositoryChangedXY(fields[1], true) ||
+				!validRepositorySubmodule(fields[2]) || !validRepositoryModes(fields[3:6]) ||
+				!validRepositoryOIDSet(fields[6:8]) || !validRepositoryRenameScore(fields[8]) {
 				return repositoriesStatus{}, fmt.Errorf("invalid renamed change at status line %d", lineNumber+1)
 			}
-			path, original, hasOriginal := strings.Cut(fields[9], "\t")
-			if strings.TrimSpace(path) == "" || !hasOriginal || strings.TrimSpace(original) == "" {
+			pathRaw, originalRaw, hasOriginal := strings.Cut(fields[9], "\t")
+			path, pathErr := decodeRepositoryStatusPath(pathRaw)
+			original, originalErr := decodeRepositoryStatusPath(originalRaw)
+			if !hasOriginal || pathErr != nil || originalErr != nil {
 				return repositoriesStatus{}, fmt.Errorf("invalid renamed paths at status line %d", lineNumber+1)
 			}
 			countRepositoryXY(&result.Changes, fields[1])
-			addPath(decodeRepositoryPath(path))
+			addPath(path)
+			addPath(original)
 		case strings.HasPrefix(line, "u "):
 			seenChanges = true
 			fields := strings.SplitN(line, " ", 11)
-			if len(fields) != 11 || !validRepositoryXY(fields[1]) || strings.TrimSpace(fields[10]) == "" {
+			if len(fields) != 11 || !validRepositoryUnmergedXY(fields[1]) ||
+				!validRepositorySubmodule(fields[2]) || !validRepositoryModes(fields[3:7]) ||
+				!validRepositoryOIDSet(fields[7:10]) {
 				return repositoriesStatus{}, fmt.Errorf("invalid unmerged change at status line %d", lineNumber+1)
 			}
+			path, err := decodeRepositoryStatusPath(fields[10])
+			if err != nil {
+				return repositoriesStatus{}, fmt.Errorf("invalid unmerged path at status line %d: %w", lineNumber+1, err)
+			}
 			result.Changes.Conflicted++
-			addPath(decodeRepositoryPath(fields[10]))
+			addPath(path)
 		case strings.HasPrefix(line, "? "):
 			seenChanges = true
-			if strings.TrimSpace(strings.TrimPrefix(line, "? ")) == "" {
+			path, err := decodeRepositoryStatusPath(strings.TrimPrefix(line, "? "))
+			if err != nil {
 				return repositoriesStatus{}, fmt.Errorf("invalid untracked path at status line %d", lineNumber+1)
 			}
 			result.Changes.Untracked++
-			addPath(decodeRepositoryPath(strings.TrimPrefix(line, "? ")))
+			addPath(path)
 		case strings.HasPrefix(line, "! "):
 			seenChanges = true
-			if strings.TrimSpace(strings.TrimPrefix(line, "! ")) == "" {
+			if _, err := decodeRepositoryStatusPath(strings.TrimPrefix(line, "! ")); err != nil {
 				return repositoriesStatus{}, fmt.Errorf("invalid ignored path at status line %d", lineNumber+1)
 			}
 		default:
@@ -1051,12 +1079,80 @@ func parseRepositoriesStatus(out string) (repositoriesStatus, error) {
 	return result, nil
 }
 
-func validRepositoryXY(xy string) bool {
+func validRepositoryChangedXY(xy string, renamed bool) bool {
 	if len(xy) != 2 {
 		return false
 	}
-	const allowed = ".MADRCUT?"
-	return strings.ContainsRune(allowed, rune(xy[0])) && strings.ContainsRune(allowed, rune(xy[1]))
+	const allowed = ".MADRCT"
+	if !strings.ContainsRune(allowed, rune(xy[0])) || !strings.ContainsRune(allowed, rune(xy[1])) || xy == ".." {
+		return false
+	}
+	hasRename := strings.ContainsAny(xy, "RC")
+	return hasRename == renamed
+}
+
+func validRepositoryUnmergedXY(xy string) bool {
+	switch xy {
+	case "DD", "AU", "UD", "UA", "DU", "AA", "UU":
+		return true
+	default:
+		return false
+	}
+}
+
+func validRepositorySubmodule(value string) bool {
+	if value == "N..." {
+		return true
+	}
+	return len(value) == 4 && value[0] == 'S' &&
+		(value[1] == '.' || value[1] == 'C') &&
+		(value[2] == '.' || value[2] == 'M') &&
+		(value[3] == '.' || value[3] == 'U')
+}
+
+func validRepositoryMode(value string) bool {
+	if len(value) != 6 {
+		return false
+	}
+	for i := range value {
+		if value[i] < '0' || value[i] > '7' {
+			return false
+		}
+	}
+	return true
+}
+
+func validRepositoryModes(values []string) bool {
+	if len(values) == 0 {
+		return false
+	}
+	for _, value := range values {
+		if !validRepositoryMode(value) {
+			return false
+		}
+	}
+	return true
+}
+
+func validRepositoryOIDSet(values []string) bool {
+	if len(values) == 0 {
+		return false
+	}
+	length := len(values[0])
+	for _, value := range values {
+		if len(value) != length || !validRepositoryObjectID(value) {
+			return false
+		}
+	}
+	return true
+}
+
+func validRepositoryRenameScore(value string) bool {
+	if len(value) < 2 || (value[0] != 'R' && value[0] != 'C') {
+		return false
+	}
+	score, err := parseRepositoryNonnegativeDecimal(value[1:], "rename score")
+	return err == nil && score <= 100
 }
 
 func countRepositoryXY(changes *RepositoryWorkingChanges, xy string) {
@@ -1068,14 +1164,21 @@ func countRepositoryXY(changes *RepositoryWorkingChanges, xy string) {
 	}
 }
 
-func decodeRepositoryPath(path string) string {
-	path = strings.TrimSpace(path)
-	if len(path) >= 2 && path[0] == '"' && path[len(path)-1] == '"' {
-		if decoded, err := strconv.Unquote(path); err == nil {
-			return decoded
-		}
+func decodeRepositoryStatusPath(raw string) (string, error) {
+	if raw == "" || strings.TrimSpace(raw) != raw || strings.ContainsAny(raw, "\x00\r\n") {
+		return "", errors.New("path is empty or not an exact scalar")
 	}
-	return path
+	if raw[0] != '"' {
+		return raw, nil
+	}
+	if len(raw) < 2 || raw[len(raw)-1] != '"' {
+		return "", errors.New("quoted path is truncated")
+	}
+	decoded, err := strconv.Unquote(raw)
+	if err != nil || decoded == "" || strings.ContainsAny(decoded, "\x00\r\n") {
+		return "", errors.New("quoted path is malformed")
+	}
+	return decoded, nil
 }
 
 func (r *Repositories) divergence(ctx context.Context, wt RepositoryWorktree, main RepositoryFact[string]) RepositoryFact[RepositoryDivergence] {

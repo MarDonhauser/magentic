@@ -103,7 +103,7 @@ func TestRepositoriesSurveyHasBoundedCommandBudgetAndCoherentFacts(t *testing.T)
 		{dir: projectPath, args: []string{"worktree", "list", "--porcelain"}, output: topology},
 		{dir: projectPath, args: []string{"status", "--porcelain=v2", "--branch"}, output: repositoriesStatusFixture("aaaa", "main")},
 		{dir: worktreePath, args: []string{"status", "--porcelain=v2", "--branch"}, output: repositoriesStatusFixture("bbbb", "agent/topic",
-			"1 M. N... 100644 100644 100644 aaaa bbbb tracked file.go",
+			"1 M. N... 100644 100644 100644 "+strings.Repeat("a", 40)+" "+strings.Repeat("b", 40)+" tracked file.go",
 			"? new file.go")},
 		{dir: worktreePath, args: []string{"rev-list", "--left-right", "--count", "main...HEAD"}, output: "2\t3\n"},
 	}}
@@ -457,6 +457,11 @@ func TestRepositoriesTopologyRejectsMalformedSuccessfulOutput(t *testing.T) {
 		{name: "invalid head", input: fmt.Sprintf("worktree %s\nHEAD not-an-object-id\nbranch refs/heads/main\n\n", root)},
 		{name: "invalid branch", input: fmt.Sprintf("worktree %s\nHEAD %s\nbranch refs/tags/main\n\n", root, head)},
 		{name: "unterminated quoted path", input: "worktree \"/tmp/repo\n" + "bare\n\n"},
+		{name: "leading empty record", input: "\n" + validRecord + "\n"},
+		{name: "extra trailing record separator", input: validRecord + "\n\n"},
+		{name: "extra path delimiter", input: fmt.Sprintf("worktree  %s\nHEAD %s\nbranch refs/heads/main\n\n", root, head)},
+		{name: "trailing path whitespace", input: fmt.Sprintf("worktree %s \nHEAD %s\nbranch refs/heads/main\n\n", root, head)},
+		{name: "extra head delimiter", input: fmt.Sprintf("worktree %s\nHEAD  %s\nbranch refs/heads/main\n\n", root, head)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -529,6 +534,7 @@ func TestRepositoriesChangeDoesNotRemoveOnMalformedSuccessfulStatus(t *testing.T
 	root := repositoriesTopologyWorktree{Path: projectPath, Head: "aaaa", Branch: "main"}
 	topic := repositoriesTopologyWorktree{Path: target, Head: "bbbb", Branch: "agent/topic"}
 	head := strings.Repeat("b", 40)
+	oldOID := strings.Repeat("a", 40)
 	tests := []struct {
 		name   string
 		status string
@@ -536,6 +542,11 @@ func TestRepositoriesChangeDoesNotRemoveOnMalformedSuccessfulStatus(t *testing.T
 		{name: "invalid object ID", status: "# branch.oid garbage\n# branch.head agent/topic\n"},
 		{name: "invalid branch", status: "# branch.oid " + head + "\n# branch.head topic..broken\n"},
 		{name: "missing terminator", status: "# branch.oid " + head + "\n# branch.head agent/topic"},
+		{name: "ordinary record without a change", status: repositoriesStatusFixture(head, "agent/topic", "1 .. N... 100644 100644 100644 "+oldOID+" "+head+" tracked.go")},
+		{name: "rename record without rename status", status: repositoriesStatusFixture(head, "agent/topic", "2 M. N... 100644 100644 100644 "+oldOID+" "+head+" R100 tracked.go\told.go")},
+		{name: "invalid ordinary mode", status: repositoriesStatusFixture(head, "agent/topic", "1 M. N... 10064x 100644 100644 "+oldOID+" "+head+" tracked.go")},
+		{name: "invalid ordinary submodule", status: repositoriesStatusFixture(head, "agent/topic", "1 M. SXYZ 100644 100644 100644 "+oldOID+" "+head+" tracked.go")},
+		{name: "invalid unmerged status", status: repositoriesStatusFixture(head, "agent/topic", "u M. N... 100644 100644 100644 100644 "+oldOID+" "+head+" "+head+" tracked.go")},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -558,9 +569,9 @@ func TestRepositoriesInspectCapturesAndComparesBaselineOnDemand(t *testing.T) {
 	headB := strings.Repeat("b", 40)
 	runner := &repositoriesRecordingRunner{t: t, steps: []repositoriesRunnerStep{
 		{dir: dir, args: []string{"status", "--porcelain=v2", "--branch"}, output: repositoriesStatusFixture(headA, "agent/topic",
-			"1 .M N... 100644 100644 100644 aaaa aaaa old file.go")},
+			"1 .M N... 100644 100644 100644 "+strings.Repeat("a", 40)+" "+strings.Repeat("a", 40)+" old file.go")},
 		{dir: dir, args: []string{"status", "--porcelain=v2", "--branch"}, output: repositoriesStatusFixture(headB, "agent/topic",
-			"1 .M N... 100644 100644 100644 aaaa aaaa old file.go",
+			"1 .M N... 100644 100644 100644 "+strings.Repeat("a", 40)+" "+strings.Repeat("a", 40)+" old file.go",
 			"? new file.go")},
 		{dir: dir, args: []string{"rev-list", "--count", headA + "..HEAD"}, output: "2\n"},
 	}}

@@ -33,6 +33,9 @@ func TestRepositoriesCommitHistoryRejectsSuccessfulMalformedOutput(t *testing.T)
 		{name: "invalid parent object ID", out: repositoryHistoryFixture(hash, strings.Repeat("b", 39), "1700000000")},
 		{name: "invalid timestamp", out: repositoryHistoryFixture(hash, "", "not-a-time")},
 		{name: "negative timestamp", out: repositoryHistoryFixture(hash, "", "-1")},
+		{name: "newline before terminator", out: strings.Replace(repositoryHistoryFixture(hash, "", "1700000000"), "\x1e", "\n\x1e", 1)},
+		{name: "double final newline", out: repositoryHistoryFixture(hash, "", "1700000000") + "\n\n"},
+		{name: "double inter-record newline", out: repositoryHistoryFixture(hash, "", "1700000000") + "\n\n" + repositoryHistoryFixture(strings.Repeat("b", 40), "", "1700000001")},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

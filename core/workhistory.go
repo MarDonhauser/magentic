@@ -137,13 +137,24 @@ type HistoryProjectAssociation struct {
 }
 
 type HistorySessionAssociation struct {
-	Key            string
-	Name           string
-	ProjectKey     string
-	Dir            string
-	Provider       HistoryProvider
-	ConversationID string
+	Key              string
+	Name             string
+	ProjectKey       string
+	Dir              string
+	Provider         HistoryProvider
+	ConversationID   string
+	LocationEvidence HistoryLocationEvidence
 }
+
+// HistoryLocationEvidence states why a provider event whose conversation ID
+// does not bind exactly may still fall back to a Session directory. A blank
+// value is deliberately no evidence: directory overlap alone cannot prove
+// that a terminal or agentless Session owns a provider event.
+type HistoryLocationEvidence string
+
+const (
+	HistoryLocationProviderRun HistoryLocationEvidence = "provider-run"
+)
 
 // HistoryAssociations is an immutable query input. The WorkHistory index keeps
 // source facts only; Project and Session attribution is recomputed for every
@@ -158,7 +169,11 @@ type HistoryAssociations struct {
 // Registry revision. Durable IDs own identity; names remain a read-only legacy
 // fallback for Registry data that predates ID migration.
 func NewHistoryAssociations(state State) HistoryAssociations {
-	out := HistoryAssociations{Revision: fmt.Sprintf("registry:%d", state.Revision)}
+	var revision string
+	if state.Revision > 0 {
+		revision = fmt.Sprintf("registry:%d", state.Revision)
+	}
+	out := HistoryAssociations{Revision: revision}
 	for _, project := range state.Projects {
 		key := string(project.ID)
 		if key == "" {
@@ -169,6 +184,12 @@ func NewHistoryAssociations(state State) HistoryAssociations {
 		})
 	}
 	for _, session := range state.Agents {
+		// Terminal Sessions have no provider-run evidence. Even when legacy or
+		// malformed state happens to carry run-shaped fields, their directory is
+		// never allowed to claim coding-agent history.
+		if session.IsTerm() {
+			continue
+		}
 		key := string(session.ID)
 		if key == "" {
 			key = session.Name
@@ -192,20 +213,18 @@ func NewHistoryAssociations(state State) HistoryAssociations {
 			association := base
 			association.Provider = provider
 			association.ConversationID = run.ExternalID
+			association.LocationEvidence = HistoryLocationProviderRun
 			out.Sessions = append(out.Sessions, association)
 			addedRun = true
 		}
 		// Legacy state stored only Claude's run ID. Keep it readable without
 		// allowing that unqualified field to override an AgentRuns binding.
-		if !addedRun && session.SessionID != "" && !session.IsTerm() {
+		if !addedRun && session.SessionID != "" {
 			association := base
 			association.Provider = HistoryProviderClaude
 			association.ConversationID = session.SessionID
+			association.LocationEvidence = HistoryLocationProviderRun
 			out.Sessions = append(out.Sessions, association)
-			addedRun = true
-		}
-		if !addedRun {
-			out.Sessions = append(out.Sessions, base)
 		}
 	}
 	return out
@@ -383,9 +402,9 @@ type workHistoryFS interface {
 
 type osWorkHistoryFS struct{}
 
-func (osWorkHistoryFS) Stat(path string) (fs.FileInfo, error) { return os.Stat(path) }
+func (osWorkHistoryFS) Stat(path string) (fs.FileInfo, error)  { return os.Stat(path) }
 func (osWorkHistoryFS) Lstat(path string) (fs.FileInfo, error) { return os.Lstat(path) }
-func (osWorkHistoryFS) ReadFile(path string) ([]byte, error)  { return os.ReadFile(path) }
+func (osWorkHistoryFS) ReadFile(path string) ([]byte, error)   { return os.ReadFile(path) }
 func (osWorkHistoryFS) WalkDir(path string, fn fs.WalkDirFunc) error {
 	return filepath.WalkDir(path, fn)
 }
@@ -1076,7 +1095,7 @@ func longestHistorySessionMatches(sessions []HistorySessionAssociation, path str
 	best := -1
 	var out []HistorySessionAssociation
 	for _, session := range sessions {
-		if session.Provider != "" && session.Provider != provider {
+		if session.LocationEvidence != HistoryLocationProviderRun || session.Provider != provider {
 			continue
 		}
 		if session.Dir == "" {
@@ -1093,9 +1112,10 @@ func longestHistorySessionMatches(sessions []HistorySessionAssociation, path str
 		}
 	}
 	// A Registry Session may have several provider-qualified AgentRuns and thus
-	// several associations for the same directory. Provider compatibility is
-	// applied before path ranking so an incompatible nested Session cannot hide
-	// a compatible parent. Collapse remaining aliases by durable Session key.
+	// several associations for the same directory. Explicit provider-run
+	// evidence is applied before path ranking so a terminal, agentless, or
+	// incompatible nested Session cannot hide a compatible parent. Collapse
+	// remaining aliases by durable Session key.
 	return uniqueHistorySessionMatches(out)
 }
 
@@ -1107,7 +1127,10 @@ func uniqueHistorySessionMatches(sessions []HistorySessionAssociation) []History
 		if key == "" {
 			// Hand-built query inputs need not carry Registry IDs. Do not collapse
 			// distinct anonymous associations merely because their key is empty.
-			key = strings.Join([]string{session.Name, session.ProjectKey, session.Dir, string(session.Provider), session.ConversationID}, "\x00")
+			key = strings.Join([]string{
+				session.Name, session.ProjectKey, session.Dir, string(session.Provider),
+				session.ConversationID, string(session.LocationEvidence),
+			}, "\x00")
 		}
 		if seen[key] {
 			continue

@@ -256,6 +256,7 @@ func TestWorkHistoryMalformedRecordsArePartialNotEmpty(t *testing.T) {
 
 func TestNewHistoryAssociationsUsesDurableIDsAndAgentRuns(t *testing.T) {
 	state := &State{
+		Revision: 7,
 		Projects: []Project{{ID: ProjectID("project-id"), Name: "Display project", Path: "/work/demo"}},
 		Agents: []Session{{
 			ID: SessionID("session-id"), Name: "Display session", ProjectID: ProjectID("project-id"), Project: "legacy-project", Dir: "/work/demo",
@@ -263,6 +264,9 @@ func TestNewHistoryAssociationsUsesDurableIDsAndAgentRuns(t *testing.T) {
 		}},
 	}
 	associations := NewHistoryAssociations(*state)
+	if associations.Revision != "registry:7" {
+		t.Fatalf("association revision = %q, want registry:7", associations.Revision)
+	}
 	if len(associations.Projects) != 1 || associations.Projects[0].Key != "project-id" {
 		t.Fatalf("project association did not use durable ID: %#v", associations.Projects)
 	}
@@ -270,7 +274,7 @@ func TestNewHistoryAssociationsUsesDurableIDsAndAgentRuns(t *testing.T) {
 		t.Fatalf("provider run associations = %#v", associations.Sessions)
 	}
 	for _, association := range associations.Sessions {
-		if association.Key != "session-id" || association.ProjectKey != "project-id" {
+		if association.Key != "session-id" || association.ProjectKey != "project-id" || association.LocationEvidence != HistoryLocationProviderRun {
 			t.Fatalf("session association did not use durable IDs: %#v", association)
 		}
 	}
@@ -282,8 +286,53 @@ func TestNewHistoryAssociationsUsesDurableIDsAndAgentRuns(t *testing.T) {
 		Projects: []Project{{Name: "legacy-project", Path: "/legacy"}},
 		Agents:   []Session{{Name: "legacy-session", Project: "legacy-project", Dir: "/legacy", SessionID: "legacy-claude"}},
 	})
-	if legacy.Projects[0].Key != "legacy-project" || legacy.Sessions[0].Key != "legacy-session" || legacy.Sessions[0].ProjectKey != "legacy-project" || legacy.Sessions[0].Provider != HistoryProviderClaude {
+	if legacy.Revision != "" || legacy.Projects[0].Key != "legacy-project" || legacy.Sessions[0].Key != "legacy-session" || legacy.Sessions[0].ProjectKey != "legacy-project" || legacy.Sessions[0].Provider != HistoryProviderClaude || legacy.Sessions[0].LocationEvidence != HistoryLocationProviderRun {
 		t.Fatalf("legacy association fallback = %#v", legacy)
+	}
+}
+
+func TestNewHistoryAssociationsExcludesTerminalAndAgentlessLocationClaims(t *testing.T) {
+	state := State{
+		Revision: 12,
+		Projects: []Project{{ID: "project-id", Name: "Project", Path: "/work/project"}},
+		Agents: []Session{
+			{
+				ID: "provider-parent", Name: "Provider parent", ProjectID: "project-id", Project: "Project", Dir: "/work/project",
+				SessionKind: SessionKindCodingAgent, AgentRuns: []AgentRunRef{{Vendor: AgentVendorCodex, ExternalID: "parent-run"}},
+			},
+			{
+				ID: "terminal-child", Name: "Terminal child", ProjectID: "project-id", Project: "Project", Dir: "/work/project/nested",
+				SessionKind: SessionKindTerminal,
+				// Even malformed legacy data must not turn a terminal into an
+				// owner of coding-agent history.
+				AgentRuns: []AgentRunRef{{Vendor: AgentVendorCodex, ExternalID: "terminal-run"}},
+			},
+			{
+				ID: "agentless-child", Name: "Agentless child", ProjectID: "project-id", Project: "Project", Dir: "/work/project/nested/deeper",
+				SessionKind: SessionKindCodingAgent,
+			},
+		},
+	}
+	associations := NewHistoryAssociations(state)
+	if len(associations.Sessions) != 1 || associations.Sessions[0].Key != "provider-parent" {
+		t.Fatalf("terminal or agentless Session emitted a location claim: %#v", associations.Sessions)
+	}
+
+	got := newHistoryAssociationResolver(associations).resolve(historyRecord{
+		Provider: HistoryProviderCodex, ConversationID: "unbound-run",
+		CWD: "/work/project/nested/deeper/source",
+	})
+	if got.SessionKey.State != HistoryFactKnown || got.SessionKey.Value != "provider-parent" {
+		t.Fatalf("nested terminal or agentless child stole provider event: %#v", got)
+	}
+
+	state.Agents = state.Agents[1:]
+	withoutQualifiedParent := NewHistoryAssociations(state)
+	unknown := newHistoryAssociationResolver(withoutQualifiedParent).resolve(historyRecord{
+		Provider: HistoryProviderCodex, CWD: "/work/project/nested/deeper/source",
+	})
+	if unknown.SessionKey.State != HistoryFactUnknown {
+		t.Fatalf("agentless location fabricated Session attribution: %#v", unknown)
 	}
 }
 
@@ -291,8 +340,8 @@ func TestHistoryLocationFallbackTreatsMultiProviderRunsAsOneSession(t *testing.T
 	associations := HistoryAssociations{
 		Projects: []HistoryProjectAssociation{{Key: "project-id", Name: "Project", Path: "/work/demo"}},
 		Sessions: []HistorySessionAssociation{
-			{Key: "session-id", Name: "Session", ProjectKey: "project-id", Dir: "/work/demo", Provider: HistoryProviderClaude, ConversationID: "claude-run"},
-			{Key: "session-id", Name: "Session", ProjectKey: "project-id", Dir: "/work/demo", Provider: HistoryProviderCodex, ConversationID: "codex-run"},
+			{Key: "session-id", Name: "Session", ProjectKey: "project-id", Dir: "/work/demo", Provider: HistoryProviderClaude, ConversationID: "claude-run", LocationEvidence: HistoryLocationProviderRun},
+			{Key: "session-id", Name: "Session", ProjectKey: "project-id", Dir: "/work/demo", Provider: HistoryProviderCodex, ConversationID: "codex-run", LocationEvidence: HistoryLocationProviderRun},
 		},
 	}
 	resolver := newHistoryAssociationResolver(associations)
@@ -314,8 +363,9 @@ func TestHistoryLocationFallbackRanksOnlyProviderCompatibleSessions(t *testing.T
 	resolver := newHistoryAssociationResolver(HistoryAssociations{
 		Projects: []HistoryProjectAssociation{{Key: "project-id", Name: "Project", Path: "/work/project"}},
 		Sessions: []HistorySessionAssociation{
-			{Key: "claude-child", Name: "Claude child", ProjectKey: "project-id", Dir: "/work/project/sub", Provider: HistoryProviderClaude, ConversationID: "claude-run"},
-			{Key: "codex-parent", Name: "Codex parent", ProjectKey: "project-id", Dir: "/work/project", Provider: HistoryProviderCodex, ConversationID: "codex-run"},
+			{Key: "claude-child", Name: "Claude child", ProjectKey: "project-id", Dir: "/work/project/sub", Provider: HistoryProviderClaude, ConversationID: "claude-run", LocationEvidence: HistoryLocationProviderRun},
+			{Key: "unqualified-deep", Name: "No run evidence", ProjectKey: "project-id", Dir: "/work/project/sub/deeper"},
+			{Key: "codex-parent", Name: "Codex parent", ProjectKey: "project-id", Dir: "/work/project", Provider: HistoryProviderCodex, ConversationID: "codex-run", LocationEvidence: HistoryLocationProviderRun},
 		},
 	})
 
