@@ -620,7 +620,8 @@ func TestLifecycleRenameDirectRetrySettlesAmbiguousExternalRename(t *testing.T) 
 	if runtime.renameCalls != 1 {
 		t.Fatalf("direct retry replayed external rename %d times", runtime.renameCalls)
 	}
-	if retried.Session.Name != "after" || retried.Session.RuntimeName != SessionName("after") || retried.Record.Phase != LifecycleConverged {
+	if retried.Session.Name != "after" || retried.Session.RuntimeName != SessionName("after") || retried.Record.Phase != LifecycleConverged ||
+		!retried.Record.Applied.RuntimePresent || !retried.Record.Applied.RuntimeRenamed {
 		t.Fatalf("direct retry did not converge pending intent: %+v", retried)
 	}
 	snapshot, err := registry.Snapshot(context.Background())

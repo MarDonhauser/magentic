@@ -117,13 +117,13 @@ func handoffProviderSource(source resolvedHandoffSource) string {
 	var sourceHint string
 	switch source.vendor {
 	case AgentVendorClaude:
-		sourceHint = `Claude Code: "~/.claude/projects/**/*.jsonl"; gleiche "sessionId" mit der AgentRunRef ab.`
+		sourceHint = `Claude Code: "~/.claude/projects/**/*.jsonl"; relevante Identitätsfelder sind "sessionId" und "cwd".`
 	case AgentVendorCodex:
-		sourceHint = `Codex: "${CODEX_HOME:-~/.codex}/sessions/**/rollout-*.jsonl" und "${CODEX_HOME:-~/.codex}/archived_sessions/**/rollout-*.jsonl"; gleiche "payload.session_id" oder "payload.id" im ersten "session_meta"-Eintrag mit der AgentRunRef ab.`
+		sourceHint = `Codex: "${CODEX_HOME:-~/.codex}/sessions/**/rollout-*.jsonl" und "${CODEX_HOME:-~/.codex}/archived_sessions/**/rollout-*.jsonl"; relevante Identitätsfelder im ersten "session_meta"-Eintrag sind "payload.session_id", "payload.id" und "payload.cwd".`
 	case AgentVendorGemini:
-		sourceHint = `Gemini CLI: "~/.gemini/tmp/**/session-*.json", "session-*.jsonl" oder "logs.json"; gleiche "sessionId" mit der AgentRunRef ab.`
+		sourceHint = `Gemini CLI: "~/.gemini/tmp/**/session-*.json", "session-*.jsonl" oder "logs.json"; relevante Identitätsfelder sind "sessionId" und der Projektpfad.`
 	case AgentVendorCopilot:
-		sourceHint = `GitHub Copilot CLI: "~/.copilot/session-state/<external-id>/events.jsonl" und das benachbarte "workspace.yaml"; gleiche die Verzeichnisangabe mit der Quellsession ab.`
+		sourceHint = `GitHub Copilot CLI: "~/.copilot/session-state/*/events.jsonl" und das benachbarte "workspace.yaml"; relevante Identitätsfelder sind die Run-Verzeichnis-ID und "cwd".`
 	}
 	return referenceHint + "\n" + sourceHint
 }
