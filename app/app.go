@@ -217,12 +217,7 @@ func (a *App) AddProject(path string) (string, error) {
 }
 
 func (a *App) RemoveProject(projectID string) error {
-	_, project, err := loadProjectByID(projectID)
-	if err != nil {
-		return err
-	}
-	_, err = core.OpenRegistry(core.StatePath()).Change(a.ctx, core.RemoveProject(project.ID, project.Name))
-	return err
+	return core.OpenSessionLifecycle(core.SessionLifecycleConfig{}).RemoveProject(a.ctx, core.ProjectID(projectID))
 }
 
 func (a *App) ReorderProjects(order []string) error {
@@ -282,7 +277,7 @@ func (a *App) GitGraph(projectID string, limit int) (core.GitGraph, error) {
 	if err != nil {
 		return core.GitGraph{}, err
 	}
-	return core.BuildGitGraph(st, project.Name, limit), nil
+	return core.BuildGitGraph(st, project.ID, limit), nil
 }
 
 func (a *App) Board(projectID string) (core.Board, error) {
@@ -290,7 +285,7 @@ func (a *App) Board(projectID string) (core.Board, error) {
 	if err != nil {
 		return core.Board{}, err
 	}
-	return core.BuildBoard(st, project.Name), nil
+	return core.BuildBoard(st, project.ID), nil
 }
 
 // BoardArchive is an explicit, bounded archive query. Board remains the fast
@@ -300,7 +295,7 @@ func (a *App) BoardArchive(projectID string, limit int) (core.Board, error) {
 	if err != nil {
 		return core.Board{}, err
 	}
-	return core.BuildBoardWithQuery(st, project.Name, core.SpecificationQuery{
+	return core.BuildBoardWithQuery(st, project.ID, core.SpecificationQuery{
 		IncludeArchived: true,
 		ArchiveLimit:    limit,
 	}), nil
@@ -525,7 +520,7 @@ func (a *App) Cleanup(projectID, reference string) (string, error) {
 	if !target.MainBranch.Known() || strings.TrimSpace(target.MainBranch.Value) == "" {
 		return "", fmt.Errorf("Hauptbranch ist derzeit nicht verlässlich bekannt")
 	}
-	name, err := core.StartCleanup(st, target.Worktree.Path, target.MainBranch.Value)
+	name, err := core.StartCleanup(st, target.Project.ID, target.Worktree.Path, target.MainBranch.Value)
 	if err != nil {
 		return "", err
 	}
@@ -537,7 +532,7 @@ func (a *App) Merge(projectID, source, target string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	name, err := core.StartMerge(st, project.Path, source, target)
+	name, err := core.StartMerge(st, project.ID, project.Path, source, target)
 	if err != nil {
 		return "", err
 	}
@@ -549,7 +544,7 @@ func (a *App) Deploy(projectID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	name, err := core.StartDeploy(st, project.Path)
+	name, err := core.StartDeploy(st, project.ID, project.Path)
 	if err != nil {
 		return "", err
 	}

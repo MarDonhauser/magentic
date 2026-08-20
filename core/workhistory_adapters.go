@@ -8,7 +8,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,6 +55,19 @@ func discoverHistoryFiles(ctx context.Context, files workHistoryFS, adapter hist
 			failedRoots++
 			continue
 		}
+		entryInfo, entryErr := files.Lstat(root)
+		if entryErr == nil && entryInfo.Mode()&fs.ModeSymlink != 0 {
+			failedRoots++
+			coverage.Problems = append(coverage.Problems, HistoryProblem{
+				Provider: adapter.Provider(), Kind: "source-symlink", Message: filepath.Base(root),
+			})
+			continue
+		}
+		if entryErr != nil && !os.IsNotExist(entryErr) {
+			failedRoots++
+			coverage.Problems = append(coverage.Problems, HistoryProblem{Provider: adapter.Provider(), Kind: "source-unavailable", Message: entryErr.Error()})
+			continue
+		}
 		info, err := files.Stat(root)
 		if os.IsNotExist(err) {
 			continue
@@ -77,6 +92,12 @@ func discoverHistoryFiles(ctx context.Context, files workHistoryFS, adapter hist
 				if entry != nil && entry.IsDir() {
 					return fs.SkipDir
 				}
+				return nil
+			}
+			if entry.Type()&fs.ModeSymlink != 0 {
+				coverage.Problems = append(coverage.Problems, HistoryProblem{
+					Provider: adapter.Provider(), Kind: "source-symlink-entry", Message: filepath.Base(path),
+				})
 				return nil
 			}
 			if entry.IsDir() || !adapter.Accept(path) {
@@ -233,80 +254,99 @@ func historyExtractText(raw json.RawMessage) string {
 	return ""
 }
 
-func historyUsageFromRaw(raw json.RawMessage) historyUsageRecord {
+func historyUsageFromRaw(raw json.RawMessage) (historyUsageRecord, bool) {
 	if len(raw) == 0 {
-		return historyUsageRecord{}
+		return historyUsageRecord{}, false
 	}
 	var value any
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	if decoder.Decode(&value) != nil {
-		return historyUsageRecord{}
+		return historyUsageRecord{}, true
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return historyUsageRecord{}, true
 	}
 	return historyUsageFromValue(value)
 }
 
-func historyUsageFromValue(value any) historyUsageRecord {
-	input, inputOK := historyFindNumber(value, "input_tokens", "inputTokens", "promptTokenCount", "prompt_tokens")
-	output, outputOK := historyFindNumber(value, "output_tokens", "outputTokens", "candidatesTokenCount", "completion_tokens")
-	cacheRead, cacheReadOK := historyFindNumber(value, "cache_read_input_tokens", "cacheReadTokens", "cached_input_tokens", "cachedContentTokenCount")
-	cacheWrite, cacheWriteOK := historyFindNumber(value, "cache_creation_input_tokens", "cacheWriteTokens")
+func historyUsageFromValue(value any) (historyUsageRecord, bool) {
+	input, inputOK, inputInvalid := historyFindNumber(value, "input_tokens", "inputTokens", "promptTokenCount", "prompt_tokens")
+	output, outputOK, outputInvalid := historyFindNumber(value, "output_tokens", "outputTokens", "candidatesTokenCount", "completion_tokens")
+	cacheRead, cacheReadOK, cacheReadInvalid := historyFindNumber(value, "cache_read_input_tokens", "cacheReadTokens", "cached_input_tokens", "cachedContentTokenCount")
+	cacheWrite, cacheWriteOK, cacheWriteInvalid := historyFindNumber(value, "cache_creation_input_tokens", "cacheWriteTokens")
 	return historyUsageRecord{
 		Input: input, InputKnown: inputOK,
 		Output: output, OutputKnown: outputOK,
 		CacheRead: cacheRead, CacheReadKnown: cacheReadOK,
 		CacheWrite: cacheWrite, CacheWriteKnown: cacheWriteOK,
-	}
+	}, inputInvalid || outputInvalid || cacheReadInvalid || cacheWriteInvalid
 }
 
-func historyFindNumber(value any, keys ...string) (int64, bool) {
+func historyFindNumber(value any, keys ...string) (int64, bool, bool) {
 	wanted := map[string]bool{}
 	for _, key := range keys {
 		wanted[key] = true
 	}
-	var walk func(any) (int64, bool)
-	walk = func(current any) (int64, bool) {
+	var values []int64
+	invalid := false
+	var walk func(any)
+	walk = func(current any) {
 		switch typed := current.(type) {
 		case map[string]any:
 			for key, child := range typed {
 				if wanted[key] {
 					if number, ok := historyNumber(child); ok {
-						return number, true
+						values = append(values, number)
+					} else {
+						invalid = true
 					}
 				}
 			}
 			for _, child := range typed {
-				if number, ok := walk(child); ok {
-					return number, true
-				}
+				walk(child)
 			}
 		case []any:
 			for _, child := range typed {
-				if number, ok := walk(child); ok {
-					return number, true
-				}
+				walk(child)
 			}
 		}
-		return 0, false
 	}
-	return walk(value)
+	walk(value)
+	if invalid {
+		return 0, false, true
+	}
+	if len(values) == 0 {
+		return 0, false, false
+	}
+	valueAt := values[0]
+	for _, candidate := range values[1:] {
+		if candidate != valueAt {
+			return 0, false, true
+		}
+	}
+	return valueAt, true, false
 }
 
 func historyNumber(value any) (int64, bool) {
 	switch typed := value.(type) {
 	case json.Number:
 		n, err := typed.Int64()
-		if err == nil {
+		if err == nil && n >= 0 {
 			return n, true
 		}
-		f, err := typed.Float64()
-		return int64(f), err == nil
 	case float64:
-		return int64(typed), true
+		if typed >= 0 && typed < math.Exp2(63) && !math.IsInf(typed, 0) && !math.IsNaN(typed) && math.Trunc(typed) == typed {
+			return int64(typed), true
+		}
 	case int64:
-		return typed, true
+		if typed >= 0 {
+			return typed, true
+		}
 	case int:
-		return int64(typed), true
+		if typed >= 0 {
+			return int64(typed), true
+		}
 	}
 	return 0, false
 }
@@ -404,7 +444,10 @@ func (a claudeHistoryAdapter) Parse(ctx context.Context, _ workHistoryFS, path s
 			})
 		case "assistant":
 			text := cleanHistoryText(historyExtractText(entry.Message.Content))
-			usage := historyUsageFromRaw(entry.Message.Usage)
+			usage, usageInvalid := historyUsageFromRaw(entry.Message.Usage)
+			if usageInvalid {
+				malformed++
+			}
 			if text == "" && !usage.anyKnown() {
 				return
 			}
@@ -523,7 +566,10 @@ func (a codexHistoryAdapter) Parse(ctx context.Context, _ workHistoryFS, path st
 			}
 		case entry.Type == "event_msg" && payloadType == "token_count":
 			usageRaw := historyRawAt(entry.Payload, "info", "last_token_usage")
-			usage := historyUsageFromRaw(usageRaw)
+			usage, usageInvalid := historyUsageFromRaw(usageRaw)
+			if usageInvalid {
+				malformed++
+			}
 			if usage.anyKnown() {
 				records = append(records, historyRecord{ConversationID: conversation, Timestamp: entry.Timestamp, Role: HistoryRoleAssistant, Kind: HistoryEventUsage, Lineage: HistoryLineagePrimary, Model: model, Usage: usage, CWD: cwd})
 			}
@@ -643,9 +689,12 @@ func (a geminiHistoryAdapter) Parse(ctx context.Context, _ workHistoryFS, path s
 		if text == "" {
 			text = cleanHistoryText(historyExtractText(message.Message))
 		}
-		usage := historyUsageFromRaw(message.UsageMetadata)
-		if !usage.anyKnown() {
-			usage = historyUsageFromRaw(message.Usage)
+		usage, usageInvalid := historyUsageFromRaw(message.UsageMetadata)
+		if !usage.anyKnown() && !usageInvalid {
+			usage, usageInvalid = historyUsageFromRaw(message.Usage)
+		}
+		if usageInvalid {
+			malformed++
 		}
 		switch role {
 		case "user":
@@ -740,7 +789,10 @@ func (a copilotHistoryAdapter) Parse(ctx context.Context, files workHistoryFS, p
 				records = append(records, historyRecord{ConversationID: conversation, Timestamp: entry.Timestamp, Role: HistoryRoleDeveloper, Kind: HistoryEventPrompt, Lineage: lineage, Text: text, CWD: cwd, NativeID: entry.ID})
 			}
 		case "assistant.message", "assistant.response":
-			usage := historyUsageFromRaw(entry.Data.Usage)
+			usage, usageInvalid := historyUsageFromRaw(entry.Data.Usage)
+			if usageInvalid {
+				malformed++
+			}
 			if text == "" && !usage.anyKnown() {
 				return
 			}

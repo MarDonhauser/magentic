@@ -2,11 +2,45 @@ package main
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"magentic/core"
 )
+
+func TestReconcileDoesNotAdoptPartialDiscovery(t *testing.T) {
+	previous := discoverNew
+	t.Cleanup(func() { discoverNew = previous })
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	t.Setenv("MAGENTIC_STATE", statePath)
+	registry := OpenRegistry(statePath)
+	if _, err := registry.Change(context.Background(), RegisterProject(Project{ID: "project-id", Name: "project", Path: "/work/project"})); err != nil {
+		t.Fatal(err)
+	}
+	before, err := registry.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := before.State()
+	discoverNew = func(context.Context, *State) core.RegistryDiscovery {
+		return core.RegistryDiscovery{
+			Availability: core.RegistryDiscoveryPartial,
+			Sessions:     []core.Session{{Name: "complete", RuntimeName: "mgt-complete", Dir: "/work/project"}},
+			Problems:     []core.RegistryDiscoveryProblem{{Operation: "inspect-session", Message: "another runtime is unknown"}},
+		}
+	}
+
+	reconcile(&state)
+
+	after, err := registry.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Revision() != before.Revision() || len(after.State().Agents) != 0 || len(state.Agents) != 0 {
+		t.Fatalf("partial discovery crossed Registry Seam: before=%#v after=%#v state=%#v", before.State(), after.State(), state)
+	}
+}
 
 func identityTestModel(session Agent) model {
 	project := Project{ID: session.ProjectID, Name: session.Project, Path: session.Dir}

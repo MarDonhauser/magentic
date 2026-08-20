@@ -20,7 +20,7 @@ test('Dock state keeps stable IDs and recognizes the legacy active name', () => 
   assert.equal(dockRefKey(state.tabs[0]), 'session:session-a');
 });
 
-test('Legacy Dock names migrate once and unknown or reused names do not remain targets', () => {
+test('Legacy Dock names migrate once and unknown names do not remain targets', () => {
   const migrated = resolveLegacyDockRefs(
     ['term known', 'term removed', { id: 'session-current', name: 'term current' }],
     [{ id: 'session-known', name: 'term known' }],

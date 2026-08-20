@@ -254,7 +254,7 @@ func TestWorkHistoryMalformedRecordsArePartialNotEmpty(t *testing.T) {
 	}
 }
 
-func TestHistoryAssociationsFromStateUsesDurableIDsAndAgentRuns(t *testing.T) {
+func TestNewHistoryAssociationsUsesDurableIDsAndAgentRuns(t *testing.T) {
 	state := &State{
 		Projects: []Project{{ID: ProjectID("project-id"), Name: "Display project", Path: "/work/demo"}},
 		Agents: []Session{{
@@ -262,7 +262,7 @@ func TestHistoryAssociationsFromStateUsesDurableIDsAndAgentRuns(t *testing.T) {
 			AgentRuns: []AgentRunRef{{Vendor: AgentVendorClaude, ExternalID: "claude-run"}, {Vendor: AgentVendorCodex, ExternalID: "codex-run"}},
 		}},
 	}
-	associations := HistoryAssociationsFromState(state)
+	associations := NewHistoryAssociations(*state)
 	if len(associations.Projects) != 1 || associations.Projects[0].Key != "project-id" {
 		t.Fatalf("project association did not use durable ID: %#v", associations.Projects)
 	}
@@ -278,7 +278,7 @@ func TestHistoryAssociationsFromStateUsesDurableIDsAndAgentRuns(t *testing.T) {
 		t.Fatalf("AgentRuns were not kept provider-qualified: %#v", associations.Sessions)
 	}
 
-	legacy := HistoryAssociationsFromState(&State{
+	legacy := NewHistoryAssociations(State{
 		Projects: []Project{{Name: "legacy-project", Path: "/legacy"}},
 		Agents:   []Session{{Name: "legacy-session", Project: "legacy-project", Dir: "/legacy", SessionID: "legacy-claude"}},
 	})

@@ -172,6 +172,7 @@ type SpecificationsDiscovery struct {
 // token has been checked against the supplied Project and source Adapter.
 type SpecificationStartIntent struct {
 	Reference              SpecificationRef              `json:"reference"`
+	ProjectID              ProjectID                     `json:"projectId"`
 	Source                 SpecificationSourceKind       `json:"source"`
 	ID                     string                        `json:"id"`
 	ProjectDirectory       string                        `json:"projectDirectory"`
@@ -287,6 +288,7 @@ func (s *Specifications) ResolveStart(ctx context.Context, project Project, toke
 		}
 		return SpecificationStartIntent{
 			Reference:              ref,
+			ProjectID:              project.ID,
 			Source:                 parts.source,
 			ID:                     parts.id,
 			ProjectDirectory:       filepath.Clean(project.Path),

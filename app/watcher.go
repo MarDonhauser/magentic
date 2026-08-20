@@ -101,8 +101,13 @@ func (a *App) watchLoop() {
 			continue
 		}
 		discovery := core.DiscoverNew(context.Background(), st)
-		if len(discovery.Sessions) > 0 {
-			changed, changeErr := core.OpenRegistry(core.StatePath()).Change(context.Background(), core.AddDiscoveredSessions(discovery.Sessions))
+		if discoveryErr := discovery.Err(); discoveryErr != nil {
+			if time.Since(lastErrLog) > time.Minute {
+				core.Logf("watchLoop: Session-Discovery unvollständig: %v", discoveryErr)
+				lastErrLog = time.Now()
+			}
+		} else if len(discovery.Sessions) > 0 {
+			changed, changeErr := core.OpenRegistry(core.StatePath()).AdoptDiscoveredSessions(context.Background(), discovery.Sessions)
 			if changeErr != nil {
 				if time.Since(lastErrLog) > time.Minute {
 					core.Logf("watchLoop: Session-Discovery fehlgeschlagen: %v", changeErr)
@@ -112,10 +117,6 @@ func (a *App) watchLoop() {
 				state := changed.Snapshot.State()
 				st = &state
 			}
-		}
-		if discoveryErr := discovery.Err(); discoveryErr != nil && time.Since(lastErrLog) > time.Minute {
-			core.Logf("watchLoop: Session-Discovery unvollständig: %v", discoveryErr)
-			lastErrLog = time.Now()
 		}
 		snapshot := core.Observe(context.Background(), st.Agents)
 		a.storeObservation(snapshot, st.Agents)

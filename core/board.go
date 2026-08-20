@@ -66,37 +66,37 @@ const (
 var taskLineRe = regexp.MustCompile(`^\s*[-*]\s+\[([ xX~/-])\]\s+(.*)$`)
 var sectionRe = regexp.MustCompile(`^#{2,3}\s+(.*)$`)
 
-// BuildBoard is the compatibility Adapter for the current TUI and desktop
-// transport. New callers consume Specifications.Discover and hand its opaque
-// start token to Specifications.ResolveStart before invoking Session Lifecycle.
-func BuildBoard(state *State, projectName string) Board {
-	return BuildBoardWithQuery(state, projectName, SpecificationQuery{})
+// BuildBoard projects Specifications for one stable Registry Project. Session
+// start authority remains the opaque token resolved by Specifications.
+func BuildBoard(state *State, projectID ProjectID) Board {
+	return BuildBoardWithQuery(state, projectID, SpecificationQuery{})
 }
 
-// BuildBoardWithQuery permits the compatibility callers that intentionally
-// render bounded archives to opt in; BuildBoard itself remains current-only.
-func BuildBoardWithQuery(state *State, projectName string, query SpecificationQuery) Board {
-	board := Board{Project: projectName}
-	if state == nil {
+// BuildBoardWithQuery lets archive consumers opt in explicitly; BuildBoard
+// itself remains current-only.
+func BuildBoardWithQuery(state *State, projectID ProjectID, query SpecificationQuery) Board {
+	board := Board{ProjectID: projectID}
+	if state == nil || projectID == "" {
 		board.Err = "Projekt nicht gefunden"
 		return board
 	}
-	project := state.ProjectByName(projectName)
-	if project == nil {
+	registered := state.ProjectByID(projectID)
+	if registered == nil {
 		board.Err = "Projekt nicht gefunden"
 		return board
 	}
-	board.ProjectID = project.ID
+	project := *registered
+	board.Project = project.Name
 
 	ctx := context.Background()
 	specifications := NewSpecifications()
-	discovery, err := specifications.Discover(ctx, *project, query)
+	discovery, err := specifications.Discover(ctx, project, query)
 	if err != nil {
 		board.Kind = "none"
 		board.Err = err.Error()
 		return board
 	}
-	agents, repositoryProblems := liveAgentContext(ctx, state, *project)
+	agents, repositoryProblems := liveAgentContext(ctx, state, project)
 	problems := append(formatSpecificationProblems(discovery.Problems), repositoryProblems...)
 
 	itemsBySource := make(map[SpecificationSourceKind]int)
@@ -183,7 +183,10 @@ type agentCtx struct {
 
 func liveAgentContext(ctx context.Context, state *State, project Project) ([]agentCtx, []string) {
 	var sessions []Session
-	for _, session := range state.AgentsFor(project.Name) {
+	for _, session := range state.Agents {
+		if session.ProjectID != project.ID {
+			continue
+		}
 		if session.LaterAt.IsZero() && session.SpecificationRef != "" {
 			sessions = append(sessions, session)
 		}

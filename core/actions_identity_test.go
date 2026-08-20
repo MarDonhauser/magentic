@@ -34,6 +34,10 @@ func TestCreateSessionRejectsStaleProjectIDBeforeExternalCommands(t *testing.T) 
 	if err == nil || !strings.Contains(err.Error(), "ProjectID") {
 		t.Fatalf("stale ProjectID resolved through reused name: %v", err)
 	}
+	_, err = StartSkillAgent(&stale, "project-stale", "/removed", "/deploy ", "deploy", "deploy reused")
+	if err == nil || !strings.Contains(err.Error(), "ProjectID") {
+		t.Fatalf("stale skill ProjectID resolved through reused name: %v", err)
+	}
 	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
 		t.Fatalf("stale ProjectID crossed an external Adapter: %v", statErr)
 	}

@@ -162,7 +162,7 @@ func TestGitGraphDoesNotTurnMalformedHistoryIntoKnownEmptyGraph(t *testing.T) {
 	}}
 	state := &State{Projects: []Project{{ID: "project-id", Name: "Project", Path: projectPath, MainBranch: "main"}}}
 
-	graph := buildGitGraphUsing(state, "Project", 10, newRepositories(runner))
+	graph := buildGitGraphUsing(state, state.Projects[0].ID, 10, newRepositories(runner))
 	runner.assertDone()
 	if graph.Availability != RepositoryUnknown || graph.Err == "" || len(graph.Commits) != 0 || len(graph.Problems) == 0 {
 		t.Fatalf("malformed history became a known empty Graph: %#v", graph)

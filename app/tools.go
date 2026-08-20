@@ -121,7 +121,7 @@ func (a *App) SessionLinks(sessionID string) (SessionLinksResult, error) {
 	if historyErr != nil {
 		sources = append(sources, unavailableTimelineSource("work-history", historyErr))
 	} else {
-		page, err := history.Links(context.Background(), core.HistoryAssociationsFromState(st), core.HistoryLinkQuery{
+		page, err := history.Links(context.Background(), core.NewHistoryAssociations(*st), core.HistoryLinkQuery{
 			Events: core.HistoryEventQuery{
 				SessionKeys: []string{string(session.ID)},
 				Kinds:       []core.HistoryEventKind{core.HistoryEventOutput},
@@ -187,7 +187,7 @@ func (a *App) SearchTranscripts(query string) (SearchResult, error) {
 	if err != nil {
 		return SearchResult{}, err
 	}
-	page, err := history.Events(context.Background(), core.HistoryAssociationsFromState(st), core.HistoryEventQuery{
+	page, err := history.Events(context.Background(), core.NewHistoryAssociations(*st), core.HistoryEventQuery{
 		Kinds: []core.HistoryEventKind{core.HistoryEventPrompt, core.HistoryEventOutput},
 		Text:  query,
 		Limit: 80,
@@ -346,7 +346,7 @@ func (a *App) Timeline() (TimelineResult, error) {
 	if err != nil {
 		return TimelineResult{}, err
 	}
-	page, err := history.Events(context.Background(), core.HistoryAssociationsFromState(st), core.HistoryEventQuery{
+	page, err := history.Events(context.Background(), core.NewHistoryAssociations(*st), core.HistoryEventQuery{
 		Since:    time.Now().AddDate(0, 0, -7),
 		Kinds:    []core.HistoryEventKind{core.HistoryEventPrompt},
 		Lineages: []core.HistoryLineage{core.HistoryLineagePrimary},

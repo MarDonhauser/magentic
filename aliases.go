@@ -30,18 +30,16 @@ const (
 var (
 	sessionPrefix = core.SessionPrefix
 
-	tmux                 = core.Tmux
-	tmuxSessionName      = core.SessionName
-	targetSession        = core.TargetSession
-	targetPane           = core.TargetPane
-	TmuxHasSession       = core.TmuxHasSession
+	tmux            = core.Tmux
+	tmuxSessionName = core.SessionName
+	targetSession   = core.TargetSession
+	targetPane      = core.TargetPane
+	TmuxHasSession  = core.TmuxHasSession
 
-	LoadState             = core.LoadState
-	StatePath             = core.StatePath
-	OpenRegistry          = core.OpenRegistry
-	RegisterProject       = core.RegisterProject
-	RemoveProject         = core.RemoveProject
-	AddDiscoveredSessions = core.AddDiscoveredSessions
+	LoadState       = core.LoadState
+	StatePath       = core.StatePath
+	OpenRegistry    = core.OpenRegistry
+	RegisterProject = core.RegisterProject
 
 	lastLines            = core.LastLines
 	statusRank           = core.StatusRank

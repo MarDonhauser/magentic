@@ -144,7 +144,7 @@ func reconcile(s *State) {
 		return
 	}
 	if len(discovery.Sessions) > 0 {
-		if changed, err := OpenRegistry(StatePath()).Change(context.Background(), AddDiscoveredSessions(discovery.Sessions)); err == nil {
+		if changed, err := OpenRegistry(StatePath()).AdoptDiscoveredSessions(context.Background(), discovery.Sessions); err == nil {
 			*s = changed.Snapshot.State()
 		} else {
 			core.Logf("TUI Session-Discovery fehlgeschlagen: %v", err)
@@ -550,7 +550,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if discoveryErr := m.poll.discovery.Err(); discoveryErr != nil {
 			m.setFlash("Session-Discovery unvollständig: "+discoveryErr.Error(), true)
 		} else if len(m.poll.discovery.Sessions) > 0 {
-			if changed, err := OpenRegistry(StatePath()).Change(context.Background(), AddDiscoveredSessions(m.poll.discovery.Sessions)); err == nil {
+			if changed, err := OpenRegistry(StatePath()).AdoptDiscoveredSessions(context.Background(), m.poll.discovery.Sessions); err == nil {
 				state := changed.Snapshot.State()
 				m.state = &state
 			} else {
@@ -816,7 +816,7 @@ func (m model) startSkillSession(p *Project, cmd string) (tea.Model, tea.Cmd) {
 	if strings.TrimSpace(cmd) == "/deploy" {
 		kind = "deploy"
 	}
-	name, err := startSkillAgent(m.state, p.Path, cmd, kind, cmd+" "+p.Name)
+	name, err := startSkillAgent(m.state, p.ID, p.Path, cmd, kind, cmd+" "+p.Name)
 	if err != nil {
 		m.setFlash(err.Error(), true)
 		return m, nil
@@ -1067,17 +1067,16 @@ func (m model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		p := r.project
-		if len(m.state.AgentsFor(p.Name)) > 0 {
-			m.setFlash("Projekt hat noch Agents — erst alle beenden (x)", true)
-			return m, nil
-		}
-		changed, err := OpenRegistry(StatePath()).Change(context.Background(), RemoveProject(p.ID, p.Name))
-		if err != nil {
+		if err := core.OpenSessionLifecycle(core.SessionLifecycleConfig{}).RemoveProject(context.Background(), p.ID); err != nil {
 			m.setFlash(err.Error(), true)
 			return m, nil
 		}
-		state := changed.Snapshot.State()
-		m.state = &state
+		state, err := LoadState()
+		if err != nil {
+			m.setFlash("Registry nach Projektentfernung laden: "+err.Error(), true)
+			return m, nil
+		}
+		m.state = state
 		m.ensureSelectable()
 		m.setFlash(fmt.Sprintf("Projekt %q entfernt (Dateien bleiben unberührt)", p.Name), false)
 		return m, m.pollNow()

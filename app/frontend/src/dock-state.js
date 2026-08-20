@@ -38,8 +38,8 @@ export function normalizeDockState(raw, defaultHeight) {
 }
 
 // resolveLegacyDockRefs performs the one-time persisted-name migration. A
-// successful Registry lookup removes unknown legacy names instead of turning a
-// reused display name into authority for a different Session.
+// successful Registry lookup removes names that no longer identify a Dock
+// Session; every resolved tab is persisted with its durable ID afterwards.
 export function resolveLegacyDockRefs(tabs, resolved) {
   const byName = new Map();
   for (const value of Array.isArray(resolved) ? resolved : []) {

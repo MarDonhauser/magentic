@@ -330,7 +330,7 @@ async function spawnTerminal() {
   if (!cb.newTerminal) return;
   let ref = null;
   try { ref = await cb.newTerminal(); } catch { return; }
-  if (ref) openInDock(ref);
+  if (ref) openDockTab(ref);
 }
 
 function startDrag(e) {
@@ -547,7 +547,7 @@ export function isDockOpen() {
   return open;
 }
 
-export function openInDock(value) {
+function openDockTab(value) {
   const ref = normalizeDockRef(value);
   const key = dockRefKey(ref);
   if (!mounted || !ref || !key) return;

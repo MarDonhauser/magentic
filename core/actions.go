@@ -320,16 +320,34 @@ func discoveredSessionProject(projects []Project, directory string) (Project, bo
 	return matched, worktree
 }
 
+func discoveredDirectoryBelongsToProject(project Project, directory string) bool {
+	if project.ID == "" || strings.TrimSpace(project.Path) == "" || strings.TrimSpace(directory) == "" {
+		return false
+	}
+	projectRoot := canonicalWorktreeTransitionPath(project.Path)
+	directory = canonicalWorktreeTransitionPath(directory)
+	relative, err := filepath.Rel(projectRoot, directory)
+	if err == nil && !filepath.IsAbs(relative) && relative != ".." &&
+		!strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return true
+	}
+	_, managed := managedWorktreeForDirectory(project, directory)
+	return managed
+}
+
 func registerDiscoveredWithRuntime(ctx context.Context, st *State, runtime registryDiscoveryRuntime) error {
 	discovery := discoverNewWithRuntime(ctx, st, runtime)
+	if err := discovery.Err(); err != nil {
+		return err
+	}
 	if len(discovery.Sessions) > 0 {
-		result, err := OpenRegistry(StatePath()).Change(ctx, AddDiscoveredSessions(discovery.Sessions))
+		result, err := OpenRegistry(StatePath()).AdoptDiscoveredSessions(ctx, discovery.Sessions)
 		if err != nil {
 			return err
 		}
 		*st = result.Snapshot.State()
 	}
-	return discovery.Err()
+	return nil
 }
 
 func RestoreSessions(st *State) int {
@@ -648,24 +666,45 @@ func enqueuePromptForObservedTarget(session, prompt string, observed promptTarge
 	return enqueuePrompt(session, prompt, true, observed.Tool, !ready, false, ready, nil)
 }
 
-func StartSkillAgent(st *State, dir, prompt, kind, nameHint string) (string, error) {
-	return startSkillAgent(st, dir, prompt, kind, nameHint, "")
+func StartSkillAgent(st *State, projectID ProjectID, dir, prompt, kind, nameHint string) (string, error) {
+	return startSkillAgent(st, projectID, dir, prompt, kind, nameHint, "")
 }
 
-func startSkillAgent(st *State, dir, prompt, kind, nameHint string, specificationRef SpecificationRef) (string, error) {
+func startSkillAgent(st *State, projectID ProjectID, dir, prompt, kind, nameHint string, specificationRef SpecificationRef) (string, error) {
+	if st == nil {
+		return "", errors.New("Session Registry is unavailable")
+	}
+	current, err := LoadState()
+	if err != nil {
+		return "", err
+	}
+	if projectID != "" && current.ProjectByID(projectID) == nil {
+		return "", fmt.Errorf("ProjectID %q nicht gefunden", projectID)
+	}
+	*st = *current
 	if err := registerDiscovered(st); err != nil {
 		return "", err
 	}
-	name := PickAgentName(st, nameHint)
+	current, err = LoadState()
+	if err != nil {
+		return "", err
+	}
+	*st = *current
 	project := Project{}
-	for _, p := range st.Projects {
-		managedRoot := filepath.Join(filepath.Dir(p.Path), filepath.Base(p.Path)+"-agents")
-		if dir == p.Path || strings.HasPrefix(dir, p.Path+string(os.PathSeparator)) ||
-			dir == managedRoot || strings.HasPrefix(dir, managedRoot+string(os.PathSeparator)) {
-			project = p
-			break
+	if projectID != "" {
+		resolved := st.ProjectByID(projectID)
+		if resolved == nil {
+			return "", fmt.Errorf("ProjectID %q nicht gefunden", projectID)
+		}
+		project = *resolved
+		if strings.TrimSpace(dir) == "" {
+			dir = project.Path
+		}
+		if !discoveredDirectoryBelongsToProject(project, filepath.Clean(dir)) {
+			return "", fmt.Errorf("Verzeichnis gehört nicht zu ProjectID %q", projectID)
 		}
 	}
+	name := PickAgentName(st, nameHint)
 	purpose := SessionPurposeWork
 	switch kind {
 	case "cleanup":
@@ -762,25 +801,26 @@ func validatePromptTargetObservation(name string, observed promptTargetObservati
 	return validatePromptTargetStatus(name, observed.Status)
 }
 
-func StartCleanup(st *State, path, mainBranch string) (string, error) {
+func StartCleanup(st *State, projectID ProjectID, path, mainBranch string) (string, error) {
 	if mainBranch == "" {
 		mainBranch = "main"
 	}
 	prompt := fmt.Sprintf("Diese Session wurde von magentic zum Aufräumen dieses Worktrees gestartet. "+
 		"Sichte die uncommitteten Änderungen und die Commits auf diesem Branch, committe sinnvoll und bringe die Arbeit nach %s. "+
 		"Zeige mir zuerst deinen Plan, bevor du etwas ausführst. Sag am Ende Bescheid, wenn der Worktree entfernt werden kann.", mainBranch)
-	return StartSkillAgent(st, path, prompt, "cleanup", "cleanup "+filepath.Base(path))
+	return StartSkillAgent(st, projectID, path, prompt, "cleanup", "cleanup "+filepath.Base(path))
 }
 
-func StartMerge(st *State, projPath, source, target string) (string, error) {
+func StartMerge(st *State, projectID ProjectID, projPath, source, target string) (string, error) {
 	prompt := fmt.Sprintf("Merge den Branch %q nach %q in diesem Repository. "+
 		"Hole vorher den aktuellen Stand (git fetch). Falls Konflikte auftreten, löse sie sinnvoll und erkläre mir deine Entscheidungen. "+
 		"Zeige mir zuerst deinen Plan, bevor du etwas ausführst, und frage mich, bevor du pushst.", source, target)
-	return StartSkillAgent(st, projPath, prompt, "merge", "merge "+source)
+	return StartSkillAgent(st, projectID, projPath, prompt, "merge", "merge "+source)
 }
 
-func StartBoardSession(st *State, projPath, id, itemPath string) (string, error) {
+func StartBoardSession(st *State, projectID ProjectID, projPath, id, itemPath string) (string, error) {
 	return StartSpecificationSession(st, SpecificationStartIntent{
+		ProjectID:              projectID,
 		ID:                     id,
 		ProjectDirectory:       projPath,
 		SpecificationDirectory: itemPath,
@@ -797,11 +837,11 @@ func StartBoardSession(st *State, projPath, id, itemPath string) (string, error)
 // the compatibility StartBoardSession Adapter above exists only for older Go
 // callers and is not exposed by the desktop facade.
 func StartSpecificationSession(st *State, intent SpecificationStartIntent) (string, error) {
-	if strings.TrimSpace(intent.ID) == "" || strings.TrimSpace(intent.ProjectDirectory) == "" || strings.TrimSpace(intent.SpecificationDirectory) == "" {
+	if intent.ProjectID == "" || strings.TrimSpace(intent.ID) == "" || strings.TrimSpace(intent.ProjectDirectory) == "" || strings.TrimSpace(intent.SpecificationDirectory) == "" {
 		return "", fmt.Errorf("unvollst\u00e4ndiger Specification-Start")
 	}
 	prompt := specificationWorkPrompt(intent)
-	return startSkillAgent(st, intent.ProjectDirectory, prompt, "", intent.ID, intent.Reference)
+	return startSkillAgent(st, intent.ProjectID, intent.ProjectDirectory, prompt, "", intent.ID, intent.Reference)
 }
 
 func specificationWorkPrompt(intent SpecificationStartIntent) string {
@@ -862,8 +902,8 @@ func specificationDocumentPromptLabel(document SpecificationDocumentKind) string
 	}
 }
 
-func StartDeploy(st *State, projPath string) (string, error) {
-	return StartSkillAgent(st, projPath, "/deploy ", "deploy", "deploy "+filepath.Base(projPath))
+func StartDeploy(st *State, projectID ProjectID, projPath string) (string, error) {
+	return StartSkillAgent(st, projectID, projPath, "/deploy ", "deploy", "deploy "+filepath.Base(projPath))
 }
 
 func RemoveWorktree(st *State, proj *Project, path string) error {

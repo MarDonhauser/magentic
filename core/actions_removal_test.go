@@ -76,6 +76,9 @@ func TestWorktreeRemovalRejectsMalformedScalarPaneFacts(t *testing.T) {
 	listings := []string{
 		"mgt-topic\t%4\tclaude\t+1787227200\t1\t1\n",
 		"mgt-topic\t%4\tclaude\t1787227200\t 1\t1\n",
+		" mgt-topic\t%4\tclaude\t1787227200\t1\t1\n",
+		"mgt-topic\t%٤\tclaude\t1787227200\t1\t1\n",
+		"mgt-topic\t%4\t zsh\t1787227200\t1\t1\n",
 	}
 	for _, listing := range listings {
 		runner := &recordingObservationRunner{run: func(_ context.Context, args ...string) (string, error) {
@@ -92,6 +95,24 @@ func TestWorktreeRemovalRejectsMalformedScalarPaneFacts(t *testing.T) {
 		if err := validateWorktreeRemovalObservations([]Agent{session}, snapshot); err == nil {
 			t.Fatalf("malformed scalar pane fact authorized removal: listing=%q snapshot=%#v", listing, snapshot)
 		}
+	}
+}
+
+func TestWorktreeRemovalRejectsMalformedRegisteredRuntimeIdentity(t *testing.T) {
+	session := Agent{ID: "session-1", Name: "topic", RuntimeName: " mgt-topic"}
+	runner := &recordingObservationRunner{run: func(_ context.Context, args ...string) (string, error) {
+		if args[0] == "list-panes" {
+			return "mgt-topic\t%4\tclaude\t1787227200\t1\t1\n", nil
+		}
+		return "Ready\nshift+tab to cycle\n", nil
+	}}
+	snapshot := observeWithRunner(context.Background(), []Session{session}, runner, testObservationConfig(time.Now()))
+
+	if err := validateWorktreeRemovalObservations([]Agent{session}, snapshot); err == nil {
+		t.Fatalf("malformed registered RuntimeName was normalized into removal authority: %#v", snapshot)
+	}
+	if snapshot.Sessions[0].Presence != SessionPresenceUnknown || snapshot.Sessions[0].Availability != ObservationUnavailable {
+		t.Fatalf("malformed registered RuntimeName produced known runtime facts: %#v", snapshot.Sessions[0])
 	}
 }
 

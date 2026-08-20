@@ -425,7 +425,7 @@ func TestBuildBoardProjectionUsesOpaqueStartAndOptInArchive(t *testing.T) {
 	writeSpecificationTestFile(t, root, []string{"openspec", "changes", "archive", "2026-08-01-old", "tasks.md"}, "- [x] Historical\n")
 	state := &State{Projects: []Project{{ID: "project-1", Name: "demo", Path: root}}}
 
-	current := BuildBoard(state, "demo")
+	current := BuildBoard(state, state.Projects[0].ID)
 	if current.ProjectID != "project-1" || len(current.Items) != 1 {
 		t.Fatalf("BuildBoard() = %#v", current)
 	}
@@ -436,7 +436,7 @@ func TestBuildBoardProjectionUsesOpaqueStartAndOptInArchive(t *testing.T) {
 		t.Fatalf("Board source location = %#v", current.Sources)
 	}
 
-	withArchive := BuildBoardWithQuery(state, "demo", SpecificationQuery{IncludeArchived: true, ArchiveLimit: 1})
+	withArchive := BuildBoardWithQuery(state, state.Projects[0].ID, SpecificationQuery{IncludeArchived: true, ArchiveLimit: 1})
 	if len(withArchive.Items) != 2 {
 		t.Fatalf("BuildBoardWithQuery() returned %d items", len(withArchive.Items))
 	}

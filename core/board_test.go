@@ -101,8 +101,8 @@ func TestBuildBoardDetectsFormat(t *testing.T) {
 	os.WriteFile(filepath.Join(change, "tasks.md"), []byte("- [x] a\n- [ ] b\n"), 0o644)
 	os.MkdirAll(filepath.Join(root, "openspec", "changes", "archive", "alt"), 0o755)
 
-	st := &State{Projects: []Project{{Name: "demo", Path: root}}}
-	b := BuildBoard(st, "demo")
+	st := &State{Projects: []Project{{ID: "project-demo", Name: "demo", Path: root}}}
+	b := BuildBoard(st, st.Projects[0].ID)
 	if b.Kind != "openspec" {
 		t.Fatalf("Kind %q, erwartet openspec", b.Kind)
 	}
@@ -134,8 +134,8 @@ func TestBuildBoardCollectsEverySpecSystem(t *testing.T) {
 	os.WriteFile(filepath.Join(mk(".kiro", "specs", "search"), "tasks.md"), []byte("- [ ] a\n"), 0o644)
 	os.WriteFile(filepath.Join(mk(".agent-os", "specs", "2025-01-01-billing"), "tasks.md"), []byte("- [ ] a\n"), 0o644)
 
-	st := &State{Projects: []Project{{Name: "demo", Path: root}}}
-	b := BuildBoard(st, "demo")
+	st := &State{Projects: []Project{{ID: "project-demo", Name: "demo", Path: root}}}
+	b := BuildBoard(st, st.Projects[0].ID)
 
 	if len(b.Sources) != 4 {
 		t.Fatalf("%d Quellen, erwartet 4: %+v", len(b.Sources), b.Sources)
@@ -171,15 +171,15 @@ func TestBuildBoardSkipsEmptySource(t *testing.T) {
 	}
 	os.WriteFile(filepath.Join(root, "specs", "notes.md"), []byte("# lose Datei\n"), 0o644)
 
-	st := &State{Projects: []Project{{Name: "demo", Path: root}}}
-	if b := BuildBoard(st, "demo"); b.Kind != "none" || len(b.Sources) != 0 {
+	st := &State{Projects: []Project{{ID: "project-demo", Name: "demo", Path: root}}}
+	if b := BuildBoard(st, st.Projects[0].ID); b.Kind != "none" || len(b.Sources) != 0 {
 		t.Fatalf("Kind %q mit %d Quellen, erwartet none/0", b.Kind, len(b.Sources))
 	}
 }
 
 func TestBuildBoardNoSpecs(t *testing.T) {
-	st := &State{Projects: []Project{{Name: "leer", Path: t.TempDir()}}}
-	if b := BuildBoard(st, "leer"); b.Kind != "none" {
+	st := &State{Projects: []Project{{ID: "project-empty", Name: "leer", Path: t.TempDir()}}}
+	if b := BuildBoard(st, st.Projects[0].ID); b.Kind != "none" {
 		t.Fatalf("Kind %q, erwartet none", b.Kind)
 	}
 }

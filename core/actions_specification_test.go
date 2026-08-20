@@ -7,6 +7,7 @@ import (
 
 func TestSpecificationWorkPromptPreservesAdapterInstructions(t *testing.T) {
 	intent := SpecificationStartIntent{
+		ProjectID:              "project-1",
 		ID:                     "login",
 		ProjectDirectory:       "/repo",
 		SpecificationDirectory: "/repo/specs/login",

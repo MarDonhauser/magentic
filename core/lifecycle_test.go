@@ -187,7 +187,7 @@ func TestLifecyclePersistsIntentBeforeRuntimeAndConverges(t *testing.T) {
 	}
 
 	result, err := lifecycle.Provision(context.Background(), SessionProvision{
-		Project: project, Name: "hera", Directory: project.Path,
+		ProjectID: project.ID, Name: "hera", Directory: project.Path,
 		Kind: SessionKindCodingAgent, InitialPrompt: "inspect the change",
 	})
 	if err != nil {
@@ -226,7 +226,7 @@ func TestLifecycleRetainsFailureAndReconcilesForward(t *testing.T) {
 	project := registerLifecycleProject(t, registry)
 	runtime.startErr = errors.New("runtime unavailable")
 	result, err := lifecycle.Provision(context.Background(), SessionProvision{
-		Project: project, Name: "atlas", Directory: project.Path,
+		ProjectID: project.ID, Name: "atlas", Directory: project.Path,
 	})
 	if err == nil {
 		t.Fatal("expected runtime failure")
@@ -257,7 +257,7 @@ func TestLifecycleParkRecordsDesiredStateBeforeStopping(t *testing.T) {
 	lifecycle, runtime, registry, _ := lifecycleHarness(t)
 	project := registerLifecycleProject(t, registry)
 	created, err := lifecycle.Provision(context.Background(), SessionProvision{
-		Project: project, Name: "nyx", Directory: project.Path,
+		ProjectID: project.ID, Name: "nyx", Directory: project.Path,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -295,7 +295,7 @@ func TestLifecycleResumeReopensRegistryAndRemainsRunningAfterReconcile(t *testin
 	lifecycle, runtime, registry, _ := lifecycleHarness(t)
 	project := registerLifecycleProject(t, registry)
 	created, err := lifecycle.Provision(context.Background(), SessionProvision{
-		Project: project, Name: "iris", Directory: project.Path,
+		ProjectID: project.ID, Name: "iris", Directory: project.Path,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -339,6 +339,27 @@ func TestLifecycleResumeReopensRegistryAndRemainsRunningAfterReconcile(t *testin
 	}
 	if len(reconciled.Problems) != 0 || !runtime.present[created.Session.ID] {
 		t.Fatalf("reopened Session did not remain running: %+v", reconciled)
+	}
+}
+
+func TestLifecycleResumePreservesDurableBaseline(t *testing.T) {
+	lifecycle, runtime, registry, _ := lifecycleHarness(t)
+	project := registerLifecycleProject(t, registry)
+	session := registerLifecycleSession(t, registry, runtime, Session{
+		ID: "session-baseline", Name: "baseline", RuntimeName: "runtime-baseline",
+		ProjectID: project.ID, Project: project.Name, Dir: project.Path,
+		BaseCommit: "old-head", BaseDirty: []string{"before.txt"}, LaterAt: time.Now(),
+	}, false)
+
+	resumed, err := lifecycle.Resume(context.Background(), session.ID, session.Name)
+	if err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if resumed.Session.BaseCommit != "old-head" || len(resumed.Session.BaseDirty) != 1 || resumed.Session.BaseDirty[0] != "before.txt" {
+		t.Fatalf("Resume recaptured or changed durable baseline: %#v", resumed.Session)
+	}
+	if !resumed.Session.LaterAt.IsZero() || !runtime.present[session.ID] {
+		t.Fatalf("Resume did not clear Later intent and start runtime: %#v", resumed.Session)
 	}
 }
 
@@ -470,7 +491,7 @@ func TestLifecycleSerializesParkAndResumeAcrossInstances(t *testing.T) {
 	lifecycle, runtime, registry, ledgerPath := lifecycleHarness(t)
 	project := registerLifecycleProject(t, registry)
 	created, err := lifecycle.Provision(context.Background(), SessionProvision{
-		Project: project, Name: "rhea", Directory: project.Path,
+		ProjectID: project.ID, Name: "rhea", Directory: project.Path,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -881,7 +902,7 @@ func TestLifecycleManagedWorktreeIsOwnedByProvisioning(t *testing.T) {
 	lifecycle, _, registry, _ := lifecycleHarness(t)
 	project := registerLifecycleProject(t, registry)
 	result, err := lifecycle.Provision(context.Background(), SessionProvision{
-		Project: project, Name: "selene", CreateWorktree: true,
+		ProjectID: project.ID, Name: "selene", CreateWorktree: true,
 	})
 	if err != nil {
 		t.Fatal(err)

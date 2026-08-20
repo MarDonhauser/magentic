@@ -256,7 +256,7 @@ func observeWithRunner(ctx context.Context, sessions []Session, runner observati
 			Worktree:     session.Worktree,
 			Occupancy:    OccupancyUnknown,
 		}
-		runtimeNames[i] = strings.TrimSpace(session.TmuxName())
+		runtimeNames[i] = session.TmuxName()
 	}
 	idCounts := make(map[SessionID]int, len(sessions))
 	runtimeCounts := make(map[string]int, len(sessions))
@@ -264,7 +264,7 @@ func observeWithRunner(ctx context.Context, sessions []Session, runner observati
 		if session.ID != "" {
 			idCounts[session.ID]++
 		}
-		if runtimeNames[i] != "" {
+		if validObservedRuntimeName(runtimeNames[i]) {
 			runtimeCounts[runtimeNames[i]]++
 		}
 	}
@@ -278,6 +278,11 @@ func observeWithRunner(ctx context.Context, sessions []Session, runner observati
 		case runtimeNames[i] == "":
 			snapshot.Problems = append(snapshot.Problems, ObservationProblem{
 				SessionID: session.ID, Operation: "validate-session", Message: "RuntimeName is required",
+			})
+		case !validObservedRuntimeName(runtimeNames[i]):
+			snapshot.Problems = append(snapshot.Problems, ObservationProblem{
+				SessionID: session.ID, RuntimeName: runtimeNames[i],
+				Operation: "validate-session", Message: "RuntimeName is malformed",
 			})
 		case idCounts[session.ID] > 1:
 			snapshot.Problems = append(snapshot.Problems, ObservationProblem{
@@ -450,9 +455,9 @@ func parseObservedPanes(output string) (map[string]observedPane, []ObservationPr
 		parts := strings.SplitN(line, "\t", 6)
 		runtimeName := ""
 		if len(parts) > 0 {
-			runtimeName = strings.TrimSpace(parts[0])
+			runtimeName = parts[0]
 		}
-		if len(parts) != 6 || runtimeName == "" || !validObservedPaneID(parts[1]) ||
+		if len(parts) != 6 || !validObservedRuntimeName(runtimeName) || !validObservedCommand(parts[2]) || !validObservedPaneID(parts[1]) ||
 			!validObservedBinaryFact(parts[4]) || !validObservedBinaryFact(parts[5]) {
 			// An unidentifiable row may belong to any registered RuntimeName. The
 			// remaining parsed rows still prove presence, but their absence cannot
@@ -465,7 +470,7 @@ func parseObservedPanes(output string) (map[string]observedPane, []ObservationPr
 			continue
 		}
 		pane := observedPane{
-			id: parts[1], command: strings.TrimSpace(parts[2]),
+			id: parts[1], command: parts[2],
 			selected: parts[4] == "1" && parts[5] == "1",
 		}
 		if stamp, valid := parseObservedPositiveDecimal(parts[3]); valid {
@@ -534,8 +539,32 @@ func validObservedPaneID(id string) bool {
 	if len(id) < 2 || id[0] != '%' {
 		return false
 	}
-	for _, r := range id[1:] {
-		if !unicode.IsDigit(r) {
+	for _, character := range id[1:] {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func validObservedRuntimeName(name string) bool {
+	if name == "" || strings.TrimSpace(name) != name {
+		return false
+	}
+	for _, character := range name {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
+}
+
+func validObservedCommand(command string) bool {
+	if command == "" || strings.TrimSpace(command) != command {
+		return false
+	}
+	for _, character := range command {
+		if unicode.IsControl(character) {
 			return false
 		}
 	}

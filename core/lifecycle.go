@@ -158,8 +158,10 @@ type SessionLifecycle struct {
 	registry     lifecycleRegistry
 	runtime      lifecycleRuntime
 	repositories lifecycleRepositories
+	projects     projectTransitionCoordinator
 	worktrees    worktreeTransitionCoordinator
 	observe      func(context.Context, []Session) ObservationSnapshot
+	discover     func(context.Context, *State) RegistryDiscovery
 	ledgerPath   string
 	now          func() time.Time
 }
@@ -178,13 +180,15 @@ func OpenSessionLifecycle(config SessionLifecycleConfig) *SessionLifecycle {
 		config.LedgerPath,
 	)
 	lifecycle.worktrees = newWorktreeTransitionCoordinator(config.RegistryPath)
+	lifecycle.projects = newProjectTransitionCoordinator(config.RegistryPath)
 	return lifecycle
 }
 
 func newSessionLifecycle(registry lifecycleRegistry, runtime lifecycleRuntime, repositories lifecycleRepositories, ledgerPath string) *SessionLifecycle {
 	return &SessionLifecycle{
 		registry: registry, runtime: runtime, repositories: repositories,
-		worktrees: newWorktreeTransitionCoordinator(ledgerPath), observe: Observe,
+		projects: newProjectTransitionCoordinator(ledgerPath), worktrees: newWorktreeTransitionCoordinator(ledgerPath),
+		observe: Observe, discover: DiscoverNew,
 		ledgerPath: ledgerPath, now: time.Now,
 	}
 }
@@ -281,43 +285,59 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 		record.Applied.WorktreeReady = true
 	}
 	advanced := record
-	target, managed := l.provisionWorktreeTarget(project, request, session)
-	run := func() error {
-		return l.withSessionTransition(ctx, session.ID, session.Name, func() error {
-			// ProjectID is the only authority. Re-resolve it after both transition
-			// locks and before the first repository or runtime side effect.
-			freshProject, resolveErr := l.resolveProject(ctx, request.ProjectID)
-			if resolveErr != nil {
-				return resolveErr
-			}
-			freshSession := session
-			freshSession.ProjectID = freshProject.ID
-			freshSession.Project = freshProject.Name
-			if request.CreateWorktree {
-				freshSession.Dir, _ = managedWorktreeTarget(freshProject, name)
-			} else if request.Directory == "" {
-				freshSession.Dir = filepath.Clean(freshProject.Path)
-			}
-			freshTarget, freshManaged := l.provisionWorktreeTarget(freshProject, request, freshSession)
-			if managed != freshManaged || managed && canonicalWorktreeTransitionPath(target) != canonicalWorktreeTransitionPath(freshTarget) {
-				return errors.New("Project Worktree identity changed during Session provisioning")
-			}
-			record.Project = freshProject
-			record.Session = freshSession
-			advanced = record
-			if _, putErr := l.putRecord(ctx, record, false); putErr != nil {
-				return putErr
-			}
-			var advanceErr error
-			advanced, advanceErr = l.advanceRunning(ctx, record)
-			return advanceErr
-		})
+	provision := func() error {
+		// The Project transition lock makes the fresh ProjectID resolution and
+		// every later Worktree/runtime/Registry crossing one indivisible scoped
+		// transition relative to Project removal.
+		freshProject, resolveErr := l.resolveProject(ctx, request.ProjectID)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		freshSession := session
+		freshSession.ProjectID = freshProject.ID
+		freshSession.Project = freshProject.Name
+		if request.CreateWorktree {
+			freshSession.Dir, _ = managedWorktreeTarget(freshProject, name)
+		} else if request.Directory == "" {
+			freshSession.Dir = filepath.Clean(freshProject.Path)
+		}
+		target, managed := l.provisionWorktreeTarget(freshProject, request, freshSession)
+		run := func() error {
+			return l.withSessionTransition(ctx, session.ID, session.Name, func() error {
+				// Re-resolve under Project -> Worktree -> Session coordination,
+				// immediately before the durable intent and external side effects.
+				resolved, resolveErr := l.resolveProject(ctx, request.ProjectID)
+				if resolveErr != nil {
+					return resolveErr
+				}
+				resolvedTarget, resolvedManaged := l.provisionWorktreeTarget(resolved, request, freshSession)
+				if managed != resolvedManaged || managed && canonicalWorktreeTransitionPath(target) != canonicalWorktreeTransitionPath(resolvedTarget) {
+					return errors.New("Project Worktree identity changed during Session provisioning")
+				}
+				freshSession.ProjectID = resolved.ID
+				freshSession.Project = resolved.Name
+				if request.CreateWorktree {
+					freshSession.Dir = resolvedTarget
+				} else if request.Directory == "" {
+					freshSession.Dir = filepath.Clean(resolved.Path)
+				}
+				record.Project = resolved
+				record.Session = freshSession
+				advanced = record
+				if _, putErr := l.putRecord(ctx, record, false); putErr != nil {
+					return putErr
+				}
+				var advanceErr error
+				advanced, advanceErr = l.advanceRunning(ctx, record)
+				return advanceErr
+			})
+		}
+		if managed {
+			return l.worktrees.with(ctx, freshProject, target, run)
+		}
+		return run()
 	}
-	if managed {
-		err = l.worktrees.with(ctx, project, target, run)
-	} else {
-		err = run()
-	}
+	err = l.projects.with(ctx, request.ProjectID, provision)
 	return SessionLifecycleResult{Session: advanced.Session, Record: advanced}, err
 }
 
@@ -352,6 +372,25 @@ func (l *SessionLifecycle) Remove(ctx context.Context, id SessionID, name string
 	return l.planExisting(ctx, id, name, SessionDesiredRemoved)
 }
 
+// RemoveProject serializes Project deletion with every scoped Session
+// transition, then resolves the stable ProjectID again under that coordination.
+func (l *SessionLifecycle) RemoveProject(ctx context.Context, projectID ProjectID) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if projectID == "" {
+		return errors.New("ProjectID is required")
+	}
+	return l.projects.with(ctx, projectID, func() error {
+		project, err := l.resolveProject(ctx, projectID)
+		if err != nil {
+			return err
+		}
+		_, err = l.registry.Change(ctx, removeProjectChange(project.ID, project.Name))
+		return err
+	})
+}
+
 // RemoveManagedWorktree owns the complete destructive transition. Provision,
 // Resume, reconciliation, and discovered-Session adoption contend on the same
 // canonical per-Worktree lock. Under that coordination this method rereads the
@@ -361,57 +400,91 @@ func (l *SessionLifecycle) RemoveManagedWorktree(ctx context.Context, projectID 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	project, err := l.resolveProject(ctx, projectID)
-	if err != nil {
-		return err
-	}
-	managedTarget, managed := managedWorktreeForDirectory(project, target)
-	if !managed || canonicalWorktreeTransitionPath(managedTarget) != canonicalWorktreeTransitionPath(target) {
-		return errors.New("Worktree path is not managed by the Project")
-	}
-	target = canonicalWorktreeTransitionPath(target)
-	return l.worktrees.with(ctx, project, target, func() error {
-		freshProject, resolveErr := l.resolveProject(ctx, projectID)
+	return l.projects.with(ctx, projectID, func() error {
+		project, resolveErr := l.resolveProject(ctx, projectID)
 		if resolveErr != nil {
 			return resolveErr
 		}
-		freshTarget, freshManaged := managedWorktreeForDirectory(freshProject, target)
-		if !freshManaged || canonicalWorktreeTransitionPath(freshTarget) != target {
-			return errors.New("Project Worktree identity changed before removal")
+		managedTarget, managed := managedWorktreeForDirectory(project, target)
+		if !managed || canonicalWorktreeTransitionPath(managedTarget) != canonicalWorktreeTransitionPath(target) {
+			return errors.New("Worktree path is not managed by the Project")
 		}
-
-		sessions, readErr := l.registeredSessionsInWorktree(ctx, target)
-		if readErr != nil {
-			return readErr
-		}
-		observation := l.observe(ctx, sessions)
-		if observeErr := validateWorktreeRemovalObservations(sessions, observation); observeErr != nil {
-			return observeErr
-		}
-		for _, session := range sessions {
-			if _, removeErr := l.Remove(ctx, session.ID, session.Name); removeErr != nil {
-				return removeErr
+		target = canonicalWorktreeTransitionPath(target)
+		return l.worktrees.with(ctx, project, target, func() error {
+			freshProject, resolveErr := l.resolveProject(ctx, projectID)
+			if resolveErr != nil {
+				return resolveErr
 			}
-		}
+			freshTarget, freshManaged := managedWorktreeForDirectory(freshProject, target)
+			if !freshManaged || canonicalWorktreeTransitionPath(freshTarget) != target {
+				return errors.New("Project Worktree identity changed before removal")
+			}
+			if discoveryErr := l.adoptDiscoveredSessionsInWorktree(ctx, target); discoveryErr != nil {
+				return discoveryErr
+			}
 
-		// These are deliberately fresh and adjacent to the destructive
-		// repository call. A Session registered through a competing path is a
-		// new occupancy fact and must veto removal rather than being folded into
-		// the already-approved set.
-		remaining, readErr := l.registeredSessionsInWorktree(ctx, target)
-		if readErr != nil {
-			return readErr
-		}
-		finalObservation := l.observe(ctx, remaining)
-		if observeErr := validateWorktreeRemovalObservations(remaining, finalObservation); observeErr != nil {
-			return observeErr
-		}
-		if len(remaining) != 0 {
-			return errors.New("a Session occupied the Worktree during removal")
-		}
-		_, changeErr := l.repositories.Change(ctx, RemoveManagedWorktreeChange(freshProject, target))
-		return changeErr
+			sessions, readErr := l.registeredSessionsInWorktree(ctx, target)
+			if readErr != nil {
+				return readErr
+			}
+			observation := l.observe(ctx, sessions)
+			if observeErr := validateWorktreeRemovalObservations(sessions, observation); observeErr != nil {
+				return observeErr
+			}
+			for _, session := range sessions {
+				if _, removeErr := l.Remove(ctx, session.ID, session.Name); removeErr != nil {
+					return removeErr
+				}
+			}
+
+			// These reads are deliberately fresh and adjacent to the destructive
+			// repository call. Discovery covers external runtimes that have not yet
+			// crossed the Registry Seam; the second Registry read then covers every
+			// process-coordinated adoption path.
+			if discoveryErr := l.adoptDiscoveredSessionsInWorktree(ctx, target); discoveryErr != nil {
+				return discoveryErr
+			}
+			remaining, readErr := l.registeredSessionsInWorktree(ctx, target)
+			if readErr != nil {
+				return readErr
+			}
+			finalObservation := l.observe(ctx, remaining)
+			if observeErr := validateWorktreeRemovalObservations(remaining, finalObservation); observeErr != nil {
+				return observeErr
+			}
+			if len(remaining) != 0 {
+				return errors.New("a Session occupied the Worktree during removal")
+			}
+			_, changeErr := l.repositories.Change(ctx, RemoveManagedWorktreeChange(freshProject, target))
+			return changeErr
+		})
 	})
+}
+
+func (l *SessionLifecycle) adoptDiscoveredSessionsInWorktree(ctx context.Context, target string) error {
+	snapshot, err := l.registry.Snapshot(ctx)
+	if err != nil {
+		return err
+	}
+	state := snapshot.State()
+	discovery := l.discover(ctx, &state)
+	if discovery.Availability != RegistryDiscoveryAvailable {
+		if discoveryErr := discovery.Err(); discoveryErr != nil {
+			return fmt.Errorf("Session discovery is not reliable enough for Worktree removal: %w", discoveryErr)
+		}
+		return errors.New("Session discovery is not reliable enough for Worktree removal")
+	}
+	var relevant []Session
+	for _, session := range discovery.Sessions {
+		if sessionBelongsToWorktree(session, target) {
+			relevant = append(relevant, session)
+		}
+	}
+	if len(relevant) == 0 {
+		return nil
+	}
+	_, err = l.registry.Change(ctx, addDiscoveredSessionsChange(relevant))
+	return err
 }
 
 func (l *SessionLifecycle) registeredSessionsInWorktree(ctx context.Context, target string) ([]Session, error) {
@@ -549,24 +622,24 @@ func (l *SessionLifecycle) planExisting(ctx context.Context, id SessionID, name 
 	advanced := LifecycleRecord{SessionID: session.ID, Session: session, Desired: desired}
 	run := func() error {
 		return l.withSessionTransition(ctx, session.ID, session.Name, func() error {
-		if settleErr := l.settleCrossedRename(ctx, session.ID); settleErr != nil {
-			return settleErr
-		}
-		// The first read resolves legacy name-only callers to a stable SessionID.
-		// Re-read under the transition lock so a preceding transition's Registry
-		// change is part of this transition's starting point.
-		currentSnapshot, snapshotErr := l.registry.Snapshot(ctx)
-		if snapshotErr != nil {
-			return snapshotErr
-		}
-		currentState := currentSnapshot.State()
-		currentIndex := sessionIndex(&currentState, session.ID, session.Name)
-		if currentIndex < 0 {
-			return fmt.Errorf("Session %q not found", session.Name)
-		}
-		var advanceErr error
-		advanced, advanceErr = l.planSessionLocked(ctx, currentState, currentState.Agents[currentIndex], desired)
-		return advanceErr
+			if settleErr := l.settleCrossedRename(ctx, session.ID); settleErr != nil {
+				return settleErr
+			}
+			// The first read resolves legacy name-only callers to a stable SessionID.
+			// Re-read under the transition lock so a preceding transition's Registry
+			// change is part of this transition's starting point.
+			currentSnapshot, snapshotErr := l.registry.Snapshot(ctx)
+			if snapshotErr != nil {
+				return snapshotErr
+			}
+			currentState := currentSnapshot.State()
+			currentIndex := sessionIndex(&currentState, session.ID, session.Name)
+			if currentIndex < 0 {
+				return fmt.Errorf("Session %q not found", session.Name)
+			}
+			var advanceErr error
+			advanced, advanceErr = l.planSessionLocked(ctx, currentState, currentState.Agents[currentIndex], desired)
+			return advanceErr
 		})
 	}
 	if desired == SessionDesiredRunning {
@@ -607,7 +680,10 @@ func (l *SessionLifecycle) planSessionLocked(ctx context.Context, state State, s
 		TransitionID: NewUUID(), SessionID: session.ID, Desired: desired,
 		Phase: LifecyclePlanned, Session: session,
 		StartMode: "resume", PromptDelivery: InitialPromptNotRequested,
-		Applied:   LifecycleAppliedState{WorktreeReady: true},
+		Applied: LifecycleAppliedState{
+			WorktreeReady: true,
+			BaselineKnown: strings.TrimSpace(session.BaseCommit) != "",
+		},
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if session.ProjectID != "" {
@@ -650,20 +726,29 @@ func (l *SessionLifecycle) withRunningWorktreeTransition(
 	createWorktree bool,
 	fn func() error,
 ) error {
-	target, managed := runningWorktreeTarget(project, session, createWorktree)
-	if !managed {
-		return fn()
-	}
-	return l.worktrees.with(ctx, project, target, func() error {
+	return l.projects.with(ctx, session.ProjectID, func() error {
 		freshProject, err := l.resolveProject(ctx, session.ProjectID)
 		if err != nil {
 			return err
 		}
-		freshTarget, freshManaged := runningWorktreeTarget(freshProject, session, createWorktree)
-		if !freshManaged || canonicalWorktreeTransitionPath(freshTarget) != canonicalWorktreeTransitionPath(target) {
-			return errors.New("Project Worktree identity changed during Session transition")
+		if session.ProjectID == "" {
+			freshProject = project
 		}
-		return fn()
+		target, managed := runningWorktreeTarget(freshProject, session, createWorktree)
+		if !managed {
+			return fn()
+		}
+		return l.worktrees.with(ctx, freshProject, target, func() error {
+			resolved, resolveErr := l.resolveProject(ctx, session.ProjectID)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			resolvedTarget, resolvedManaged := runningWorktreeTarget(resolved, session, createWorktree)
+			if !resolvedManaged || canonicalWorktreeTransitionPath(resolvedTarget) != canonicalWorktreeTransitionPath(target) {
+				return errors.New("Project Worktree identity changed during Session transition")
+			}
+			return fn()
+		})
 	})
 }
 
@@ -735,26 +820,26 @@ func (l *SessionLifecycle) advanceSerialized(ctx context.Context, expected Lifec
 	advanced := expected
 	run := func() error {
 		return l.withSessionTransition(ctx, expected.SessionID, expected.Session.Name, func() error {
-		latest, ok, readErr := l.recordForSession(ctx, expected.SessionID)
-		if readErr != nil {
-			return readErr
-		}
-		if !ok {
-			return ErrLifecycleSuperseded
-		}
-		if latest.Phase == LifecycleConverged {
-			advanced = latest
-			return nil
-		}
-		var advanceErr error
-		if latest.TransitionKind == LifecycleTransitionRename {
-			advanced, advanceErr = l.advanceRename(ctx, latest)
-		} else if latest.Desired == SessionDesiredRunning {
-			advanced, advanceErr = l.advanceRunning(ctx, latest)
-		} else {
-			advanced, advanceErr = l.advanceStopped(ctx, latest)
-		}
-		return advanceErr
+			latest, ok, readErr := l.recordForSession(ctx, expected.SessionID)
+			if readErr != nil {
+				return readErr
+			}
+			if !ok {
+				return ErrLifecycleSuperseded
+			}
+			if latest.Phase == LifecycleConverged {
+				advanced = latest
+				return nil
+			}
+			var advanceErr error
+			if latest.TransitionKind == LifecycleTransitionRename {
+				advanced, advanceErr = l.advanceRename(ctx, latest)
+			} else if latest.Desired == SessionDesiredRunning {
+				advanced, advanceErr = l.advanceRunning(ctx, latest)
+			} else {
+				advanced, advanceErr = l.advanceStopped(ctx, latest)
+			}
+			return advanceErr
 		})
 	}
 	var err error
@@ -790,43 +875,43 @@ func (l *SessionLifecycle) reconcileRegisteredSession(ctx context.Context, id Se
 	}
 	run := func() error {
 		return l.withSessionTransition(ctx, id, name, func() error {
-		registrySnapshot, snapshotErr := l.registry.Snapshot(ctx)
-		if snapshotErr != nil {
-			return snapshotErr
-		}
-		state := registrySnapshot.State()
-		idx := sessionIndex(&state, id, name)
-		if idx < 0 {
+			registrySnapshot, snapshotErr := l.registry.Snapshot(ctx)
+			if snapshotErr != nil {
+				return snapshotErr
+			}
+			state := registrySnapshot.State()
+			idx := sessionIndex(&state, id, name)
+			if idx < 0 {
+				return nil
+			}
+			session := state.Agents[idx]
+			exists, observeErr := l.runtime.Exists(ctx, session)
+			if observeErr != nil {
+				return observeErr
+			}
+			desired := SessionDesiredRunning
+			if !session.LaterAt.IsZero() {
+				desired = SessionDesiredLater
+			}
+			latest, hasRecord, readErr := l.recordForSession(ctx, session.ID)
+			if readErr != nil {
+				return readErr
+			}
+			if hasRecord && latest.Phase != LifecycleConverged {
+				// The exact partial intent was already attempted in the first pass.
+				return nil
+			}
+			consistent := (desired == SessionDesiredRunning && exists) || (desired == SessionDesiredLater && !exists)
+			if consistent {
+				return nil
+			}
+			examined = true
+			advanced, advanceErr := l.planSessionLocked(ctx, state, session, desired)
+			if advanceErr != nil {
+				return advanceErr
+			}
+			restored = advanced.Desired == SessionDesiredRunning && advanced.Applied.RuntimePresent
 			return nil
-		}
-		session := state.Agents[idx]
-		exists, observeErr := l.runtime.Exists(ctx, session)
-		if observeErr != nil {
-			return observeErr
-		}
-		desired := SessionDesiredRunning
-		if !session.LaterAt.IsZero() {
-			desired = SessionDesiredLater
-		}
-		latest, hasRecord, readErr := l.recordForSession(ctx, session.ID)
-		if readErr != nil {
-			return readErr
-		}
-		if hasRecord && latest.Phase != LifecycleConverged {
-			// The exact partial intent was already attempted in the first pass.
-			return nil
-		}
-		consistent := (desired == SessionDesiredRunning && exists) || (desired == SessionDesiredLater && !exists)
-		if consistent {
-			return nil
-		}
-		examined = true
-		advanced, advanceErr := l.planSessionLocked(ctx, state, session, desired)
-		if advanceErr != nil {
-			return advanceErr
-		}
-		restored = advanced.Desired == SessionDesiredRunning && advanced.Applied.RuntimePresent
-		return nil
 		})
 	}
 	err = l.withRunningWorktreeTransition(ctx, project, initialSession, false, run)

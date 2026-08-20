@@ -2,7 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  Board,
+  BoardArchive,
+  GitGraph,
   KillSession,
+  MigrateDockSessions,
+  NewDockSession,
   OpenTerm,
   RemoveProject,
   ReorderProjects,
@@ -66,5 +71,39 @@ test('session and project actions forward stable IDs through the Wails bridge', 
     ['SetMainBranch', 'project-id', 'main'],
     ['RemoveProject', 'project-id'],
     ['ReorderProjects', ['project-b', 'project-a']],
+  ]);
+});
+
+test('project queries and Dock restoration forward stable IDs at the bridge', async (t) => {
+  const calls = [];
+  const previousWindow = globalThis.window;
+  t.after(() => { globalThis.window = previousWindow; });
+  const record = method => (...args) => { calls.push([method, ...args]); };
+  globalThis.window = {
+    go: {
+      main: {
+        App: {
+          Board: record('Board'),
+          BoardArchive: record('BoardArchive'),
+          GitGraph: record('GitGraph'),
+          MigrateDockSessions: record('MigrateDockSessions'),
+          NewDockSession: record('NewDockSession'),
+        },
+      },
+    },
+  };
+
+  await GitGraph('project-id', 120);
+  await Board('project-id');
+  await BoardArchive('project-id', 25);
+  await NewDockSession('project-id');
+  await MigrateDockSessions(['legacy dock']);
+
+  assert.deepEqual(calls, [
+    ['GitGraph', 'project-id', 120],
+    ['Board', 'project-id'],
+    ['BoardArchive', 'project-id', 25],
+    ['NewDockSession', 'project-id'],
+    ['MigrateDockSessions', ['legacy dock']],
   ]);
 });

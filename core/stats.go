@@ -455,7 +455,7 @@ func buildStatsWithRepositories(ctx context.Context, state *State, days int, his
 			Since: first, Before: before,
 			Lineages: []HistoryLineage{HistoryLineagePrimary},
 		}
-		summary, events, historyErr = coherentStatsHistory(ctx, history, HistoryAssociationsFromState(state), query)
+		summary, events, historyErr = coherentStatsHistory(ctx, history, NewHistoryAssociations(*state), query)
 	}
 	if historyErr != nil {
 		result.Err = "Arbeitsverlauf nicht lesbar: " + historyErr.Error()

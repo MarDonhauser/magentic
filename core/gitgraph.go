@@ -58,23 +58,28 @@ type GitGraph struct {
 	Err          string              `json:"err,omitempty"`
 }
 
-func BuildGitGraph(s *State, projName string, limit int) GitGraph {
-	return buildGitGraphUsing(s, projName, limit, NewRepositories())
+func BuildGitGraph(s *State, projectID ProjectID, limit int) GitGraph {
+	return buildGitGraphUsing(s, projectID, limit, NewRepositories())
 }
 
-func buildGitGraphUsing(s *State, projName string, limit int, repositories *Repositories) GitGraph {
-	g := GitGraph{Project: projName, Availability: RepositoryUnknown}
-	proj := s.ProjectByName(projName)
-	if proj == nil {
+func buildGitGraphUsing(s *State, projectID ProjectID, limit int, repositories *Repositories) GitGraph {
+	g := GitGraph{ProjectID: projectID, Availability: RepositoryUnknown}
+	if s == nil || projectID == "" {
 		g.Err = "Projekt nicht gefunden"
 		return g
 	}
-	g.ProjectID = proj.ID
+	registered := s.ProjectByID(projectID)
+	if registered == nil {
+		g.Err = "Projekt nicht gefunden"
+		return g
+	}
+	project := *registered
+	g.Project = project.Name
 	if limit <= 0 || limit > 400 {
 		limit = 120
 	}
 	ctx := context.Background()
-	survey, surveyErr := repositories.Survey(ctx, []Project{*proj})
+	survey, surveyErr := repositories.Survey(ctx, []Project{project})
 	if surveyErr != nil {
 		g.Err = "Repository-Status konnte nicht gelesen werden"
 		g.Problems = append(g.Problems, RepositoryProblem{Operation: "survey", Message: surveyErr.Error()})
@@ -116,14 +121,17 @@ func buildGitGraphUsing(s *State, projName string, limit int, repositories *Repo
 		}
 	}
 	agentsByDir := map[string][]string{}
-	for _, a := range s.AgentsFor(projName) {
+	for _, a := range s.Agents {
+		if a.ProjectID != project.ID {
+			continue
+		}
 		if !a.LaterAt.IsZero() {
 			continue
 		}
 		agentsByDir[a.Dir] = append(agentsByDir[a.Dir], a.Name)
 	}
 
-	history := repositories.CommitHistory(ctx, proj.Path, limit+1)
+	history := repositories.CommitHistory(ctx, project.Path, limit+1)
 	if !history.Known() {
 		g.Availability = RepositoryUnknown
 		g.Err = "Git-Verlauf konnte nicht gelesen werden"
@@ -155,7 +163,7 @@ func buildGitGraphUsing(s *State, projName string, limit int, repositories *Repo
 		}
 	}
 	var branchProblems []RepositoryProblem
-	g.Branches, branchProblems = collectGraphBranches(ctx, repositories, proj.Path, main, commits, wtByBranch, agentsByDir, divergenceByBranch)
+	g.Branches, branchProblems = collectGraphBranches(ctx, repositories, project.Path, main, commits, wtByBranch, agentsByDir, divergenceByBranch)
 	g.Problems = append(g.Problems, branchProblems...)
 	for i := range g.Branches {
 		if worktree, known := worktreeByBranch[g.Branches[i].Name]; known {

@@ -80,7 +80,7 @@ func RegisterProject(project Project) RegistryChange {
 	return RegistryChange{kind: registryRegisterProject, project: project}
 }
 
-func RemoveProject(projectID ProjectID, name string) RegistryChange {
+func removeProjectChange(projectID ProjectID, name string) RegistryChange {
 	return RegistryChange{kind: registryRemoveProject, projectID: projectID, projectName: name}
 }
 
@@ -141,7 +141,7 @@ func RenameRegisteredSessionRuntime(sessionID SessionID, oldName, newName, newRu
 	}
 }
 
-func AddDiscoveredSessions(sessions []Session) RegistryChange {
+func addDiscoveredSessionsChange(sessions []Session) RegistryChange {
 	return RegistryChange{kind: registryAddDiscovered, sessions: append([]Session(nil), sessions...)}
 }
 
@@ -364,10 +364,24 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 		changed := false
 		var last SessionID
 		for _, session := range change.sessions {
-			if state.AgentByName(session.Name) != nil {
-				continue
-			}
 			normalizeSession(&session)
+			if existing := state.AgentByName(session.Name); existing != nil {
+				if existing.RuntimeName == session.RuntimeName {
+					continue
+				}
+				return false, "", "", fmt.Errorf(
+					"%w: Session name %q belongs to RuntimeName %q, not %q",
+					ErrRegistryConflict, session.Name, existing.RuntimeName, session.RuntimeName,
+				)
+			}
+			for _, existing := range state.Agents {
+				if existing.RuntimeName == session.RuntimeName {
+					return false, "", "", fmt.Errorf(
+						"%w: RuntimeName %q belongs to Session %q",
+						ErrRegistryConflict, session.RuntimeName, existing.Name,
+					)
+				}
+			}
 			associateSessionProject(state, &session)
 			state.Agents = append(state.Agents, session)
 			last = session.ID

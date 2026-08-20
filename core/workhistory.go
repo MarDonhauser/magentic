@@ -154,14 +154,11 @@ type HistoryAssociations struct {
 	Sessions []HistorySessionAssociation
 }
 
-// HistoryAssociationsFromState is a temporary compatibility translation for
-// current callers. Durable Registry IDs are preserved; names are used only
-// while reading legacy state that has not yet acquired IDs.
-func HistoryAssociationsFromState(state *State) HistoryAssociations {
-	var out HistoryAssociations
-	if state == nil {
-		return out
-	}
+// NewHistoryAssociations builds the immutable attribution input for one
+// Registry revision. Durable IDs own identity; names remain a read-only legacy
+// fallback for Registry data that predates ID migration.
+func NewHistoryAssociations(state State) HistoryAssociations {
+	out := HistoryAssociations{Revision: fmt.Sprintf("registry:%d", state.Revision)}
 	for _, project := range state.Projects {
 		key := string(project.ID)
 		if key == "" {
@@ -379,6 +376,7 @@ type WorkHistoryConfig struct {
 
 type workHistoryFS interface {
 	Stat(string) (fs.FileInfo, error)
+	Lstat(string) (fs.FileInfo, error)
 	ReadFile(string) ([]byte, error)
 	WalkDir(string, fs.WalkDirFunc) error
 }
@@ -386,6 +384,7 @@ type workHistoryFS interface {
 type osWorkHistoryFS struct{}
 
 func (osWorkHistoryFS) Stat(path string) (fs.FileInfo, error) { return os.Stat(path) }
+func (osWorkHistoryFS) Lstat(path string) (fs.FileInfo, error) { return os.Lstat(path) }
 func (osWorkHistoryFS) ReadFile(path string) ([]byte, error)  { return os.ReadFile(path) }
 func (osWorkHistoryFS) WalkDir(path string, fn fs.WalkDirFunc) error {
 	return filepath.WalkDir(path, fn)
