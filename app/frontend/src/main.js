@@ -22,6 +22,8 @@ import {
   providerIcon,
   robotAvatar,
   sessionToolIcon,
+  sessionToolKey,
+  sessionToolLabel,
 } from './avatar.js';
 import { renderGitGraph } from './gitgraph.js';
 import { renderBoard } from './board.js';
@@ -147,8 +149,17 @@ function icon(name) {
 }
 
 function sessionToolMark(session) {
-  const label = session?.term ? 'Bash-Terminal' : 'Claude Code';
-  return `<span class="dev-tool-mark" role="img" aria-label="${label}" title="${label}">${sessionToolIcon(session)}</span>`;
+  const label = sessionToolLabel(session);
+  const tool = sessionToolKey(session);
+  return `<span class="dev-tool-mark" data-agent-tool="${tool}" role="img" aria-label="${label}" title="${label}">${sessionToolIcon(session)}</span>`;
+}
+
+function agentPortrait(name, size, session) {
+  const label = sessionToolLabel(session);
+  const tool = sessionToolKey(session);
+  return `<span class="agent-portrait" style="--agent-avatar-size:${Number(size) || 18}px">` +
+    `${robotAvatar(name, size)}<span class="agent-provider-badge" data-agent-tool="${tool}" role="img" aria-label="${label}" title="${label}">` +
+    `${sessionToolIcon(session)}</span></span>`;
 }
 
 function visHtml(v) {
@@ -327,8 +338,7 @@ function updateTermBar() {
     `<button class="btn tiny" id="tb-dd"${gone ? ' disabled' : ''} title="/done senden und danach automatisch /deploy">${icon('check')}+${icon('rocket')} beides</button>`;
   termBarEl.innerHTML =
     `<button class="btn tiny" id="tb-back" title="Übersicht (⌘0)">‹ Übersicht</button>` +
-    `<span class="tb-avatar">${robotAvatar(activeTerm, 24)}</span>` +
-    sessionToolMark(a) +
+    `<span class="tb-avatar">${agentPortrait(activeTerm, 24, a)}</span>` +
     `<span class="dot" style="background:${v.color}"></span>` +
     `<span class="tb-name">${esc(activeTerm)}</span>` +
     (a?.branch ? `<span class="tb-branch${a.worktree ? ' wt' : ''}" title="Branch ${esc(a.branch)}${a.worktree ? ' · eigener Worktree' : ''}">${icon('gitbranch')}${esc(a.branch)}</span>` : '') +
@@ -588,7 +598,7 @@ function projectTabs(active, act) {
 }
 
 function sessionAvatar(name) {
-  return robotAvatar(name, 18);
+  return agentPortrait(name, 18, agentInfo(name));
 }
 
 async function showGraph(project) {
@@ -779,8 +789,7 @@ function ensureHydraHead(t) {
   const head = document.createElement('div');
   head.className = 'hydra-head';
   head.innerHTML =
-    `<span class="hh-avatar">${robotAvatar(t.name, 18)}</span>` +
-    sessionToolMark(agentInfo(t.name)) +
+    `<span class="hh-avatar">${agentPortrait(t.name, 18, agentInfo(t.name))}</span>` +
     `<span class="dot"></span><span class="hh-name">${esc(t.name)}</span>` +
     `<span class="hh-status"></span>` +
     `<button class="hh-max" title="Session groß öffnen">⤢</button>` +
@@ -1053,10 +1062,9 @@ function renderSidebar() {
       const key = idx < 9 ? `<span class="skey">⌘${idx + 1}</span>` : '';
       const dead = ['exited', 'dead'].includes(a.status);
       div.innerHTML =
-        `<span class="savatar${dead ? ' dim' : ''}">${robotAvatar(a.name, 26)}</span>` +
+        `<span class="savatar${dead ? ' dim' : ''}">${agentPortrait(a.name, 26, a)}</span>` +
         `<span class="sbody">` +
           `<span class="srow">` +
-            sessionToolMark(a) +
             `<span class="sname">${esc(a.name)}</span>` +
             branchChip(a) +
           `</span>` +
@@ -1091,8 +1099,7 @@ function renderSidebar() {
       div.className = 'session later';
       div.title = `„${l.name}" wieder öffnen` + (l.project ? ` · ${l.project}` : '');
       div.innerHTML =
-        `<span class="savatar dim">${robotAvatar(l.name, 20)}</span>` +
-        sessionToolMark(l) +
+        `<span class="savatar dim">${agentPortrait(l.name, 20, l)}</span>` +
         `<span class="sname">${esc(l.name)}</span>` +
         (l.project ? `<span class="sstatus">${esc(l.project)}</span>` : '') +
         `<span class="sage">${esc(l.age)}</span>`;
@@ -1224,8 +1231,8 @@ function agentPill(a, project) {
     ? `<button class="btn tiny" data-act="open" data-agent="${esc(a.name)}" title="Terminal öffnen">${developerIcon('bash')}</button>`
     : '';
   return `<span class="pill${a.status === 'blocked' ? ' waiting' : ''}${a.unread ? ' unread' : ''}">` +
-    `<span class="pill-avatar">${robotAvatar(a.name, 18)}</span>` +
-    `<span class="dot" style="background:${v.color}"></span>${sessionToolMark(a)}` +
+    `<span class="pill-avatar">${agentPortrait(a.name, 18, a)}</span>` +
+    `<span class="dot" style="background:${v.color}"></span>` +
     `<span class="name">${esc(a.name)}</span>` +
     `<span class="st">${visHtml(v)}</span>` +
     `<span class="age">${esc(a.age)}</span>${open}${done}</span>`;
@@ -1252,7 +1259,7 @@ function attentionOverview() {
     const context = [a.project, a.branch].filter(Boolean).join(' · ');
     const status = agentVisual(a, a.project);
     return `<button type="button" class="attention-session" data-act="open" data-agent="${esc(a.name)}">` +
-      `<span class="attention-session-avatar">${robotAvatar(a.name, 24)}</span>` +
+      `<span class="attention-session-avatar">${agentPortrait(a.name, 24, a)}</span>` +
       `<span class="attention-session-copy"><strong>${esc(a.name)}</strong><span>${esc(context)}</span></span>` +
       `<span class="attention-session-status">${visHtml(status)}</span>` +
       `<span class="attention-session-open">Öffnen</span></button>`;

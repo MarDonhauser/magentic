@@ -1,11 +1,13 @@
-body.dk-open #layout { height: calc(100% - 28px - var(--dk-h, 280px)); }
+body { --dk-current-h: var(--dk-h, 280px); }
+body.dk-no-tabs { --dk-current-h: 104px; }
+body.dk-open #layout { height: calc(100% - 28px - var(--dk-current-h)); }
 
 .dk-dock {
   position: fixed;
   left: 0;
   right: 0;
   bottom: 0;
-  height: var(--dk-h, 280px);
+  height: var(--dk-current-h);
   display: none;
   flex-direction: column;
   background: var(--panel);
@@ -16,6 +18,7 @@ body.dk-open #layout { height: calc(100% - 28px - var(--dk-h, 280px)); }
 }
 
 body.dk-open .dk-dock { display: flex; }
+body.dk-no-tabs .dk-resize { display: none; }
 
 .dk-resize {
   position: absolute;
@@ -45,7 +48,7 @@ body.dk-dragging .dk-resize::after { background: var(--accent); }
   display: flex;
   align-items: stretch;
   flex: none;
-  height: 30px;
+  height: 32px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
@@ -60,6 +63,19 @@ body.dk-dragging .dk-resize::after { background: var(--accent); }
 }
 
 .dk-tabs::-webkit-scrollbar { height: 0; }
+
+.dk-empty-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.dk-empty-title .dev-icon { width: 14px; height: 14px; }
+.dk-dock:not(.dk-blank) .dk-empty-title { display: none; }
 
 .dk-tab {
   position: relative;
@@ -118,8 +134,8 @@ body.dk-dragging .dk-resize::after { background: var(--accent); }
 
 .dk-x {
   flex: none;
-  width: 17px;
-  height: 17px;
+  width: 22px;
+  height: 22px;
   display: grid;
   place-items: center;
   padding: 0;
@@ -127,8 +143,6 @@ body.dk-dragging .dk-resize::after { background: var(--accent); }
   border-radius: 5px;
   background: transparent;
   color: inherit;
-  font-size: 13px;
-  line-height: 1;
   cursor: pointer;
   opacity: 0;
 }
@@ -147,13 +161,13 @@ body.dk-dragging .dk-resize::after { background: var(--accent); }
   align-items: center;
   gap: 3px;
   flex: none;
-  padding: 0 7px;
+  padding: 0 6px;
   border-left: 1px solid var(--border);
 }
 
 .dk-btn {
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   display: grid;
   place-items: center;
   padding: 0;
@@ -161,10 +175,11 @@ body.dk-dragging .dk-resize::after { background: var(--accent); }
   border-radius: 6px;
   background: transparent;
   color: var(--ink-2);
-  font-size: 15px;
-  line-height: 1;
   cursor: pointer;
 }
+
+.dk-ico { width: 14px; height: 14px; }
+.dk-x .dk-ico { width: 12px; height: 12px; }
 
 .dk-btn:hover {
   background: var(--raise-2);
@@ -211,10 +226,11 @@ body.dk-dragging .dk-body { pointer-events: none; }
   position: absolute;
   inset: 0;
   display: none;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: 11px;
+  gap: 12px;
+  padding: 10px 18px;
   color: var(--muted);
   font-size: 12px;
 }
@@ -222,18 +238,29 @@ body.dk-dragging .dk-body { pointer-events: none; }
 .dk-dock.dk-blank .dk-empty { display: flex; }
 
 .dk-empty-icon {
-  width: 38px;
-  height: 38px;
+  width: 34px;
+  height: 34px;
   display: grid;
   place-items: center;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 9px;
   background: var(--surface);
 }
 
-.dk-empty-icon .dev-icon { width: 24px; height: 24px; }
+.dk-empty-icon .dev-icon { width: 20px; height: 20px; }
+
+.dk-empty-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dk-empty-copy strong { color: var(--ink-2); font-size: 12.5px; font-weight: 650; }
+.dk-empty-copy span { color: var(--muted); font-size: 11px; }
 
 .dk-empty-btn {
+  min-height: 32px;
   padding: 6px 14px;
   border: 1px solid var(--border);
   border-radius: 7px;
@@ -246,9 +273,18 @@ body.dk-dragging .dk-body { pointer-events: none; }
 
 .dk-empty-btn:hover { border-color: var(--accent); color: var(--accent); }
 
-.dk-hint { font-size: 11px; color: var(--muted); opacity: .75; }
+.dk-hint { margin-left: 4px; font-size: 11px; color: var(--muted); opacity: .75; }
 
 body.dk-dragging {
   cursor: ns-resize;
   user-select: none;
+}
+
+@media (max-width: 780px) {
+  .dk-hint { display: none; }
+}
+
+@media (max-width: 560px) {
+  .dk-empty-icon,
+  .dk-empty-copy span { display: none; }
 }

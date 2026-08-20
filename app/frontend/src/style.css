@@ -138,6 +138,7 @@ html, body {
   background: var(--surface);
   box-shadow: 0 12px 28px rgba(0,0,0,0.28), 0 2px 6px rgba(0,0,0,0.2);
 }
+#sidebar-tools:not([open]) > .sidebar-tool-menu { display: none; }
 .sidebar-tool-menu .nav-btn {
   min-width: 0;
   margin: 0;
@@ -172,20 +173,35 @@ html, body {
 .dev-icon-slot { width: 1em; height: 1em; margin-right: 4px; }
 .dev-icon-slot > .dev-icon { width: 100%; height: 100%; }
 .dev-tool-mark .dev-icon { width: 13px; height: 13px; }
-.nav-dev-stack,
-.tl-dev-stack { display: inline-flex; align-items: center; flex: none; }
-.nav-dev-stack { width: 39px; margin-right: 4px; }
-.tl-dev-stack { width: 47px; margin-right: 5px; }
-.dev-icon-stack { display: inline-flex; align-items: center; padding-left: 3px; }
-.dev-icon-stack .dev-icon {
-  width: 12px;
-  height: 12px;
-  margin-left: -3px;
+.agent-portrait {
+  position: relative;
+  width: var(--agent-avatar-size, 18px);
+  height: var(--agent-avatar-size, 18px);
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+}
+.agent-portrait > .rbt { display: block; }
+.agent-provider-badge {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: clamp(9px, calc(var(--agent-avatar-size, 18px) * .46), 12px);
+  height: clamp(9px, calc(var(--agent-avatar-size, 18px) * .46), 12px);
+  display: grid;
+  place-items: center;
+  padding: 1px;
   border-radius: 3px;
   background: var(--panel);
-  box-shadow: 0 0 0 1px var(--panel);
+  box-shadow: 0 0 0 1px var(--panel), 0 1px 2px rgba(0,0,0,.24);
 }
-.tl-dev-stack .dev-icon-stack .dev-icon { width: 14px; height: 14px; }
+.agent-provider-badge .dev-icon {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border-radius: 1px;
+  vertical-align: 0;
+}
 .dev-icon[data-dev-icon="bash"] {
   padding: 1px;
   border-radius: 3px;

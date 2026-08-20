@@ -12,6 +12,16 @@ const MIN_HEIGHT = 120;
 const MAX_RATIO = 0.8;
 const TERM_THEME = { background: '#282d35', foreground: '#dbe0e6', cursor: '#5eead4', selectionBackground: 'rgba(55,207,189,0.30)' };
 
+const DOCK_ICONS = {
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
+  close: '<path d="M18 6 6 18M6 6l12 12"/>',
+};
+
+function dockIcon(name) {
+  return `<svg class="dk-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${DOCK_ICONS[name]}</svg>`;
+}
+
 const enc = new TextEncoder();
 
 function toB64(s) {
@@ -193,7 +203,9 @@ function updateStatuses() {
 }
 
 function updateBlank() {
-  dockEl.classList.toggle('dk-blank', tabs.size === 0);
+  const blank = tabs.size === 0;
+  dockEl.classList.toggle('dk-blank', blank);
+  document.body.classList.toggle('dk-no-tabs', blank);
 }
 
 function addTab(name) {
@@ -216,7 +228,8 @@ function addTab(name) {
   const x = document.createElement('button');
   x.className = 'dk-x';
   x.type = 'button';
-  x.textContent = '×';
+  x.innerHTML = dockIcon('close');
+  x.setAttribute('aria-label', `Tab ${name} schließen`);
   x.title = 'Tab schließen';
 
   el.append(dot, tool, label, x);
@@ -361,20 +374,27 @@ function buildDom() {
   tabsEl = document.createElement('div');
   tabsEl.className = 'dk-tabs';
 
+  const emptyTitle = document.createElement('div');
+  emptyTitle.className = 'dk-empty-title';
+  emptyTitle.innerHTML = `${developerIcon('bash')}<span>Terminal-Dock</span>`;
+  tabsEl.appendChild(emptyTitle);
+
   const actions = document.createElement('div');
   actions.className = 'dk-actions';
 
   const plus = document.createElement('button');
   plus.className = 'dk-btn';
   plus.type = 'button';
-  plus.textContent = '+';
+  plus.innerHTML = dockIcon('plus');
+  plus.setAttribute('aria-label', 'Neues Terminal starten');
   plus.title = 'Neues Terminal';
   plus.addEventListener('click', spawnTerminal);
 
   const hide = document.createElement('button');
   hide.className = 'dk-btn';
   hide.type = 'button';
-  hide.textContent = '⌄';
+  hide.innerHTML = dockIcon('down');
+  hide.setAttribute('aria-label', 'Terminal-Dock einklappen');
   hide.title = 'Dock einklappen (⌃`)';
   hide.addEventListener('click', () => toggleDock(false));
 
@@ -390,21 +410,27 @@ function buildDom() {
   emptyIcon.className = 'dk-empty-icon';
   emptyIcon.setAttribute('aria-hidden', 'true');
   emptyIcon.innerHTML = developerIcon('bash');
-  const emptyText = document.createElement('div');
-  emptyText.textContent = 'Kein Terminal geöffnet';
+  const emptyCopy = document.createElement('div');
+  emptyCopy.className = 'dk-empty-copy';
+  const emptyText = document.createElement('strong');
+  emptyText.textContent = 'Noch kein Terminal';
+  const emptyDetail = document.createElement('span');
+  emptyDetail.textContent = 'Starte eine Shell im aktuellen Projekt.';
+  emptyCopy.append(emptyText, emptyDetail);
   const emptyBtn = document.createElement('button');
   emptyBtn.className = 'dk-empty-btn';
   emptyBtn.type = 'button';
-  emptyBtn.textContent = 'Neues Terminal';
+  emptyBtn.textContent = 'Terminal starten';
   emptyBtn.addEventListener('click', spawnTerminal);
   const hint = document.createElement('div');
   hint.className = 'dk-hint';
-  hint.textContent = '⌃` schließt das Dock · ⌘⌥←/→ wechselt den Tab';
-  empty.append(emptyIcon, emptyText, emptyBtn, hint);
+  hint.textContent = '⌃` ein-/ausblenden';
+  empty.append(emptyIcon, emptyCopy, emptyBtn, hint);
   bodyEl.appendChild(empty);
 
   dockEl.append(grip, bar, bodyEl);
   document.body.appendChild(dockEl);
+  updateBlank();
 
   tabsEl.addEventListener('click', e => {
     const tab = e.target.closest('.dk-tab');

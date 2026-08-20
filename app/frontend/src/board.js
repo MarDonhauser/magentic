@@ -102,7 +102,7 @@ function agentsHtml(item, opts) {
     const face = art ? `<span class="bd-agent-face">${art}</span>` : '';
     const tag = clickable ? 'button' : 'span';
     const attrs = clickable ? ` type="button" data-act="agent" data-agent="${esc(name)}" title="Session ${esc(name)} öffnen"` : '';
-    return `<${tag} class="bd-agent${face ? '' : ' bd-agent-plain'}"${attrs}>${face}${developerIcon('claude')}<span class="bd-agent-name">${esc(name)}</span></${tag}>`;
+    return `<${tag} class="bd-agent${face ? '' : ' bd-agent-plain'}"${attrs}>${face}<span class="bd-agent-name">${esc(name)}</span></${tag}>`;
   }).join('');
   return `<div class="bd-agents"><span class="bd-live-dot" aria-hidden="true"></span>${chips}</div>`;
 }
