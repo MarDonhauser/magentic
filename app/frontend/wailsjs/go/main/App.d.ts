@@ -43,7 +43,7 @@ export function GitGraph(arg1:string,arg2:number):Promise<core.GitGraph>;
 
 export function HandoffSession(arg1:string,arg2:string):Promise<void>;
 
-export function KillSession(arg1:string):Promise<void>;
+export function KillSession(arg1:string,arg2:string):Promise<void>;
 
 export function LaterSession(arg1:string):Promise<void>;
 
@@ -59,7 +59,7 @@ export function NewTermSession(arg1:string,arg2:boolean,arg3:string):Promise<str
 
 export function NewTermSessionFor(arg1:string):Promise<string>;
 
-export function OpenTerm(arg1:string,arg2:number,arg3:number):Promise<void>;
+export function OpenTerm(arg1:string,arg2:string,arg3:number,arg4:number):Promise<void>;
 
 export function Overview(arg1:boolean):Promise<core.Overview>;
 

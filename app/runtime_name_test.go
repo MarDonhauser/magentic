@@ -92,11 +92,11 @@ func TestSessionPreviewAndLinksUseRegisteredRuntimeName(t *testing.T) {
 	source, target := customRuntimeAgents()
 	handoffTestState(t, source, target)
 
-	preview := (&App{}).SessionPreview(source.Name)
+	preview := (&App{}).SessionPreview(string(source.ID))
 	if !strings.Contains(preview, "custom runtime") {
 		t.Fatalf("SessionPreview() = %q", preview)
 	}
-	links, err := (&App{}).SessionLinks(source.Name)
+	links, err := (&App{}).SessionLinks(string(source.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestOpenTermBuildsAttachCommandFromRegisteredRuntimeName(t *testing.T) {
 		commandArgs = append([]string(nil), command.Args...)
 		return nil, wantStop
 	}
-	err := app.OpenTerm(source.Name, 120, 40)
+	err := app.OpenTerm(string(source.ID), source.Name, 120, 40)
 	if !errors.Is(err, wantStop) {
 		t.Fatalf("OpenTerm() error = %v, want injected stop", err)
 	}

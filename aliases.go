@@ -59,7 +59,6 @@ var (
 	backgroundShellCount = core.BackgroundShellCount
 	shellDetail          = core.ShellDetail
 
-	gitCmd        = core.GitCmd
 	CachedUsage   = core.CachedUsage
 	PickAgentName = core.PickAgentName
 

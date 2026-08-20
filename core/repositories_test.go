@@ -53,7 +53,13 @@ func repositoriesTopologyFixture(worktrees ...repositoriesTopologyWorktree) stri
 	for _, wt := range worktrees {
 		out += "worktree " + wt.Path + "\n"
 		if wt.Head != "" {
-			out += "HEAD " + wt.Head + "\n"
+			head := wt.Head
+			// Most repository tests use four-character mnemonic object IDs. The
+			// porcelain fixture expands those shorthands to the full SHA-1 grammar.
+			if len(head) == 4 {
+				head = strings.Repeat(head, 10)
+			}
+			out += "HEAD " + head + "\n"
 		}
 		if wt.Branch != "" {
 			out += "branch refs/heads/" + wt.Branch + "\n"
@@ -280,6 +286,101 @@ func TestRepositoriesTopologyPreservesCheckoutAndMaintenanceFacts(t *testing.T) 
 	}
 	if unborn.Checkout.Kind != RepositoryUnborn || unborn.Checkout.Branch != "topic" || unborn.Head != "" {
 		t.Fatalf("unborn status = %#v", unborn)
+	}
+}
+
+func TestRepositoriesTopologyAcceptsDocumentedVariants(t *testing.T) {
+	root := t.TempDir()
+	branchPath := filepath.Join(root, "branch")
+	detachedPath := filepath.Join(root, "detached")
+	unbornPath := filepath.Join(root, "unborn")
+	barePath := filepath.Join(root, "bare.git")
+	head := strings.Repeat("a", 40)
+	zeroHead := strings.Repeat("0", 40)
+	input := fmt.Sprintf(
+		"worktree %s\nHEAD %s\nbranch refs/heads/feature/topic\nlocked \"repair needed\"\nprunable stale-gitdir\n\n"+
+			"worktree %s\nHEAD %s\ndetached\n\n"+
+			"worktree %s\nHEAD %s\nbranch refs/heads/main\n\n"+
+			"worktree %s\nbare\n\n",
+		branchPath, head, detachedPath, head, unbornPath, zeroHead, barePath,
+	)
+
+	got, err := parseRepositoriesTopology(input)
+	if err != nil {
+		t.Fatalf("parseRepositoriesTopology() error = %v", err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("topology = %#v", got)
+	}
+	if branch := got[0]; branch.Path != branchPath || branch.Head != head || branch.Branch != "feature/topic" ||
+		!branch.Locked || branch.LockReason != "repair needed" || !branch.Prunable || branch.Detached || branch.Bare || branch.Unborn {
+		t.Fatalf("branch topology = %#v", branch)
+	}
+	if detached := got[1]; detached.Path != detachedPath || !detached.Detached || detached.Branch != "" || detached.Unborn || detached.Bare {
+		t.Fatalf("detached topology = %#v", detached)
+	}
+	if unborn := got[2]; unborn.Path != unbornPath || !unborn.Unborn || unborn.Branch != "main" || !allZeroOID(unborn.Head) {
+		t.Fatalf("unborn topology = %#v", unborn)
+	} else if checkout := repositoryWorktreeFromTopology(root, unborn).Checkout; !checkout.Known() ||
+		checkout.Value != (RepositoryCheckout{Kind: RepositoryUnborn, Branch: "main"}) {
+		t.Fatalf("unborn checkout = %#v", checkout)
+	}
+	if bare := got[3]; bare.Path != barePath || !bare.Bare || bare.Head != "" || bare.Branch != "" {
+		t.Fatalf("bare topology = %#v", bare)
+	}
+}
+
+func TestRepositoriesTopologyRejectsMalformedSuccessfulOutput(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo")
+	other := filepath.Join(filepath.Dir(root), "other")
+	head := strings.Repeat("a", 40)
+	validRecord := fmt.Sprintf("worktree %s\nHEAD %s\nbranch refs/heads/main\n", root, head)
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "empty", input: ""},
+		{name: "only worktree path", input: fmt.Sprintf("worktree %s\n\n", root)},
+		{name: "truncated record", input: validRecord},
+		{name: "unknown line", input: validRecord + "future-field value\n\n"},
+		{name: "duplicate head", input: fmt.Sprintf("worktree %s\nHEAD %s\nHEAD %s\nbranch refs/heads/main\n\n", root, head, head)},
+		{name: "duplicate checkout", input: validRecord + "detached\n\n"},
+		{name: "duplicate locked", input: validRecord + "locked\nlocked again\n\n"},
+		{name: "duplicate prunable", input: validRecord + "prunable\nprunable again\n\n"},
+		{name: "head before worktree", input: fmt.Sprintf("HEAD %s\nworktree %s\nbranch refs/heads/main\n\n", head, root)},
+		{name: "branch before head", input: fmt.Sprintf("worktree %s\nbranch refs/heads/main\nHEAD %s\n\n", root, head)},
+		{name: "locked before checkout", input: fmt.Sprintf("worktree %s\nHEAD %s\nlocked\nbranch refs/heads/main\n\n", root, head)},
+		{name: "missing record separator", input: validRecord + fmt.Sprintf("worktree %s\nHEAD %s\ndetached\n\n", other, head)},
+		{name: "duplicate path", input: validRecord + "\n" + validRecord + "\n"},
+		{name: "bare with head", input: fmt.Sprintf("worktree %s\nHEAD %s\nbare\n\n", root, head)},
+		{name: "detached unborn", input: fmt.Sprintf("worktree %s\nHEAD %s\ndetached\n\n", root, strings.Repeat("0", 40))},
+		{name: "invalid head", input: fmt.Sprintf("worktree %s\nHEAD not-an-object-id\nbranch refs/heads/main\n\n", root)},
+		{name: "invalid branch", input: fmt.Sprintf("worktree %s\nHEAD %s\nbranch refs/tags/main\n\n", root, head)},
+		{name: "unterminated quoted path", input: "worktree \"/tmp/repo\n" + "bare\n\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got, err := parseRepositoriesTopology(test.input); err == nil {
+				t.Fatalf("malformed successful output became known topology: input=%q result=%#v", test.input, got)
+			}
+		})
+	}
+}
+
+func TestRepositoriesSurveyDoesNotTreatMalformedTopologyAsKnown(t *testing.T) {
+	projectPath := filepath.Join(t.TempDir(), "project")
+	runner := &repositoriesRecordingRunner{t: t, steps: []repositoriesRunnerStep{{
+		dir: projectPath, args: []string{"worktree", "list", "--porcelain"},
+		output: fmt.Sprintf("worktree %s\n\n", projectPath),
+	}}}
+	survey, err := newRepositories(runner).Survey(context.Background(), []Project{{ID: "project-1", Name: "demo", Path: projectPath}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.assertDone()
+	project := survey.Projects[0]
+	if project.Presence != RepositoryUnknown || project.Worktrees.Known() || project.Worktrees.Problem == nil {
+		t.Fatalf("malformed topology became known: %#v", project)
 	}
 }
 

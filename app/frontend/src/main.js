@@ -330,7 +330,7 @@ function agentInfo(name, sessionID = '') {
     for (const wt of p.worktrees || []) {
       for (const a of wt.agents || []) {
         if ((sessionID && a.id === sessionID) || (!sessionID && a.name === name)) {
-          return { ...a, project: p.name };
+          return { ...a, project: p.name, projectID: p.id };
         }
       }
     }
@@ -530,8 +530,8 @@ termImageEl.onchange = () => {
   termImageEl.value = '';
 };
 
-function markSeen(name) {
-  if (name) MarkSeen(name).catch(() => {});
+function markSeen(sessionID) {
+  if (sessionID) MarkSeen(sessionID).catch(() => {});
 }
 
 async function openSession(sessionID, name) {
@@ -544,8 +544,8 @@ async function openSession(sessionID, name) {
   hydraProject = null;
   termsEl.classList.remove('hydra');
   if (dockTabs().includes(name)) closeDockTab(name);
-  if (activeTerm && activeSessionID !== sessionID) markSeen(activeTerm);
-  markSeen(name);
+  if (activeSessionID && activeSessionID !== sessionID) markSeen(activeSessionID);
+  markSeen(sessionID);
   activeTerm = name;
   activeSessionID = sessionID;
   SetActiveTerm(sessionID);
@@ -598,7 +598,7 @@ function showPanel(id) {
 
 function leaveTerm() {
   hydraHandoff.leave();
-  markSeen(activeTerm);
+  markSeen(activeSessionID);
   activeTerm = null;
   activeSessionID = null;
   SetActiveTerm('');
@@ -626,6 +626,10 @@ let graphBusy = false, boardBusy = false, statsBusy = false;
 
 function projectNames() {
   return (ov?.projects || []).filter(p => p.path).map(p => p.name);
+}
+
+function projectInfo(name) {
+  return (ov?.projects || []).find(p => p.path && p.name === name) || null;
 }
 
 function pickProject(current) {
@@ -704,12 +708,14 @@ async function loadBoard() {
   renderBoard($('board-body'), b, {
     includeArchived: boardArchive,
     avatar: sessionAvatar,
-    onOpenSession: name => openSession(name),
+    onOpenSession: name => openSessionByName(name),
     onStart: async item => {
       try {
-        const name = await act(StartBoardItem(boardProject, item.startToken),
+        const project = projectInfo(boardProject);
+        if (!project?.id) throw new Error(`Projekt „${boardProject}" ist nicht mehr registriert`);
+        const name = await act(StartBoardItem(project.id, item.startToken),
           n => `Session „${n}" für „${item.title}" gestartet`);
-        if (name) setTimeout(() => openSession(name), 400);
+        if (name) setTimeout(() => openSessionByName(name), 400);
       } catch { /* toast zeigt den Fehler */ }
     },
   });
@@ -808,7 +814,7 @@ function hydraAgents() {
 function enterHydra(project) {
   hydraHandoff.leave();
   view = 'hydra';
-  markSeen(activeTerm);
+  markSeen(activeSessionID);
   activeTerm = null;
   activeSessionID = null;
   SetActiveTerm('');
@@ -834,13 +840,17 @@ function updateHydraBar() {
   $('tb-back').onclick = showOverview;
   $('tb-add').onclick = async () => {
     try {
-      const n2 = await act(NewSession(hydraProject, false, ''), x => `Session „${x}" gestartet`);
+      const project = projectInfo(hydraProject);
+      if (!project?.id) throw new Error(`Projekt „${hydraProject}" ist nicht mehr registriert`);
+      const n2 = await act(NewSession(project.id, false, ''), x => `Session „${x}" gestartet`);
       if (n2) await focusHydraSession(n2);
     } catch { /* toast zeigt den Fehler */ }
   };
   $('tb-term').onclick = async () => {
     try {
-      const n2 = await act(NewTermSession(hydraProject, false, ''), x => `Terminal „${x}" geöffnet`);
+      const project = projectInfo(hydraProject);
+      if (!project?.id) throw new Error(`Projekt „${hydraProject}" ist nicht mehr registriert`);
+      const n2 = await act(NewTermSession(project.id, false, ''), x => `Terminal „${x}" geöffnet`);
       if (n2) await focusHydraSession(n2);
     } catch { /* toast zeigt den Fehler */ }
   };
@@ -1132,8 +1142,8 @@ function renderSidebar() {
         try {
           const worktree = e.altKey;
           const name = e.shiftKey
-            ? await act(NewTermSession(p.name, false, ''), n => `Terminal „${n}" geöffnet`)
-            : await act(NewSession(p.name, worktree, ''),
+            ? await act(NewTermSession(p.id, false, ''), n => `Terminal „${n}" geöffnet`)
+            : await act(NewSession(p.id, worktree, ''),
                 n => (worktree ? `Worktree-Session „${n}" gestartet` : `Session „${n}" gestartet`));
           if (!name) return;
           if (view === 'hydra' && hydraProject === p.name) await focusHydraSession(name);
@@ -1176,7 +1186,7 @@ function renderSidebar() {
         e.preventDefault();
         showMenu(e.clientX, e.clientY, a.id, a.name, a.status);
       };
-      attachHover(div, a.name);
+      attachHover(div, a.id);
       sessionsEl.appendChild(div);
     }
   }
@@ -1387,18 +1397,18 @@ function gitState(p, wt) {
   if (wt.staged) parts.push(`${wt.staged} staged`);
   if (wt.modified) parts.push(`${wt.modified} geändert`);
   if (wt.untracked) parts.push(`${wt.untracked} neu`);
-  return `<span class="git-state clickable" data-project="${esc(p.id || p.name)}" data-worktree="${esc(wt.reference)}" title="Diff anzeigen">` +
+  return `<span class="git-state clickable" data-project="${esc(p.id)}" data-worktree="${esc(wt.reference)}" title="Diff anzeigen">` +
     `<span style="color:var(--warning);font-weight:700">±</span> ${parts.join(' · ')}</span>`;
 }
 
 function worktreeActions(p, wt) {
   if (!p.path) return '';
-	const projectRef = p.id || p.name;
+	const projectRef = p.id;
   const busy = (wt.agents || []).some(a => !a.dock && ['running', 'agents', 'blocked'].includes(a.status));
   const anySession = (wt.agents || []).some(a => !a.dock && ['running', 'agents', 'blocked', 'idle'].includes(a.status));
   let btns = '';
   if (!busy && wt.checkoutKnown && wt.divergenceKnown && p.mainBranchKnown && wt.ahead > 0 && wt.branch !== p.mainBranch) {
-    btns += `<button class="btn" data-act="merge" data-project="${esc(p.name)}" data-source="${esc(wt.branch)}" data-target="${esc(p.mainBranch)}" ` +
+    btns += `<button class="btn" data-act="merge" data-project="${esc(p.id)}" data-source="${esc(wt.branch)}" data-target="${esc(p.mainBranch)}" ` +
       `title="Claude-Session, die diesen Branch merged">${icon('merge')} ${esc(wt.branch)} → ${esc(p.mainBranch)}</button>`;
   }
   if (!wt.isMain && !anySession) {
@@ -1464,11 +1474,11 @@ function projectCard(p) {
       `<button class="project-lens" data-act="showboard" data-project="${esc(p.name)}" title="Board aus allen Spec-Ordnern — Plan, Tasks und was gerade läuft">${developerIcon('markdown')} Board</button>` +
       `<button class="project-lens" data-act="showstats" data-project="${esc(p.name)}" title="Statistik mit Fokus auf dieses Projekt">${icon('chart')} Statistik</button></div>` +
       `<div class="project-primary-actions">` +
-      `<button class="btn primary" data-act="newsession" data-project="${esc(p.name)}" title="Neue Session im Projekt">${icon('play')} Session</button>` +
-      `<button class="btn" data-act="newworktree" data-project="${esc(p.name)}" title="${p.repositoryKnowledge === 'known' ? 'Neue Session in eigenem Worktree' : 'Repository-Status ist unbekannt'}"${p.repositoryKnowledge === 'known' ? '' : ' disabled'}>${developerIcon('git')} Worktree</button>` +
+      `<button class="btn primary" data-act="newsession" data-project="${esc(p.id)}" title="Neue Session im Projekt">${icon('play')} Session</button>` +
+      `<button class="btn" data-act="newworktree" data-project="${esc(p.id)}" title="${p.repositoryKnowledge === 'known' ? 'Neue Session in eigenem Worktree' : 'Repository-Status ist unbekannt'}"${p.repositoryKnowledge === 'known' ? '' : ' disabled'}>${developerIcon('git')} Worktree</button>` +
       `<details class="project-more"${menuOpen}><summary>Mehr</summary><div class="project-more-menu">` +
-      `<button class="project-menu-item" data-act="newterm" data-project="${esc(p.name)}" title="Reines Terminal im Projekt — Shell statt Agent">${developerIcon('bash')} Terminal öffnen</button>` +
-      `<button class="project-menu-item" data-act="deploy" data-project="${esc(p.name)}" title="Neue Session, die /deploy ausführt">${icon('rocket')} Deploy starten</button>` +
+      `<button class="project-menu-item" data-act="newterm" data-project="${esc(p.id)}" title="Reines Terminal im Projekt — Shell statt Agent">${developerIcon('bash')} Terminal öffnen</button>` +
+      `<button class="project-menu-item" data-act="deploy" data-project="${esc(p.id)}" title="Neue Session, die /deploy ausführt">${icon('rocket')} Deploy starten</button>` +
       `<div class="project-menu-separator"></div>${mainCfg}${rmProj}</div></details></div></div>`;
   }
   const mainBranch = p.path
@@ -1899,12 +1909,12 @@ hoverEl.id = 'hoverprev';
 document.body.appendChild(hoverEl);
 let hoverTimer = null;
 
-function attachHover(div, name) {
+function attachHover(div, sessionID) {
   div.addEventListener('mouseenter', () => {
     clearTimeout(hoverTimer);
     hoverTimer = setTimeout(async () => {
       try {
-        const txt = await SessionPreview(name);
+        const txt = await SessionPreview(sessionID);
         if (!txt || !div.isConnected) return;
         const r = div.getBoundingClientRect();
         hoverEl.textContent = txt;
@@ -2101,7 +2111,9 @@ async function openTermInContext() {
     if (activeSessionID) {
       name = await act(NewTermSessionFor(activeSessionID), x => `Terminal „${x}" geöffnet`);
     } else if (hydraProject) {
-      name = await act(NewTermSession(hydraProject, false, ''), x => `Terminal „${x}" geöffnet`);
+      const project = projectInfo(hydraProject);
+      if (!project?.id) throw new Error(`Projekt „${hydraProject}" ist nicht mehr registriert`);
+      name = await act(NewTermSession(project.id, false, ''), x => `Terminal „${x}" geöffnet`);
     } else {
       toast('⌘T öffnet ein Terminal im Verzeichnis der offenen Session — hier stattdessen den ⌨-Button der Projektkarte nutzen', true);
       return;
@@ -2189,14 +2201,15 @@ function shortUrl(u) {
 
 async function openLinksMenu(anchor) {
   const name = activeTerm;
+  const sessionID = activeSessionID;
   const r = anchor.getBoundingClientRect();
   subMenuEl.innerHTML = `<div class="mi-head">Links</div><div class="mi muted">lade…</div>`;
   subMenuEl.style.display = 'block';
   subMenuEl.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 380)) + 'px';
   subMenuEl.style.top = (r.bottom + 6) + 'px';
   let links = [];
-  try { links = (await SessionLinks(name)) || []; } catch { links = []; }
-  if (subMenuEl.style.display === 'none' || activeTerm !== name) return;
+  try { links = (await SessionLinks(sessionID)) || []; } catch { links = []; }
+  if (subMenuEl.style.display === 'none' || activeSessionID !== sessionID) return;
   if (!links.length) {
     subMenuEl.innerHTML = `<div class="mi-head">Links</div><div class="mi muted">keine Links in dieser Session gefunden</div>`;
     return;
@@ -2268,15 +2281,15 @@ window.addEventListener('keydown', e => {
   if (e.key === 'Escape' && projectMenu) { projectMenu.open = false; return; }
   if (!e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.key >= '1' && e.key <= '9') {
-    const name = sidebarSessions[parseInt(e.key) - 1];
-    if (name) { e.preventDefault(); openSession(name); }
+    const session = sidebarSessions[parseInt(e.key) - 1];
+    if (session) { e.preventDefault(); openSession(session.id, session.name); }
   } else if (e.key === '0') {
     e.preventDefault();
     showOverview();
   } else if (e.key.toLowerCase() === 'w') {
     e.preventDefault();
     if (e.shiftKey) {
-      if (activeTerm) parkSession(activeTerm);
+      if (activeSessionID) parkSession(activeSessionID, activeTerm);
     } else if (view !== 'overview') {
       showOverview();
     }
@@ -2297,24 +2310,26 @@ window.addEventListener('keydown', e => {
 
 function dockContextProject() {
   if (activeTerm) {
-    const a = agentInfo(activeTerm);
-    if (a?.project && a.project !== '(ohne Projekt)') return a.project;
+    const a = agentInfo(activeTerm, activeSessionID);
+    if (a?.projectID) return a.projectID;
   }
-  if (hydraProject) return hydraProject;
-  if (view === 'graph' && graphProject) return graphProject;
-  if (view === 'board' && boardProject) return boardProject;
-  return projectNames()[0] || '';
+  if (hydraProject) return projectInfo(hydraProject)?.id || '';
+  if (view === 'graph' && graphProject) return projectInfo(graphProject)?.id || '';
+  if (view === 'board' && boardProject) return projectInfo(boardProject)?.id || '';
+  return (ov?.projects || []).find(project => project.path)?.id || '';
 }
 
 mountDock({
-  attach: (name, cols, rows) => OpenTerm(name, cols, rows),
+  // Persisted Dock tabs from releases before SessionID use are the sole
+  // explicit legacy-name path in the backend. Listed Sessions always carry ID.
+  attach: (name, cols, rows) => OpenTerm('', name, cols, rows),
   write: (name, b64) => WriteTerm(name, b64),
   resize: (name, cols, rows) => ResizeTerm(name, cols, rows),
   close: name => {
     // Dock-Terminals stehen in keiner Liste — bliebe die tmux-Session offen,
     // liefe sie unsichtbar weiter und wäre nur noch über tmux erreichbar.
     CloseTerm(name);
-    KillSession(name).catch(() => {});
+    KillSession('', name).catch(() => {});
   },
   onData: (name, cb) => {
     const ev = 'term:data:' + name;

@@ -100,14 +100,10 @@ func (a *App) watchLoop() {
 			core.Logf("watchLoop: Observation unavailable for %d Sessions (%s)", len(st.Agents), problem)
 			lastErrLog = time.Now()
 		}
-		activeName := a.getActiveTerm()
+		activeID := core.SessionID(a.getActiveTerm())
 		labels := make(map[core.SessionID]string, len(st.Agents))
-		var activeID core.SessionID
 		for _, session := range st.Agents {
 			labels[session.ID] = session.Name
-			if session.Name == activeName {
-				activeID = session.ID
-			}
 		}
 		quiet := core.AttentionQuietNone
 		if micInUse() {

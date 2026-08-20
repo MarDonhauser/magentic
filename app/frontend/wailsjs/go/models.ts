@@ -493,6 +493,7 @@ export namespace core {
 	    }
 	}
 	export class OvLater {
+	    id: string;
 	    name: string;
 	    project: string;
 	    age: string;
@@ -505,6 +506,7 @@ export namespace core {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
 	        this.name = source["name"];
 	        this.project = source["project"];
 	        this.age = source["age"];
@@ -1321,4 +1323,3 @@ export namespace main {
 	}
 
 }
-

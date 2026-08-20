@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
@@ -65,9 +66,12 @@ func SessionNameHint(dir, fallback string) string {
 	if dir == "" {
 		return fallback
 	}
-	out, err := GitCmdCached(dir, "rev-parse", "--abbrev-ref", "HEAD")
-	branch := strings.TrimSpace(out)
-	if err != nil || branch == "" || branch == "HEAD" || integrationBranches[branch] {
+	inspection, err := NewRepositories().Inspect(context.Background(), RepositoryInspectRequest{Directory: dir})
+	if err != nil || !inspection.Checkout.Known() || inspection.Checkout.Value.Kind != RepositoryBranchCheckout {
+		return fallback
+	}
+	branch := strings.TrimSpace(inspection.Checkout.Value.Branch)
+	if branch == "" || integrationBranches[branch] {
 		return fallback
 	}
 	for _, p := range nameStripPrefixes {

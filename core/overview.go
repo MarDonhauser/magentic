@@ -77,11 +77,11 @@ type OvUsage struct {
 
 type OvLater struct {
 	ID      SessionID `json:"id"`
-	Name    string `json:"name"`
-	Project string `json:"project"`
-	Age     string `json:"age"`
-	Term    bool   `json:"term"`
-	Tool    string `json:"tool,omitempty"`
+	Name    string    `json:"name"`
+	Project string    `json:"project"`
+	Age     string    `json:"age"`
+	Term    bool      `json:"term"`
+	Tool    string    `json:"tool,omitempty"`
 }
 
 type Overview struct {

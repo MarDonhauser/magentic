@@ -119,9 +119,6 @@ func (a *App) Overview(fresh bool) (core.Overview, error) {
 	if err != nil {
 		return core.Overview{}, err
 	}
-	if fresh {
-		core.FlushGitMemo()
-	}
 	snapshot := a.observationFor(st.Agents, fresh)
 	return core.BuildOverviewFromObservation(st, snapshot), nil
 }
@@ -283,14 +280,10 @@ func (a *App) SaveImage(dataB64 string) (string, error) {
 	return p, nil
 }
 
-func (a *App) MarkSeen(name string) error {
-	st, err := core.LoadState()
+func (a *App) MarkSeen(sessionID string) error {
+	_, session, err := loadSessionByID(sessionID)
 	if err != nil {
 		return err
-	}
-	session := st.AgentByName(name)
-	if session == nil {
-		return fmt.Errorf("unbekannte Session: %s", name)
 	}
 	_, err = core.OpenRegistry(core.StatePath()).Change(a.ctx, core.MarkSessionSeen(session.ID, session.Name, time.Now()))
 	return err
@@ -333,20 +326,16 @@ func (a *App) Stats(days int) (core.Stats, error) {
 	return core.BuildStats(st, days), nil
 }
 
-func (a *App) StartBoardItem(project, token string) (string, error) {
-	st, err := core.LoadState()
+func (a *App) StartBoardItem(projectID, token string) (string, error) {
+	st, project, err := loadProjectByID(projectID)
 	if err != nil {
 		return "", err
-	}
-	proj := st.ProjectByName(project)
-	if proj == nil {
-		return "", fmt.Errorf("unbekanntes Projekt: %s", project)
 	}
 	ctx := a.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	intent, err := core.NewSpecifications().ResolveStart(ctx, *proj, core.SpecificationStartToken(token))
+	intent, err := core.NewSpecifications().ResolveStart(ctx, project, core.SpecificationStartToken(token))
 	if err != nil {
 		return "", fmt.Errorf("Specification kann nicht gestartet werden: %w", err)
 	}
@@ -441,28 +430,28 @@ func (a *App) ZeitgeistStop(note string) (core.ZgStopped, error) {
 	return core.ZeitgeistStop(note)
 }
 
-func (a *App) NewSession(project string, worktree bool, name string) (string, error) {
-	st, err := core.LoadState()
+func (a *App) NewSession(projectID string, worktree bool, name string) (string, error) {
+	st, project, err := loadProjectByID(projectID)
 	if err != nil {
 		return "", err
 	}
-	return core.CreateAgentSession(st, project, worktree, name)
+	return core.CreateAgentSession(st, project.Name, worktree, name)
 }
 
-func (a *App) NewTermSession(project string, worktree bool, name string) (string, error) {
-	st, err := core.LoadState()
+func (a *App) NewTermSession(projectID string, worktree bool, name string) (string, error) {
+	st, project, err := loadProjectByID(projectID)
 	if err != nil {
 		return "", err
 	}
-	return core.CreateTermSession(st, project, worktree, name)
+	return core.CreateTermSession(st, project.Name, worktree, name)
 }
 
-func (a *App) NewDockSession(project string) (string, error) {
-	st, err := core.LoadState()
+func (a *App) NewDockSession(projectID string) (string, error) {
+	st, project, err := loadProjectByID(projectID)
 	if err != nil {
 		return "", err
 	}
-	return core.CreateDockSession(st, project)
+	return core.CreateDockSession(st, project.Name)
 }
 
 func (a *App) NewTermSessionFor(sessionID string) (string, error) {
@@ -504,8 +493,8 @@ func (a *App) SendSkill(sessionID, cmd string) error {
 	return nil
 }
 
-func (a *App) Cleanup(project, reference string) (string, error) {
-	st, target, err := resolveWorktreeTarget(a.ctx, project, reference)
+func (a *App) Cleanup(projectID, reference string) (string, error) {
+	st, target, err := resolveWorktreeTarget(a.ctx, projectID, reference)
 	if err != nil {
 		return "", err
 	}
@@ -522,40 +511,32 @@ func (a *App) Cleanup(project, reference string) (string, error) {
 	return name, nil
 }
 
-func (a *App) Merge(project, source, target string) (string, error) {
-	st, err := core.LoadState()
+func (a *App) Merge(projectID, source, target string) (string, error) {
+	st, project, err := loadProjectByID(projectID)
 	if err != nil {
 		return "", err
 	}
-	proj := st.ProjectByName(project)
-	if proj == nil {
-		return "", fmt.Errorf("unbekanntes Projekt: %s", project)
-	}
-	name, err := core.StartMerge(st, proj.Path, source, target)
+	name, err := core.StartMerge(st, project.Path, source, target)
 	if err != nil {
 		return "", err
 	}
 	return name, nil
 }
 
-func (a *App) Deploy(project string) (string, error) {
-	st, err := core.LoadState()
+func (a *App) Deploy(projectID string) (string, error) {
+	st, project, err := loadProjectByID(projectID)
 	if err != nil {
 		return "", err
 	}
-	proj := st.ProjectByName(project)
-	if proj == nil {
-		return "", fmt.Errorf("unbekanntes Projekt: %s", project)
-	}
-	name, err := core.StartDeploy(st, proj.Path)
+	name, err := core.StartDeploy(st, project.Path)
 	if err != nil {
 		return "", err
 	}
 	return name, nil
 }
 
-func (a *App) RemoveWorktree(project, reference string) error {
-	st, target, err := resolveWorktreeTarget(a.ctx, project, reference)
+func (a *App) RemoveWorktree(projectID, reference string) error {
+	st, target, err := resolveWorktreeTarget(a.ctx, projectID, reference)
 	if err != nil {
 		return err
 	}

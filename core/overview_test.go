@@ -95,20 +95,16 @@ func TestSessionNameHint(t *testing.T) {
 		[]string{"config", "user.name", "Test"},
 		[]string{"commit", "-q", "--allow-empty", "-m", "init"},
 	)
-	FlushGitMemo()
-
 	if got := SessionNameHint(dir, "projekt"); got != "projekt" {
 		t.Fatalf("auf main erwartet Fallback %q, bekam %q", "projekt", got)
 	}
 
 	gitInit(t, dir, []string{"checkout", "-q", "-b", "agent/neue-suche"})
-	FlushGitMemo()
 	if got := SessionNameHint(dir, "projekt"); got != "neue-suche" {
 		t.Fatalf("erwartet %q, bekam %q", "neue-suche", got)
 	}
 
 	gitInit(t, dir, []string{"checkout", "-q", "-b", "dev"})
-	FlushGitMemo()
 	if got := SessionNameHint(dir, "projekt"); got != "projekt" {
 		t.Fatalf("dev ist ein Integrationsbranch, erwartet Fallback, bekam %q", got)
 	}
@@ -116,7 +112,6 @@ func TestSessionNameHint(t *testing.T) {
 	if got := SessionNameHint("", "projekt"); got != "projekt" {
 		t.Fatalf("ohne Verzeichnis erwartet Fallback, bekam %q", got)
 	}
-	FlushGitMemo()
 	if got := SessionNameHint(t.TempDir(), "projekt"); got != "projekt" {
 		t.Fatalf("ohne Repo erwartet Fallback, bekam %q", got)
 	}

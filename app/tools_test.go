@@ -146,7 +146,7 @@ func TestStoredLinksAndSearchUseWorkHistory(t *testing.T) {
 	if len(search.Hits) != 1 || search.Hits[0].Project != "Search project" || search.Hits[0].Role != "user" || !strings.Contains(search.Hits[0].Full, "normalized phrase") {
 		t.Fatalf("normalized search hits = %#v", search.Hits)
 	}
-	links, err := (&App{}).SessionLinks("history-cutover-test-session")
+	links, err := (&App{}).SessionLinks("session-id")
 	if err != nil {
 		t.Fatal(err)
 	}

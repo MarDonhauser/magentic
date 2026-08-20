@@ -10,17 +10,15 @@ import (
 	"magentic/core"
 )
 
-func resolveWorktreeTarget(ctx context.Context, projectKey, reference string) (*core.State, core.RepositoryWorktreeTarget, error) {
+func resolveWorktreeTarget(ctx context.Context, projectID, reference string) (*core.State, core.RepositoryWorktreeTarget, error) {
 	st, err := core.LoadState()
 	if err != nil {
 		return nil, core.RepositoryWorktreeTarget{}, err
 	}
-	project := st.ProjectByID(core.ProjectID(strings.TrimSpace(projectKey)))
+	id := core.ProjectID(strings.TrimSpace(projectID))
+	project := st.ProjectByID(id)
 	if project == nil {
-		project = st.ProjectByName(strings.TrimSpace(projectKey))
-	}
-	if project == nil {
-		return nil, core.RepositoryWorktreeTarget{}, fmt.Errorf("unbekanntes Projekt: %s", projectKey)
+		return nil, core.RepositoryWorktreeTarget{}, fmt.Errorf("unbekannte ProjectID: %s", id)
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -32,8 +30,8 @@ func resolveWorktreeTarget(ctx context.Context, projectKey, reference string) (*
 	return st, target, nil
 }
 
-func (a *App) WorktreeDiff(project, reference string) (string, error) {
-	_, target, err := resolveWorktreeTarget(a.ctx, project, reference)
+func (a *App) WorktreeDiff(projectID, reference string) (string, error) {
+	_, target, err := resolveWorktreeTarget(a.ctx, projectID, reference)
 	if err != nil {
 		return "", err
 	}
@@ -53,13 +51,9 @@ func (a *App) WorktreeDiff(project, reference string) (string, error) {
 	return out, nil
 }
 
-func (a *App) SessionPreview(name string) string {
-	st, err := core.LoadState()
+func (a *App) SessionPreview(sessionID string) string {
+	_, session, err := loadSessionByID(sessionID)
 	if err != nil {
-		return ""
-	}
-	session := st.AgentByName(name)
-	if session == nil {
 		return ""
 	}
 	sn := session.TmuxName()
@@ -88,8 +82,8 @@ func extractURLs(text string) []string {
 	return out
 }
 
-func (a *App) SessionLinks(name string) ([]LinkInfo, error) {
-	st, err := core.LoadState()
+func (a *App) SessionLinks(sessionID string) ([]LinkInfo, error) {
+	st, session, err := loadSessionByID(sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +97,7 @@ func (a *App) SessionLinks(name string) ([]LinkInfo, error) {
 		seen[l.URL] = true
 		out = append(out, l)
 	}
-	if session := st.AgentByName(name); session != nil {
+	if session.ID != "" {
 		runtimeName = session.TmuxName()
 		history, err := core.OpenWorkHistory(core.WorkHistoryConfig{})
 		if err != nil {

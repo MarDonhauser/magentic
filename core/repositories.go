@@ -561,6 +561,7 @@ type repositoriesTopologyWorktree struct {
 	Head       string
 	Branch     string
 	Detached   bool
+	Unborn     bool
 	Bare       bool
 	Locked     bool
 	LockReason string
@@ -576,46 +577,210 @@ func (r *Repositories) loadTopology(ctx context.Context, projectPath string) ([]
 }
 
 func parseRepositoriesTopology(out string) ([]repositoriesTopologyWorktree, error) {
-	var result []repositoriesTopologyWorktree
-	var current repositoriesTopologyWorktree
-	flush := func() {
-		if current.Path == "" {
-			return
-		}
-		current.Path = filepath.Clean(current.Path)
-		result = append(result, current)
-		current = repositoriesTopologyWorktree{}
+	type topologyRecord struct {
+		worktree      repositoriesTopologyWorktree
+		startLine     int
+		seenHead      bool
+		seenCheckout  bool
+		seenLocked    bool
+		seenPrunable  bool
+		checkoutLabel string
 	}
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSuffix(line, "\r")
+
+	normalized := strings.ReplaceAll(out, "\r\n", "\n")
+	if strings.Contains(normalized, "\r") {
+		return nil, errors.New("invalid carriage return in Worktree topology")
+	}
+	if !strings.HasSuffix(normalized, "\n\n") {
+		return nil, errors.New("git returned a truncated Worktree topology record")
+	}
+
+	var result []repositoriesTopologyWorktree
+	var current *topologyRecord
+	seenPaths := map[string]bool{}
+	flush := func() error {
+		if current == nil {
+			return nil
+		}
+		record := current.worktree
+		if !current.seenCheckout {
+			return fmt.Errorf("Worktree record at line %d omitted its checkout kind", current.startLine)
+		}
+		switch current.checkoutLabel {
+		case "bare":
+			if current.seenHead {
+				return fmt.Errorf("bare Worktree record at line %d must not contain HEAD", current.startLine)
+			}
+		case "branch", "detached":
+			if !current.seenHead {
+				return fmt.Errorf("%s Worktree record at line %d omitted HEAD", current.checkoutLabel, current.startLine)
+			}
+		default:
+			return fmt.Errorf("invalid checkout kind in Worktree record at line %d", current.startLine)
+		}
+		if record.Path == "" || !filepath.IsAbs(record.Path) {
+			return fmt.Errorf("invalid Worktree path at topology line %d", current.startLine)
+		}
+		record.Path = filepath.Clean(record.Path)
+		pathKey := repositoryComparablePath(record.Path)
+		if seenPaths[pathKey] {
+			return fmt.Errorf("duplicate Worktree path at topology line %d", current.startLine)
+		}
+		seenPaths[pathKey] = true
+		if current.checkoutLabel == "branch" && allZeroOID(record.Head) {
+			record.Unborn = true
+		}
+		result = append(result, record)
+		current = nil
+		return nil
+	}
+	for lineIndex, line := range strings.Split(normalized, "\n") {
+		lineNumber := lineIndex + 1
 		if line == "" {
-			flush()
+			if err := flush(); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		switch {
 		case strings.HasPrefix(line, "worktree "):
-			flush()
-			current.Path = decodeRepositoryPath(strings.TrimPrefix(line, "worktree "))
+			if current != nil {
+				return nil, fmt.Errorf("misplaced worktree at topology line %d: missing record separator", lineNumber)
+			}
+			path, err := decodeRepositoriesTopologyValue(strings.TrimPrefix(line, "worktree "))
+			if err != nil || path == "" {
+				return nil, fmt.Errorf("invalid Worktree path at topology line %d", lineNumber)
+			}
+			current = &topologyRecord{
+				worktree: repositoriesTopologyWorktree{Path: path}, startLine: lineNumber,
+			}
 		case strings.HasPrefix(line, "HEAD "):
-			current.Head = strings.TrimSpace(strings.TrimPrefix(line, "HEAD "))
+			if current == nil || current.seenHead || current.seenCheckout || current.seenLocked || current.seenPrunable {
+				return nil, fmt.Errorf("duplicate or misplaced HEAD at topology line %d", lineNumber)
+			}
+			head := strings.TrimSpace(strings.TrimPrefix(line, "HEAD "))
+			if !validRepositoriesTopologyOID(head) {
+				return nil, fmt.Errorf("invalid HEAD at topology line %d", lineNumber)
+			}
+			current.worktree.Head = head
+			current.seenHead = true
 		case strings.HasPrefix(line, "branch "):
-			current.Branch = strings.TrimPrefix(strings.TrimSpace(strings.TrimPrefix(line, "branch ")), "refs/heads/")
+			if current == nil || !current.seenHead || current.seenCheckout || current.seenLocked || current.seenPrunable {
+				return nil, fmt.Errorf("duplicate or misplaced branch at topology line %d", lineNumber)
+			}
+			branchRef := strings.TrimSpace(strings.TrimPrefix(line, "branch "))
+			if !validRepositoriesTopologyBranchRef(branchRef) {
+				return nil, fmt.Errorf("invalid branch at topology line %d", lineNumber)
+			}
+			current.worktree.Branch = strings.TrimPrefix(branchRef, "refs/heads/")
+			current.seenCheckout = true
+			current.checkoutLabel = "branch"
 		case line == "detached":
-			current.Detached = true
+			if current == nil || !current.seenHead || current.seenCheckout || current.seenLocked || current.seenPrunable {
+				return nil, fmt.Errorf("duplicate or misplaced detached at topology line %d", lineNumber)
+			}
+			if allZeroOID(current.worktree.Head) {
+				return nil, fmt.Errorf("detached Worktree has an unborn HEAD at topology line %d", lineNumber)
+			}
+			current.worktree.Detached = true
+			current.seenCheckout = true
+			current.checkoutLabel = "detached"
 		case line == "bare":
-			current.Bare = true
+			if current == nil || current.seenHead || current.seenCheckout || current.seenLocked || current.seenPrunable {
+				return nil, fmt.Errorf("duplicate or misplaced bare at topology line %d", lineNumber)
+			}
+			current.worktree.Bare = true
+			current.seenCheckout = true
+			current.checkoutLabel = "bare"
 		case line == "locked" || strings.HasPrefix(line, "locked "):
-			current.Locked = true
-			current.LockReason = decodeRepositoryPath(strings.TrimSpace(strings.TrimPrefix(line, "locked")))
+			if current == nil || !current.seenCheckout || current.seenLocked || current.seenPrunable {
+				return nil, fmt.Errorf("duplicate or misplaced locked at topology line %d", lineNumber)
+			}
+			reason, err := decodeRepositoriesTopologyOptionalReason(line, "locked")
+			if err != nil {
+				return nil, fmt.Errorf("invalid locked reason at topology line %d", lineNumber)
+			}
+			current.worktree.Locked = true
+			current.worktree.LockReason = reason
+			current.seenLocked = true
 		case line == "prunable" || strings.HasPrefix(line, "prunable "):
-			current.Prunable = true
+			if current == nil || !current.seenCheckout || current.seenPrunable {
+				return nil, fmt.Errorf("duplicate or misplaced prunable at topology line %d", lineNumber)
+			}
+			if _, err := decodeRepositoriesTopologyOptionalReason(line, "prunable"); err != nil {
+				return nil, fmt.Errorf("invalid prunable reason at topology line %d", lineNumber)
+			}
+			current.worktree.Prunable = true
+			current.seenPrunable = true
+		default:
+			return nil, fmt.Errorf("unrecognized Worktree topology line %d", lineNumber)
 		}
 	}
-	flush()
+	if current != nil {
+		return nil, fmt.Errorf("unterminated Worktree record at topology line %d", current.startLine)
+	}
 	if len(result) == 0 {
 		return nil, errors.New("git returned no Worktree topology")
 	}
 	return result, nil
+}
+
+func decodeRepositoriesTopologyValue(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", errors.New("topology value is empty")
+	}
+	if raw[0] != '"' {
+		return raw, nil
+	}
+	if len(raw) < 2 || raw[len(raw)-1] != '"' {
+		return "", errors.New("unterminated quoted topology value")
+	}
+	decoded, err := strconv.Unquote(raw)
+	if err != nil {
+		return "", err
+	}
+	return decoded, nil
+}
+
+func decodeRepositoriesTopologyOptionalReason(line, field string) (string, error) {
+	if line == field {
+		return "", nil
+	}
+	raw := strings.TrimPrefix(line, field+" ")
+	if strings.TrimSpace(raw) == "" {
+		return "", errors.New("empty topology reason")
+	}
+	return decodeRepositoriesTopologyValue(raw)
+}
+
+func validRepositoriesTopologyOID(oid string) bool {
+	if len(oid) != 40 && len(oid) != 64 {
+		return false
+	}
+	for _, char := range oid {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func validRepositoriesTopologyBranchRef(ref string) bool {
+	const prefix = "refs/heads/"
+	branch := strings.TrimPrefix(ref, prefix)
+	if branch == ref || branch == "" || strings.TrimSpace(branch) != branch ||
+		strings.HasPrefix(branch, "/") || strings.HasSuffix(branch, "/") ||
+		strings.HasSuffix(branch, ".") || strings.Contains(branch, "//") ||
+		strings.Contains(branch, "..") || strings.ContainsAny(branch, " ~^:?*[\\") {
+		return false
+	}
+	for _, component := range strings.Split(branch, "/") {
+		if component == "" || component == "." || strings.HasPrefix(component, ".") || strings.HasSuffix(component, ".lock") {
+			return false
+		}
+	}
+	return true
 }
 
 func repositoryWorktreeFromTopology(projectPath string, raw repositoriesTopologyWorktree) RepositoryWorktree {
@@ -629,6 +794,8 @@ func repositoryWorktreeFromTopology(projectPath string, raw repositoriesTopology
 	switch {
 	case raw.Bare:
 		wt.Checkout = repositoryKnownFact(RepositoryCheckout{Kind: RepositoryBare})
+	case raw.Unborn:
+		wt.Checkout = repositoryKnownFact(RepositoryCheckout{Kind: RepositoryUnborn, Branch: raw.Branch})
 	case raw.Branch != "":
 		wt.Checkout = repositoryKnownFact(RepositoryCheckout{Kind: RepositoryBranchCheckout, Branch: raw.Branch})
 	case raw.Detached:
