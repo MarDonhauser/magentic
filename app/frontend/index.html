@@ -8,13 +8,15 @@
         (() => {
             let theme = 'dark';
             try {
+                theme = window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+            } catch { /* Dark ist der sichere Fallback, falls die Systemabfrage nicht verfügbar ist. */ }
+            try {
                 const saved = localStorage.getItem('magentic.theme');
-                theme = saved === 'light' || saved === 'dark'
-                    ? saved
-                    : (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+                if (saved === 'light' || saved === 'dark') theme = saved;
             } catch { /* Der Theme-Controller synchronisiert den Zustand nach dem Start. */ }
             document.documentElement.dataset.theme = theme;
             document.documentElement.style.colorScheme = theme;
+            document.querySelector('meta[name="theme-color"]').content = theme === 'light' ? '#f7f8fa' : '#20242b';
         })();
     </script>
     <title>magentic</title>

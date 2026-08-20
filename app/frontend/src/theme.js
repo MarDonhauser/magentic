@@ -28,9 +28,9 @@ const TERMINAL_THEMES = {
     background: '#fcfcfd', foreground: '#30343b', cursor: '#178f83', cursorAccent: '#fcfcfd',
     selectionBackground: 'rgba(23,143,131,0.18)', selectionForeground: '#1f252b',
     black: '#4f5964', red: '#bb4651', green: '#287a50', yellow: '#91631b',
-    blue: '#356fae', magenta: '#7d5aa2', cyan: '#167f82', white: '#727b86',
-    brightBlack: '#8a939d', brightRed: '#d1545f', brightGreen: '#329665', brightYellow: '#ad7825',
-    brightBlue: '#4b84c3', brightMagenta: '#956db8', brightCyan: '#229b9e', brightWhite: '#1f252b',
+    blue: '#356fae', magenta: '#7d5aa2', cyan: '#167f82', white: '#68737f',
+    brightBlack: '#66717d', brightRed: '#b83246', brightGreen: '#1f754b', brightYellow: '#875500',
+    brightBlue: '#2166ad', brightMagenta: '#764b99', brightCyan: '#087578', brightWhite: '#1f252b',
   },
 };
 

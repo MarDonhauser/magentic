@@ -427,6 +427,14 @@ func (a *App) DoneAgent(name string) error {
 	return core.DoneAgent(name)
 }
 
+func (a *App) HandoffSession(sourceName, targetName string) error {
+	st, err := core.LoadState()
+	if err != nil {
+		return err
+	}
+	return core.HandoffSession(st, sourceName, targetName)
+}
+
 func (a *App) SendSkill(name, cmd string) error {
 	if !strings.HasPrefix(cmd, "/") {
 		return fmt.Errorf("nur Slash-Kommandos erlaubt")
