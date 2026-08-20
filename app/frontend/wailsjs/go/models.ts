@@ -952,6 +952,7 @@ export namespace main {
 	export class TimelineEntry {
 	    agent: string;
 	    project: string;
+	    source: string;
 	    day: string;
 	    time: string;
 	    timeRaw: string;
@@ -965,6 +966,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.agent = source["agent"];
 	        this.project = source["project"];
+	        this.source = source["source"];
 	        this.day = source["day"];
 	        this.time = source["time"];
 	        this.timeRaw = source["timeRaw"];
@@ -973,4 +975,3 @@ export namespace main {
 	}
 
 }
-

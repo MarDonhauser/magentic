@@ -85,7 +85,18 @@ const $ = id => document.getElementById(id);
 const sessionsEl = $('sessions'), usageBoxEl = $('usage-box'), zgBoxEl = $('zg-box');
 const overviewEl = $('overview'), termsEl = $('terms'), deployBadgeEl = $('deploy-badge');
 
-const TERM_THEME = { background: '#282d35', foreground: '#dbe0e6', cursor: '#5eead4', selectionBackground: 'rgba(55,207,189,0.30)' };
+const TERM_THEME_DARK = {
+  background: '#282d35', foreground: '#dbe0e6', cursor: '#5eead4', selectionBackground: 'rgba(55,207,189,0.30)',
+};
+
+const TERM_THEME_LIGHT = {
+  background: '#fcfcfd', foreground: '#30343b', cursor: '#178f83', cursorAccent: '#fcfcfd',
+  selectionBackground: 'rgba(23,143,131,0.18)', selectionForeground: '#1f252b',
+  black: '#4f5964', red: '#bb4651', green: '#287a50', yellow: '#91631b',
+  blue: '#356fae', magenta: '#7d5aa2', cyan: '#167f82', white: '#727b86',
+  brightBlack: '#8a939d', brightRed: '#d1545f', brightGreen: '#329665', brightYellow: '#ad7825',
+  brightBlue: '#4b84c3', brightMagenta: '#956db8', brightCyan: '#229b9e', brightWhite: '#1f252b',
+};
 
 let view = 'overview';
 let activeTerm = null;
@@ -172,6 +183,13 @@ function fromB64(b64) {
   return bytes;
 }
 
+async function blobToB64(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
 const terms = new Map();
 
 function makeTerm(name) {
@@ -189,7 +207,7 @@ function makeTerm(name) {
     fastScrollSensitivity: 12,
     cursorBlink: true,
     macOptionIsMeta: true,
-    theme: TERM_THEME,
+    theme: TERM_THEME_DARK,
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
@@ -231,10 +249,7 @@ function makeTerm(name) {
         const blob = it.getAsFile();
         if (!blob) return;
         try {
-          const buf = new Uint8Array(await blob.arrayBuffer());
-          let bin = '';
-          for (const b of buf) bin += String.fromCharCode(b);
-          const path = await SaveImage(btoa(bin));
+          const path = await SaveImage(await blobToB64(blob));
           WriteTerm(name, toB64(path + ' '));
         } catch (err) {
           toast('Bild konnte nicht eingefügt werden: ' + err, true);
@@ -265,6 +280,18 @@ function makeTerm(name) {
 }
 
 const termBarEl = $('term-bar');
+const termStateEl = $('term-session-state');
+const termStateIconEl = $('term-state-icon');
+const termStateTitleEl = $('term-state-title');
+const termStateDetailEl = $('term-state-detail');
+const termComposerEl = $('term-composer');
+const termPromptEl = $('term-prompt');
+const termSendEl = $('term-send');
+const termAttachEl = $('term-attach');
+const termImageEl = $('term-image');
+const termComposeHintEl = $('term-compose-hint');
+let composerBusy = false;
+let composerHintTimer = null;
 
 function agentInfo(name) {
   for (const p of ov?.projects || []) {
@@ -322,7 +349,141 @@ function updateTermBar() {
       if (b.isConnected) { delete b.dataset.confirm; b.innerHTML = icon('x'); }
     }, 3000);
   };
+  updateTermComposer(a, v, gone);
 }
+
+function updateComposerControls(gone) {
+  const unavailable = composerBusy || gone || !activeTerm;
+  termPromptEl.disabled = unavailable;
+  termAttachEl.disabled = unavailable;
+  termSendEl.disabled = unavailable || !termPromptEl.value.trim();
+}
+
+function setComposerHint(message, reset = true) {
+  clearTimeout(composerHintTimer);
+  termComposeHintEl.textContent = message;
+  if (!reset) return;
+  composerHintTimer = setTimeout(() => {
+    termComposeHintEl.textContent = '⌘/Strg + ↵ senden · Bilder einfügen';
+  }, 2600);
+}
+
+function updateTermComposer(a, visual, gone) {
+  termStateEl.className = '';
+  let stateIcon = 'check';
+  let title = 'Bereit für deine nächste Nachricht';
+  let detail = 'Nutze den Composer oder arbeite direkt im Terminal weiter.';
+
+  if (gone) {
+    termStateEl.className = 'is-ended';
+    stateIcon = 'x';
+    title = 'Session beendet';
+    detail = 'Der Verlauf bleibt lesbar. Öffne die Session über die Seitenleiste erneut, um weiterzuarbeiten.';
+  } else if (a?.status === 'blocked') {
+    termStateEl.className = 'is-waiting';
+    stateIcon = 'warn';
+    title = 'Deine Eingabe wird benötigt';
+    detail = visual?.label && visual.label !== 'wartet' ? visual.label : 'Die Session wartet auf deine Entscheidung oder Bestätigung.';
+  } else if (a?.status === 'running' || a?.status === 'agents') {
+    termStateEl.className = 'is-running';
+    stateIcon = 'clock';
+    title = 'Session arbeitet';
+    detail = 'Neue Nachrichten werden an dieselbe laufende Session gesendet.';
+  } else if (a?.term || a?.status === 'term') {
+    stateIcon = 'terminal';
+    title = 'Terminal bereit';
+    detail = 'Befehle kannst du hier senden oder direkt im Terminal eingeben.';
+  }
+
+  termStateIconEl.innerHTML = icon(stateIcon);
+  termStateTitleEl.textContent = title;
+  termStateDetailEl.textContent = detail;
+  termPromptEl.placeholder = activeTerm ? `Nachricht an ${activeTerm} …` : 'Nachricht an die Session …';
+  updateComposerControls(gone);
+}
+
+async function sendComposerMessage() {
+  const message = termPromptEl.value.trim();
+  const sessionName = activeTerm;
+  const t = sessionName && terms.get(sessionName);
+  if (!message || !t || composerBusy) return;
+
+  composerBusy = true;
+  updateComposerControls(false);
+  termComposerEl.setAttribute('aria-busy', 'true');
+  setComposerHint('Wird gesendet …', false);
+  try {
+    const normalized = message.replace(/\r?\n/g, '\r');
+    const pasted = t.term.modes.bracketedPasteMode
+      ? `\x1b[200~${normalized}\x1b[201~`
+      : normalized;
+    await WriteTerm(sessionName, toB64(pasted + '\r'));
+    termPromptEl.value = '';
+    t.term.scrollToBottom();
+    setComposerHint(`An ${sessionName} gesendet`);
+  } catch (err) {
+    setComposerHint('Senden fehlgeschlagen', false);
+    toast('Nachricht konnte nicht gesendet werden: ' + err, true);
+  } finally {
+    composerBusy = false;
+    termComposerEl.removeAttribute('aria-busy');
+    const a = agentInfo(activeTerm);
+    updateComposerControls(!a || ['exited', 'dead'].includes(a.status));
+    termPromptEl.focus();
+  }
+}
+
+async function insertComposerImage(file) {
+  if (!file || composerBusy || !activeTerm) return;
+  termAttachEl.disabled = true;
+  setComposerHint('Bild wird angehängt …', false);
+  try {
+    const path = await SaveImage(await blobToB64(file));
+    const start = termPromptEl.selectionStart ?? termPromptEl.value.length;
+    const end = termPromptEl.selectionEnd ?? start;
+    const before = termPromptEl.value.slice(0, start);
+    const after = termPromptEl.value.slice(end);
+    const prefix = before && !/\s$/.test(before) ? ' ' : '';
+    const suffix = after && !/^\s/.test(after) ? ' ' : '';
+    termPromptEl.value = before + prefix + path + suffix + after;
+    const caret = (before + prefix + path + suffix).length;
+    termPromptEl.setSelectionRange(caret, caret);
+    setComposerHint('Bild angehängt');
+    termPromptEl.dispatchEvent(new Event('input'));
+    termPromptEl.focus();
+  } catch (err) {
+    setComposerHint('Bild konnte nicht angehängt werden', false);
+    toast('Bild konnte nicht eingefügt werden: ' + err, true);
+  } finally {
+    termAttachEl.disabled = false;
+  }
+}
+
+termComposerEl.addEventListener('submit', e => {
+  e.preventDefault();
+  sendComposerMessage();
+});
+termPromptEl.addEventListener('input', () => {
+  const a = agentInfo(activeTerm);
+  updateComposerControls(!a || ['exited', 'dead'].includes(a.status));
+});
+termPromptEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    termComposerEl.requestSubmit();
+  }
+});
+termPromptEl.addEventListener('paste', e => {
+  const imageItem = [...(e.clipboardData?.items || [])].find(item => item.kind === 'file' && item.type.startsWith('image/'));
+  if (!imageItem) return;
+  e.preventDefault();
+  insertComposerImage(imageItem.getAsFile());
+});
+termAttachEl.onclick = () => termImageEl.click();
+termImageEl.onchange = () => {
+  insertComposerImage(termImageEl.files?.[0]);
+  termImageEl.value = '';
+};
 
 function markSeen(name) {
   if (name) MarkSeen(name).catch(() => {});
@@ -341,6 +502,9 @@ async function openSession(name) {
   let t = terms.get(name);
   const fresh = !t;
   if (!t) t = makeTerm(name);
+  t.term.options.theme = TERM_THEME_LIGHT;
+  t.term.options.fontSize = 14;
+  t.term.options.lineHeight = 1.3;
   if (t.wrap.parentElement !== termsEl) termsEl.appendChild(t.wrap);
   for (const [n, o] of terms) o.wrap.classList.toggle('active', n === name);
   t.fit.fit();
@@ -647,6 +811,9 @@ async function syncHydra() {
   for (const a of agents) {
     let t = terms.get(a.name);
     if (!t) { t = makeTerm(a.name); fresh.push(a.name); }
+    t.term.options.theme = TERM_THEME_DARK;
+    t.term.options.fontSize = 13;
+    t.term.options.lineHeight = 1;
     ensureHydraHead(t);
     if (t.wrap.parentElement !== hydraGridEl) hydraGridEl.appendChild(t.wrap);
     const v = agentVisual(a, hydraProject);
@@ -1528,7 +1695,7 @@ async function refreshTimeline() {
 function renderTimeline() {
   const body = $('tl-body');
   if (!tlEntries.length) {
-    body.innerHTML = '<div class="none">keine Prompts in den letzten 7 Tagen</div>';
+    body.innerHTML = '<div class="none">keine Prompts aus unterstützten Sessions in den letzten 7 Tagen</div>';
     return;
   }
   let html = '', day = '';
@@ -1537,11 +1704,12 @@ function renderTimeline() {
       day = en.day;
       html += `<div class="tl-day">${esc(day)}</div>`;
     }
+    const source = en.source ? `<span class="tl-source">${esc(en.source)}</span>` : '';
     const who = en.agent ? `<span class="tl-agent">${esc(en.agent)}</span>` : '';
-    html += `<div class="tl-row" data-i="${i}" title="klick: Session öffnen / Prompt anzeigen">` +
+    html += `<button type="button" class="tl-row" data-i="${i}" title="Session öffnen oder Prompt anzeigen">` +
       `<span class="tl-time">${esc(en.time)}</span>` +
-      `<div class="tl-main"><div class="tl-meta">${who}<span class="tl-proj">${esc(en.project)}</span></div>` +
-      `<div class="tl-text">${esc(en.text)}</div></div></div>`;
+      `<div class="tl-main"><div class="tl-meta">${source}${who}<span class="tl-proj">${esc(en.project)}</span></div>` +
+      `<div class="tl-text">${esc(en.text)}</div></div></button>`;
   });
   const st = body.scrollTop;
   body.innerHTML = html;
@@ -1556,7 +1724,7 @@ $('tl-body').addEventListener('click', e => {
   const en = tlEntries[parseInt(row.dataset.i)];
   if (!en) return;
   if (en.agent && agentInfo(en.agent)) openSession(en.agent);
-  else showModal(`${en.project} · ${en.day} ${en.time}`, en.text, false);
+  else showModal(`${en.source ? `${en.source} · ` : ''}${en.project} · ${en.day} ${en.time}`, en.text, false);
 });
 
 const menuEl = document.createElement('div');

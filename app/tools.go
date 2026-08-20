@@ -214,6 +214,7 @@ func (a *App) SearchTranscripts(query string) ([]SearchHit, error) {
 type TimelineEntry struct {
 	Agent   string `json:"agent"`
 	Project string `json:"project"`
+	Source  string `json:"source"`
 	Day     string `json:"day"`
 	Time    string `json:"time"`
 	TimeRaw string `json:"timeRaw"`
@@ -227,36 +228,19 @@ var tlWeekdays = map[time.Weekday]string{
 
 func (a *App) Timeline() ([]TimelineEntry, error) {
 	home, _ := os.UserHomeDir()
-	base := filepath.Join(home, ".claude", "projects")
-	dirs, err := os.ReadDir(base)
-	if err != nil {
-		return nil, err
-	}
-	sidToAgent := map[string]string{}
-	if st, err := core.LoadState(); err == nil {
-		for _, ag := range st.Agents {
-			if ag.SessionID != "" {
-				sidToAgent[ag.SessionID] = ag.Name
-			}
-		}
-	}
+	st, _ := core.LoadState()
+	ctx := newTimelineContext(st)
 	cutoff := time.Now().AddDate(0, 0, -7)
 	var out []TimelineEntry
-	for _, d := range dirs {
-		if !d.IsDir() {
-			continue
-		}
-		project := decodeProjectDir(d.Name(), home)
-		files, _ := filepath.Glob(filepath.Join(base, d.Name(), "*.jsonl"))
-		for _, f := range files {
-			fi, err := os.Stat(f)
-			if err != nil || fi.ModTime().Before(cutoff) {
-				continue
-			}
-			sid := strings.TrimSuffix(filepath.Base(f), ".jsonl")
-			out = append(out, scanUserPrompts(f, project, sidToAgent[sid], cutoff)...)
-		}
+	out = append(out, collectClaudeTimeline(filepath.Join(home, ".claude", "projects"), home, ctx, cutoff)...)
+	codexHome := os.Getenv("CODEX_HOME")
+	if codexHome == "" {
+		codexHome = filepath.Join(home, ".codex")
 	}
+	out = append(out, collectCodexTimeline(codexHome, ctx, cutoff)...)
+	out = append(out, collectGeminiTimeline(filepath.Join(home, ".gemini", "tmp"), ctx, cutoff)...)
+	out = append(out, collectCopilotTimeline(filepath.Join(home, ".copilot", "session-state"), ctx, cutoff)...)
+
 	sort.Slice(out, func(i, j int) bool { return out[i].TimeRaw > out[j].TimeRaw })
 	seen := map[string]bool{}
 	kept := out[:0]
@@ -265,7 +249,7 @@ func (a *App) Timeline() ([]TimelineEntry, error) {
 		if len(prefix) > 80 {
 			prefix = prefix[:80]
 		}
-		k := e.Day + e.Time + "|" + prefix
+		k := e.Source + "|" + e.TimeRaw + "|" + prefix
 		if seen[k] {
 			continue
 		}
@@ -322,9 +306,10 @@ func scanUserPrompts(path, project, agent string, cutoff time.Time) []TimelineEn
 		entries = append(entries, TimelineEntry{
 			Agent:   agent,
 			Project: project,
+			Source:  timelineSourceClaude,
 			Day:     tlWeekdays[lt.Weekday()] + " " + lt.Format("02.01."),
 			Time:    lt.Format("15:04"),
-			TimeRaw: entry.Timestamp,
+			TimeRaw: t.UTC().Format(time.RFC3339Nano),
 			Text:    capStr(text, 500),
 		})
 	}

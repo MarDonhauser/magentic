@@ -98,6 +98,11 @@ es keins — das zeigt der Punkt an der Session selbst schon deutlich genug.
 
 ### Weitere Ansichten
 
+- **Verlauf** — führt die eigenen Prompts der letzten sieben Tage aus den
+  lokalen Sessions von **Claude Code, Codex, Gemini CLI und GitHub Copilot**
+  chronologisch zusammen. Quelle und Projekt stehen direkt am Eintrag; bekannte
+  magentic-Sessions lassen sich weiterhin per Klick öffnen. Codex berücksichtigt
+  dabei auch ein abweichendes `CODEX_HOME`.
 - **Git-Graph** (`⌘G`, oder Button auf der Projektkarte) — echter Lane-Graph
   über alle Branches eines Projekts. Zeigt, wo Worktrees abzweigen und wo sie
   wieder zusammenlaufen, mit ahead/behind zum Hauptbranch, „merged"-Badges und
