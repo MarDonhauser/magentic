@@ -1005,33 +1005,24 @@ func (m model) renameAgent(newName string) (tea.Model, tea.Cmd) {
 	if newName == "" || newName == m.renameFrom {
 		return m, nil
 	}
-	if m.state.HasAgent(newName) || TmuxHasSession(tmuxSessionName(newName)) {
-		m.setFlash(fmt.Sprintf("Name %q ist schon vergeben", newName), true)
-		return m, nil
-	}
 	session := m.state.AgentByName(m.renameFrom)
 	if session == nil {
 		m.setFlash("Session nicht gefunden", true)
 		return m, nil
 	}
-	old := session.TmuxName()
-	change := RenameRegisteredSession(session.ID, session.Name, newName)
-	if TmuxHasSession(old) {
-		newRuntime := tmuxSessionName(newName)
-		if _, err := tmux("rename-session", "-t", targetSession(old), newRuntime); err != nil {
-			m.setFlash("tmux rename: "+err.Error(), true)
-			return m, nil
-		}
-		change = RenameRegisteredSessionRuntime(session.ID, session.Name, newName, newRuntime)
-	}
-	changed, err := OpenRegistry(StatePath()).Change(context.Background(), change)
+	_, err := core.OpenSessionLifecycle(core.SessionLifecycleConfig{}).Rename(
+		context.Background(), session.ID, session.Name, newName,
+	)
 	if err != nil {
-		// The external rename may already have applied. Keep that explicit to
-		// the user; a later Registry retry is safer than silently reverting it.
-		m.setFlash("Registry nach tmux rename: "+err.Error(), true)
+		m.setFlash("Session umbenennen: "+err.Error(), true)
 		return m, nil
 	}
-	m.state = changed.Snapshot.MutableState()
+	snapshot, err := OpenRegistry(StatePath()).Snapshot(context.Background())
+	if err != nil {
+		m.setFlash("Registry nach Umbenennen laden: "+err.Error(), true)
+		return m, nil
+	}
+	m.state = snapshot.MutableState()
 	m.setFlash(fmt.Sprintf("%s → %s", m.renameFrom, newName), false)
 	return m, m.pollNow()
 }

@@ -33,6 +33,7 @@ type App struct {
 	observationMu    sync.Mutex
 	observation      core.ObservationSnapshot
 	observationAt    time.Time
+	observeSessions  func(context.Context, []core.Session) core.ObservationSnapshot
 	startTerm        func(*exec.Cmd, *pty.Winsize) (*os.File, error)
 }
 

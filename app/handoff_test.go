@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,14 +22,20 @@ func installHandoffFakeTmux(t *testing.T, paneContent, sourceCommand, targetComm
 	logPath := filepath.Join(dir, "tmux-args.log")
 	listCountPath := filepath.Join(dir, "list-count")
 	script := `#!/bin/sh
+log_call() {
+	separator=$(printf '\037')
+	record=""
+	for arg in "$@"; do
+		record="${record}${arg}${separator}"
+	done
+	printf '%s\036' "$record" >> "$MAGENTIC_HANDOFF_TMUX_LOG"
+}
+
 if [ "$1" = "capture-pane" ]; then
 	for candidate in "$@"; do
 		case "$candidate" in
 		  =*)
-			for arg in "$@"; do
-				printf '%s\037' "$arg" >> "$MAGENTIC_HANDOFF_TMUX_LOG"
-			done
-			printf '\036' >> "$MAGENTIC_HANDOFF_TMUX_LOG"
+			log_call "$@"
 			break
 			;;
 		esac
@@ -45,10 +52,7 @@ if [ "$1" = "capture-pane" ]; then
 	exit 0
 fi
 
-for arg in "$@"; do
-	printf '%s\037' "$arg" >> "$MAGENTIC_HANDOFF_TMUX_LOG"
-done
-printf '\036' >> "$MAGENTIC_HANDOFF_TMUX_LOG"
+log_call "$@"
 
 case "$1" in
   list-panes)
@@ -136,6 +140,65 @@ func defaultHandoffAgents() (core.Agent, core.Agent) {
 	return defaultHandoffSessions()
 }
 
+func newHandoffTestApp() *App {
+	return &App{observeSessions: func(_ context.Context, sessions []core.Session) core.ObservationSnapshot {
+		snapshot := core.ObservationSnapshot{
+			ObservedAt: time.Now().UTC(), Availability: core.ObservationAvailable,
+			Sessions: make([]core.SessionObservation, 0, len(sessions)),
+		}
+		unavailable := os.Getenv("MAGENTIC_HANDOFF_LIST_FAIL") != ""
+		for _, session := range sessions {
+			observed := core.SessionObservation{
+				SessionID: session.ID, Availability: core.ObservationAvailable,
+				Presence: core.SessionPresencePresent, Content: os.Getenv("MAGENTIC_HANDOFF_PANE_CONTENT"),
+				ContentKnown: true, Occupancy: core.OccupancyOccupied,
+			}
+			if unavailable {
+				observed.Availability = core.ObservationUnavailable
+				observed.Presence = core.SessionPresenceUnknown
+				observed.Content = ""
+				observed.ContentKnown = false
+				observed.Status = core.StatusUnknown
+				observed.Occupancy = core.OccupancyUnknown
+				snapshot.Sessions = append(snapshot.Sessions, observed)
+				continue
+			}
+			command := os.Getenv("MAGENTIC_HANDOFF_TARGET_COMMAND")
+			if session.TmuxName() == os.Getenv("MAGENTIC_HANDOFF_SOURCE_RUNTIME") {
+				if os.Getenv("MAGENTIC_HANDOFF_OMIT_SOURCE") != "" {
+					observed.Presence = core.SessionPresenceAbsent
+					observed.Content = ""
+					observed.ContentKnown = false
+					observed.Status = core.StatusDead
+					observed.Occupancy = core.OccupancyVacant
+					snapshot.Sessions = append(snapshot.Sessions, observed)
+					continue
+				}
+				command = os.Getenv("MAGENTIC_HANDOFF_SOURCE_COMMAND")
+			}
+			observed.Tool = core.DetectAgentTool(command, false)
+			switch observed.Tool {
+			case core.AgentToolClaude:
+				observed.Status = core.DetectClaudeStatus(true, command, core.LastLines(observed.Content, 25))
+			case core.AgentToolCodex, core.AgentToolGemini, core.AgentToolCopilot:
+				observed.Status = core.StatusUnknown
+			default:
+				if session.IsTerm() {
+					observed.Tool = core.AgentToolBash
+					observed.Status = core.StatusTerm
+				} else {
+					observed.Status = core.StatusExited
+				}
+			}
+			snapshot.Sessions = append(snapshot.Sessions, observed)
+		}
+		if unavailable {
+			snapshot.Availability = core.ObservationUnavailable
+		}
+		return snapshot
+	}}
+}
+
 func parseFakeTmuxCalls(t *testing.T, path string) [][]string {
 	t.Helper()
 	raw, err := os.ReadFile(path)
@@ -177,7 +240,7 @@ func TestAppHandoffSessionUsesStableIDsAndOnlyTrustedQuotedMetadataInOneLiteralP
 	target.Name = "renamed target"
 	handoffTestState(t, source, target)
 
-	if err := (&App{}).HandoffSession(string(source.ID), string(target.ID)); err != nil {
+	if err := newHandoffTestApp().HandoffSession(string(source.ID), string(target.ID)); err != nil {
 		t.Fatalf("HandoffSession() error = %v", err)
 	}
 	literal := handoffLiteralCall(t, logPath)
@@ -218,7 +281,7 @@ func TestAppHandoffSessionUsesStoppedCodexAgentRunRef(t *testing.T) {
 	source.AgentRuns = []core.AgentRunRef{{Vendor: core.AgentVendorCodex, ExternalID: "codex-run"}}
 	handoffTestState(t, source, target)
 
-	if err := (&App{}).HandoffSession(string(source.ID), string(target.ID)); err != nil {
+	if err := newHandoffTestApp().HandoffSession(string(source.ID), string(target.ID)); err != nil {
 		t.Fatal(err)
 	}
 	prompt := handoffLiteralCall(t, logPath)[4]
@@ -235,7 +298,7 @@ func TestAppHandoffSessionLiveCodexDoesNotLeakStaleClaudeRun(t *testing.T) {
 	source.SessionID = "stale-claude-run"
 	handoffTestState(t, source, target)
 
-	if err := (&App{}).HandoffSession(string(source.ID), string(target.ID)); err != nil {
+	if err := newHandoffTestApp().HandoffSession(string(source.ID), string(target.ID)); err != nil {
 		t.Fatal(err)
 	}
 	prompt := handoffLiteralCall(t, logPath)[4]
@@ -250,11 +313,12 @@ func TestAppHandoffSessionLiveCodexDoesNotLeakStaleClaudeRun(t *testing.T) {
 func TestAppHandoffSessionWaitsSynchronouslyForWorkingClaude(t *testing.T) {
 	logPath := installHandoffFakeTmux(t, "esc to interrupt", "claude", "claude")
 	t.Setenv("MAGENTIC_HANDOFF_PANE_CONTENT_AFTER", "Ready\nshift+tab to cycle")
+	t.Setenv("MAGENTIC_HANDOFF_CONTENT_SWITCH_AT", "1")
 	source, target := defaultHandoffSessions()
 	handoffTestState(t, source, target)
 
 	started := time.Now()
-	if err := (&App{}).HandoffSession(string(source.ID), string(target.ID)); err != nil {
+	if err := newHandoffTestApp().HandoffSession(string(source.ID), string(target.ID)); err != nil {
 		t.Fatal(err)
 	}
 	if elapsed := time.Since(started); elapsed < time.Second {
@@ -271,7 +335,7 @@ func TestAppHandoffSessionRejectsUnavailableOrUnknownTargetWithoutSending(t *tes
 		t.Setenv("MAGENTIC_HANDOFF_LIST_FAIL", "1")
 		source, target := defaultHandoffSessions()
 		handoffTestState(t, source, target)
-		err := (&App{}).HandoffSession(string(source.ID), string(target.ID))
+		err := newHandoffTestApp().HandoffSession(string(source.ID), string(target.ID))
 		if err == nil || !strings.Contains(err.Error(), "nicht vollständig verfügbar") {
 			t.Fatalf("HandoffSession() error = %v", err)
 		}
@@ -283,7 +347,7 @@ func TestAppHandoffSessionRejectsUnavailableOrUnknownTargetWithoutSending(t *tes
 		source, target := defaultHandoffSessions()
 		target.Kind = core.KindTerm
 		handoffTestState(t, source, target)
-		err := (&App{}).HandoffSession(string(source.ID), string(target.ID))
+		err := newHandoffTestApp().HandoffSession(string(source.ID), string(target.ID))
 		if err == nil || !strings.Contains(err.Error(), "für codex unbekannt") {
 			t.Fatalf("HandoffSession() error = %v", err)
 		}
@@ -296,7 +360,7 @@ func TestAppHandoffSessionRejectsBlockedAndPlainTerminalTargets(t *testing.T) {
 		logPath := installHandoffFakeTmux(t, "Do you want to continue? (y/n)", "claude", "claude")
 		source, target := defaultHandoffSessions()
 		handoffTestState(t, source, target)
-		err := (&App{}).HandoffSession(string(source.ID), string(target.ID))
+		err := newHandoffTestApp().HandoffSession(string(source.ID), string(target.ID))
 		if err == nil || !strings.Contains(err.Error(), "wartet auf eine Antwort") {
 			t.Fatalf("HandoffSession() error = %v", err)
 		}
@@ -308,7 +372,7 @@ func TestAppHandoffSessionRejectsBlockedAndPlainTerminalTargets(t *testing.T) {
 		source, target := defaultHandoffSessions()
 		target.Kind = core.KindTerm
 		handoffTestState(t, source, target)
-		err := (&App{}).HandoffSession(string(source.ID), string(target.ID))
+		err := newHandoffTestApp().HandoffSession(string(source.ID), string(target.ID))
 		if err == nil || !strings.Contains(err.Error(), "reines Terminal") {
 			t.Fatalf("HandoffSession() error = %v", err)
 		}
@@ -322,7 +386,7 @@ func TestAppHandoffSessionRejectsPlainTerminalSource(t *testing.T) {
 	source.Kind = core.KindTerm
 	source.AgentRuns = nil
 	handoffTestState(t, source, target)
-	err := (&App{}).HandoffSession(string(source.ID), string(target.ID))
+	err := newHandoffTestApp().HandoffSession(string(source.ID), string(target.ID))
 	if err == nil || !strings.Contains(err.Error(), "reines Terminal") {
 		t.Fatalf("HandoffSession() error = %v", err)
 	}
@@ -335,8 +399,8 @@ func TestAppHandoffSessionRevalidatesLiveToolBeforeLiteralAndEnter(t *testing.T)
 		switchAt    string
 		wantLiteral int
 	}{
-		{name: "before literal", switchAt: "2", wantLiteral: 0},
-		{name: "before enter", switchAt: "3", wantLiteral: 1},
+		{name: "before literal", switchAt: "1", wantLiteral: 0},
+		{name: "before enter", switchAt: "2", wantLiteral: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			logPath := installHandoffFakeTmux(t, "Ready\nshift+tab to cycle", "claude", "claude")
@@ -344,7 +408,7 @@ func TestAppHandoffSessionRevalidatesLiveToolBeforeLiteralAndEnter(t *testing.T)
 			t.Setenv("MAGENTIC_HANDOFF_TARGET_SWITCH_AT", test.switchAt)
 			source, target := defaultHandoffSessions()
 			handoffTestState(t, source, target)
-			err := (&App{}).HandoffSession(string(source.ID), string(target.ID))
+			err := newHandoffTestApp().HandoffSession(string(source.ID), string(target.ID))
 			if err == nil || !strings.Contains(err.Error(), "kein unterstütztes KI-Tool mehr") {
 				t.Fatalf("HandoffSession() error = %v", err)
 			}
@@ -364,7 +428,7 @@ func TestAppHandoffSessionDeduplicatesPendingPromptPerTarget(t *testing.T) {
 
 	firstDone := make(chan error, 1)
 	go func() {
-		firstDone <- (&App{}).HandoffSession(string(source.ID), string(target.ID))
+		firstDone <- newHandoffTestApp().HandoffSession(string(source.ID), string(target.ID))
 	}()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
@@ -377,7 +441,7 @@ func TestAppHandoffSessionDeduplicatesPendingPromptPerTarget(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if err := (&App{}).HandoffSession(string(source.ID), string(target.ID)); err != nil {
+	if err := newHandoffTestApp().HandoffSession(string(source.ID), string(target.ID)); err != nil {
 		t.Fatalf("deduplicated HandoffSession() error = %v", err)
 	}
 	if err := <-firstDone; err != nil {

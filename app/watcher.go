@@ -42,7 +42,11 @@ func (a *App) observationFor(sessions []core.Session, fresh bool) core.Observati
 			return cached
 		}
 	}
-	snapshot := core.Observe(context.Background(), sessions)
+	observe := core.Observe
+	if a.observeSessions != nil {
+		observe = a.observeSessions
+	}
+	snapshot := observe(context.Background(), sessions)
 	a.storeObservation(snapshot)
 	return snapshot
 }

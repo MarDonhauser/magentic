@@ -56,36 +56,36 @@ const (
 )
 
 type LifecycleAppliedState struct {
-	WorktreeReady       bool `json:"worktreeReady"`
-	BaselineKnown       bool `json:"baselineKnown"`
-	RuntimePresent      bool `json:"runtimePresent"`
+	WorktreeReady        bool `json:"worktreeReady"`
+	BaselineKnown        bool `json:"baselineKnown"`
+	RuntimePresent       bool `json:"runtimePresent"`
 	RuntimeRenameSettled bool `json:"runtimeRenameSettled,omitempty"`
-	RuntimeRenamed      bool `json:"runtimeRenamed,omitempty"`
-	RegistryUpdated     bool `json:"registryUpdated"`
+	RuntimeRenamed       bool `json:"runtimeRenamed,omitempty"`
+	RegistryUpdated      bool `json:"registryUpdated"`
 }
 
 // LifecycleRecord is the compact desired/applied ledger entry for one
 // Session. A newer transition replaces the older entry for the same SessionID.
 type LifecycleRecord struct {
-	TransitionID   string                `json:"transitionId"`
-	SessionID      SessionID             `json:"sessionId"`
-	TransitionKind LifecycleTransitionKind `json:"transitionKind,omitempty"`
-	Desired        SessionDesiredState   `json:"desired"`
-	Phase          LifecyclePhase        `json:"phase"`
-	Session        Session               `json:"session"`
-	RenameTo       string                `json:"renameTo,omitempty"`
-	RenameRuntimeTo string               `json:"renameRuntimeTo,omitempty"`
-	Project        Project               `json:"project,omitempty"`
-	CreateWorktree bool                  `json:"createWorktree,omitempty"`
-	StartMode      string                `json:"startMode,omitempty"`
-	InitialPrompt  string                `json:"initialPrompt,omitempty"`
-	PromptDelivery InitialPromptDelivery `json:"promptDelivery"`
-	Applied        LifecycleAppliedState `json:"applied"`
-	Attempts       int                   `json:"attempts"`
-	MayHaveApplied bool                  `json:"mayHaveApplied,omitempty"`
-	LastError      string                `json:"lastError,omitempty"`
-	CreatedAt      time.Time             `json:"createdAt"`
-	UpdatedAt      time.Time             `json:"updatedAt"`
+	TransitionID    string                  `json:"transitionId"`
+	SessionID       SessionID               `json:"sessionId"`
+	TransitionKind  LifecycleTransitionKind `json:"transitionKind,omitempty"`
+	Desired         SessionDesiredState     `json:"desired"`
+	Phase           LifecyclePhase          `json:"phase"`
+	Session         Session                 `json:"session"`
+	RenameTo        string                  `json:"renameTo,omitempty"`
+	RenameRuntimeTo string                  `json:"renameRuntimeTo,omitempty"`
+	Project         Project                 `json:"project,omitempty"`
+	CreateWorktree  bool                    `json:"createWorktree,omitempty"`
+	StartMode       string                  `json:"startMode,omitempty"`
+	InitialPrompt   string                  `json:"initialPrompt,omitempty"`
+	PromptDelivery  InitialPromptDelivery   `json:"promptDelivery"`
+	Applied         LifecycleAppliedState   `json:"applied"`
+	Attempts        int                     `json:"attempts"`
+	MayHaveApplied  bool                    `json:"mayHaveApplied,omitempty"`
+	LastError       string                  `json:"lastError,omitempty"`
+	CreatedAt       time.Time               `json:"createdAt"`
+	UpdatedAt       time.Time               `json:"updatedAt"`
 }
 
 type LifecycleSnapshot struct {
@@ -319,6 +319,9 @@ func (l *SessionLifecycle) Rename(ctx context.Context, id SessionID, name, newNa
 		RenameTo: newName, RenameRuntimeTo: SessionName(newName),
 	}
 	err = l.withSessionTransition(ctx, session.ID, session.Name, func() error {
+		if settleErr := l.settleCrossedRename(ctx, session.ID); settleErr != nil {
+			return settleErr
+		}
 		currentSnapshot, snapshotErr := l.registry.Snapshot(ctx)
 		if snapshotErr != nil {
 			return snapshotErr
@@ -334,9 +337,13 @@ func (l *SessionLifecycle) Rename(ctx context.Context, id SessionID, name, newNa
 			if readErr != nil {
 				return readErr
 			}
-			if ok && latest.TransitionKind == LifecycleTransitionRename && latest.RenameTo == newName && latest.Phase != LifecycleConverged {
-				advanced, readErr = l.advanceRename(ctx, latest)
-				return readErr
+			if ok && latest.TransitionKind == LifecycleTransitionRename && latest.RenameTo == newName {
+				if latest.Phase != LifecycleConverged {
+					advanced, readErr = l.advanceRename(ctx, latest)
+					return readErr
+				}
+				advanced = latest
+				return nil
 			}
 			advanced = convergedRenameRecord(current, newName, l.now())
 			return nil
@@ -355,8 +362,8 @@ func (l *SessionLifecycle) Rename(ctx context.Context, id SessionID, name, newNa
 			Phase: LifecyclePlanned, Session: current,
 			RenameTo: newName, RenameRuntimeTo: SessionName(newName),
 			PromptDelivery: InitialPromptNotRequested,
-			Applied: LifecycleAppliedState{WorktreeReady: true},
-			CreatedAt: now, UpdatedAt: now,
+			Applied:        LifecycleAppliedState{WorktreeReady: true},
+			CreatedAt:      now, UpdatedAt: now,
 		}
 		if _, putErr := l.putRecord(ctx, record, false); putErr != nil {
 			return putErr
@@ -375,7 +382,7 @@ func convergedRenameRecord(session Session, name string, now time.Time) Lifecycl
 	return LifecycleRecord{
 		TransitionID: NewUUID(), SessionID: session.ID,
 		TransitionKind: LifecycleTransitionRename,
-		Desired: desired, Phase: LifecycleConverged,
+		Desired:        desired, Phase: LifecycleConverged,
 		Session: session, RenameTo: name, RenameRuntimeTo: session.RuntimeName,
 		PromptDelivery: InitialPromptNotRequested,
 		Applied: LifecycleAppliedState{
@@ -401,6 +408,9 @@ func (l *SessionLifecycle) planExisting(ctx context.Context, id SessionID, name 
 	session := state.Agents[idx]
 	advanced := LifecycleRecord{SessionID: session.ID, Session: session, Desired: desired}
 	err = l.withSessionTransition(ctx, session.ID, session.Name, func() error {
+		if settleErr := l.settleCrossedRename(ctx, session.ID); settleErr != nil {
+			return settleErr
+		}
 		// The first read resolves legacy name-only callers to a stable SessionID.
 		// Re-read under the transition lock so a preceding transition's Registry
 		// change is part of this transition's starting point.
@@ -418,6 +428,24 @@ func (l *SessionLifecycle) planExisting(ctx context.Context, id SessionID, name 
 		return advanceErr
 	})
 	return SessionLifecycleResult{Session: advanced.Session, Record: advanced}, err
+}
+
+// settleCrossedRename prevents a later state transition from discarding a
+// rename that may already have crossed the runtime Seam. A collision rejected
+// before that Seam remains safely supersedable by a newer user intent.
+func (l *SessionLifecycle) settleCrossedRename(ctx context.Context, id SessionID) error {
+	latest, ok, err := l.recordForSession(ctx, id)
+	if err != nil || !ok || latest.TransitionKind != LifecycleTransitionRename || latest.Phase == LifecycleConverged {
+		return err
+	}
+	if !latest.MayHaveApplied && !latest.Applied.RuntimeRenameSettled {
+		return nil
+	}
+	_, err = l.advanceRename(ctx, latest)
+	if err != nil {
+		return fmt.Errorf("finish pending Session rename: %w", err)
+	}
+	return nil
 }
 
 // planSessionLocked persists intent before calling either external
@@ -472,7 +500,7 @@ func (l *SessionLifecycle) Reconcile(ctx context.Context) (LifecycleReconcileRes
 		}
 		if advanced.Phase == LifecycleConverged {
 			result.Converged++
-			if advanced.Desired == SessionDesiredRunning && !beforeRuntime && advanced.Applied.RuntimePresent {
+			if advanced.TransitionKind != LifecycleTransitionRename && advanced.Desired == SessionDesiredRunning && !beforeRuntime && advanced.Applied.RuntimePresent {
 				result.Restored++
 			}
 		}

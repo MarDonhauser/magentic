@@ -11,3 +11,9 @@ Transitions for the same Session are serialized across processes and reread the
 latest desired state while holding that coordination. A superseded transition
 must not apply an older runtime side effect after a newer transition has already
 converged.
+
+Changing a Session's display name is also a LifecycleTransition. The old and
+target RuntimeNames are persisted before tmux is touched, and reconciliation
+uses the observed old/target postcondition to finish the Registry change without
+blindly replaying an ambiguous rename. An offline Session keeps its opaque
+RuntimeName; display identity never reconstructs runtime identity.

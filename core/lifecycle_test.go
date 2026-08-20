@@ -121,6 +121,48 @@ func registerLifecycleProject(t *testing.T, registry *Registry) Project {
 	return project
 }
 
+func registerLifecycleSession(t *testing.T, registry *Registry, runtime *fakeLifecycleRuntime, session Session, running bool) Session {
+	t.Helper()
+	if session.ID == "" {
+		session.ID = SessionID(NewUUID())
+	}
+	if session.Dir == "" {
+		session.Dir = "/workspace/project"
+	}
+	result, err := registry.Change(context.Background(), RegisterSession(session))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := result.Snapshot.State()
+	registered := state.SessionByID(session.ID)
+	if registered == nil {
+		t.Fatalf("registered Session %q not found", session.Name)
+	}
+	if running {
+		runtime.present[registered.ID] = true
+		runtime.runtimeNames[registered.RuntimeName] = true
+	}
+	return *registered
+}
+
+type responseLostLifecycleRegistry struct {
+	registry       *Registry
+	loseRenameOnce bool
+}
+
+func (r *responseLostLifecycleRegistry) Snapshot(ctx context.Context) (RegistrySnapshot, error) {
+	return r.registry.Snapshot(ctx)
+}
+
+func (r *responseLostLifecycleRegistry) Change(ctx context.Context, change RegistryChange) (RegistryChangeResult, error) {
+	result, err := r.registry.Change(ctx, change)
+	if err == nil && r.loseRenameOnce && change.kind == registryRenameSession {
+		r.loseRenameOnce = false
+		return result, errors.New("Registry response lost")
+	}
+	return result, err
+}
+
 func TestLifecyclePersistsIntentBeforeRuntimeAndConverges(t *testing.T) {
 	lifecycle, runtime, registry, ledgerPath := lifecycleHarness(t)
 	project := registerLifecycleProject(t, registry)
@@ -381,6 +423,247 @@ func TestLifecycleSerializesParkAndResumeAcrossInstances(t *testing.T) {
 	}
 	if len(ledgerSnapshot.Records) != 1 || ledgerSnapshot.Records[0].Desired != SessionDesiredRunning || ledgerSnapshot.Records[0].Phase != LifecycleConverged {
 		t.Fatalf("ledger does not retain the newest running postcondition: %+v", ledgerSnapshot.Records)
+	}
+}
+
+func TestLifecycleRenamePersistsIntentBeforeRenamingCustomRuntime(t *testing.T) {
+	lifecycle, runtime, registry, _ := lifecycleHarness(t)
+	session := registerLifecycleSession(t, registry, runtime, Session{
+		ID: "session-rename", Name: "display-name", RuntimeName: "opaque-runtime", Dir: "/workspace/project",
+	}, true)
+	var observed LifecycleRecord
+	runtime.onRename = func(source Session, target string) {
+		snapshot, err := lifecycle.Snapshot(context.Background())
+		if err != nil {
+			t.Errorf("read rename intent: %v", err)
+			return
+		}
+		for _, record := range snapshot.Records {
+			if record.SessionID == source.ID {
+				observed = record
+			}
+		}
+	}
+
+	result, err := lifecycle.Rename(context.Background(), session.ID, session.Name, "renamed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.TransitionKind != LifecycleTransitionRename || observed.RenameTo != "renamed" ||
+		observed.Phase != LifecyclePlanned || !observed.MayHaveApplied {
+		t.Fatalf("tmux rename crossed the runtime Seam without durable intent: %+v", observed)
+	}
+	if runtime.renameCalls != 1 || runtime.lastRenameFrom != "opaque-runtime" || runtime.lastRenameTo != SessionName("renamed") {
+		t.Fatalf("runtime rename = %d calls, %q -> %q", runtime.renameCalls, runtime.lastRenameFrom, runtime.lastRenameTo)
+	}
+	if result.Record.Phase != LifecycleConverged || !result.Record.Applied.RuntimeRenameSettled || !result.Record.Applied.RuntimeRenamed {
+		t.Fatalf("rename did not converge: %+v", result.Record)
+	}
+	snapshot, err := registry.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := snapshot.State()
+	renamed := state.SessionByID(session.ID)
+	if renamed == nil || renamed.Name != "renamed" || renamed.RuntimeName != SessionName("renamed") {
+		t.Fatalf("Registry rename = %+v", renamed)
+	}
+}
+
+func TestLifecycleRenameKeepsOpaqueRuntimeWhenRuntimeIsAbsent(t *testing.T) {
+	lifecycle, runtime, registry, _ := lifecycleHarness(t)
+	laterAt := time.Date(2026, 8, 20, 8, 30, 0, 0, time.UTC)
+	session := registerLifecycleSession(t, registry, runtime, Session{
+		ID: "session-offline", Name: "offline-display", RuntimeName: "opaque-offline-runtime",
+		Dir: "/workspace/project", LaterAt: laterAt,
+	}, false)
+
+	result, err := lifecycle.Rename(context.Background(), session.ID, session.Name, "offline-renamed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.renameCalls != 0 {
+		t.Fatalf("absent runtime was renamed %d times", runtime.renameCalls)
+	}
+	if result.Record.Desired != SessionDesiredLater || !result.Record.Applied.RuntimeRenameSettled || result.Record.Applied.RuntimeRenamed {
+		t.Fatalf("offline rename state = %+v", result.Record)
+	}
+	snapshot, err := registry.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := snapshot.State()
+	renamed := state.SessionByID(session.ID)
+	if renamed == nil || renamed.Name != "offline-renamed" || renamed.RuntimeName != "opaque-offline-runtime" || !renamed.LaterAt.Equal(laterAt) {
+		t.Fatalf("offline Registry rename lost opaque runtime or LaterAt: %+v", renamed)
+	}
+	reconciled, err := lifecycle.Reconcile(context.Background())
+	if err != nil || len(reconciled.Problems) != 0 || runtime.runtimeNames["opaque-offline-runtime"] {
+		t.Fatalf("offline renamed Session was incorrectly restored: result=%+v err=%v", reconciled, err)
+	}
+}
+
+func TestLifecycleRenameRejectsDisplayAndRuntimeCollisionsBeforeSideEffect(t *testing.T) {
+	t.Run("display name", func(t *testing.T) {
+		lifecycle, runtime, registry, _ := lifecycleHarness(t)
+		source := registerLifecycleSession(t, registry, runtime, Session{
+			ID: "source", Name: "source", RuntimeName: "source-runtime",
+		}, true)
+		registerLifecycleSession(t, registry, runtime, Session{
+			ID: "target", Name: "taken", RuntimeName: "target-runtime",
+		}, false)
+
+		if _, err := lifecycle.Rename(context.Background(), source.ID, source.Name, "taken"); err == nil {
+			t.Fatal("display-name collision was accepted")
+		}
+		if runtime.renameCalls != 0 {
+			t.Fatal("display-name collision crossed the runtime Seam")
+		}
+	})
+
+	t.Run("runtime target", func(t *testing.T) {
+		lifecycle, runtime, registry, _ := lifecycleHarness(t)
+		source := registerLifecycleSession(t, registry, runtime, Session{
+			ID: "source", Name: "source", RuntimeName: "source-runtime",
+		}, true)
+		targetRuntime := SessionName("renamed")
+		registerLifecycleSession(t, registry, runtime, Session{
+			ID: "other", Name: "other", RuntimeName: targetRuntime,
+		}, false)
+
+		if _, err := lifecycle.Rename(context.Background(), source.ID, source.Name, "renamed"); err == nil {
+			t.Fatal("runtime target collision was accepted")
+		}
+		if runtime.renameCalls != 0 || !runtime.runtimeNames["source-runtime"] {
+			t.Fatal("runtime target collision crossed the runtime Seam")
+		}
+	})
+}
+
+func TestLifecycleRenameReconcilesCrashAfterExternalRenameWithoutReplay(t *testing.T) {
+	lifecycle, runtime, registry, _ := lifecycleHarness(t)
+	session := registerLifecycleSession(t, registry, runtime, Session{
+		ID: "session-crash", Name: "before", RuntimeName: "custom-before",
+	}, true)
+	runtime.renameErr = errors.New("tmux response lost")
+	runtime.renameAppliesOnError = true
+	runtime.onRename = func(Session, string) {
+		runtime.existsErr = errors.New("tmux observation unavailable")
+	}
+
+	result, err := lifecycle.Rename(context.Background(), session.ID, session.Name, "after")
+	if err == nil {
+		t.Fatal("expected unknown rename postcondition")
+	}
+	if result.Record.Phase != LifecycleFailed || !result.Record.MayHaveApplied {
+		t.Fatalf("ambiguous rename was not retained: %+v", result.Record)
+	}
+	if runtime.runtimeNames[session.RuntimeName] || !runtime.runtimeNames[SessionName("after")] {
+		t.Fatalf("fake external rename did not apply: %#v", runtime.runtimeNames)
+	}
+	snapshot, _ := registry.Snapshot(context.Background())
+	state := snapshot.State()
+	if got := state.SessionByID(session.ID); got == nil || got.Name != "before" || got.RuntimeName != "custom-before" {
+		t.Fatalf("Registry changed before a verified runtime postcondition: %+v", got)
+	}
+	if _, parkErr := lifecycle.Park(context.Background(), session.ID, session.Name); parkErr == nil {
+		t.Fatal("state transition superseded an ambiguous runtime rename")
+	}
+	pending, pendingErr := lifecycle.Snapshot(context.Background())
+	if pendingErr != nil || len(pending.Records) != 1 || pending.Records[0].TransitionKind != LifecycleTransitionRename {
+		t.Fatalf("ambiguous rename intent was discarded: %+v, %v", pending, pendingErr)
+	}
+
+	runtime.existsErr = nil
+	runtime.renameErr = nil
+	runtime.renameAppliesOnError = false
+	runtime.onRename = nil
+	reconciled, err := lifecycle.Reconcile(context.Background())
+	if err != nil || len(reconciled.Problems) != 0 {
+		t.Fatalf("reconcile = %+v, %v", reconciled, err)
+	}
+	if reconciled.Restored != 0 {
+		t.Fatalf("rename was counted as a restored Session: %+v", reconciled)
+	}
+	if runtime.renameCalls != 1 {
+		t.Fatalf("external rename replayed %d times", runtime.renameCalls)
+	}
+	snapshot, _ = registry.Snapshot(context.Background())
+	state = snapshot.State()
+	if got := state.SessionByID(session.ID); got == nil || got.Name != "after" || got.RuntimeName != SessionName("after") {
+		t.Fatalf("reconciled Registry rename = %+v", got)
+	}
+}
+
+func TestLifecycleRenameDirectRetrySettlesAmbiguousExternalRename(t *testing.T) {
+	lifecycle, runtime, registry, _ := lifecycleHarness(t)
+	session := registerLifecycleSession(t, registry, runtime, Session{
+		ID: "session-direct-retry", Name: "before", RuntimeName: "custom-before",
+	}, true)
+	runtime.renameErr = errors.New("tmux response lost")
+	runtime.renameAppliesOnError = true
+	runtime.onRename = func(Session, string) {
+		runtime.existsErr = errors.New("tmux observation unavailable")
+	}
+	if _, err := lifecycle.Rename(context.Background(), session.ID, session.Name, "after"); err == nil {
+		t.Fatal("expected unknown rename postcondition")
+	}
+
+	runtime.existsErr = nil
+	runtime.renameErr = nil
+	runtime.renameAppliesOnError = false
+	runtime.onRename = nil
+	retried, err := lifecycle.Rename(context.Background(), session.ID, session.Name, "after")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.renameCalls != 1 {
+		t.Fatalf("direct retry replayed external rename %d times", runtime.renameCalls)
+	}
+	if retried.Session.Name != "after" || retried.Session.RuntimeName != SessionName("after") || retried.Record.Phase != LifecycleConverged {
+		t.Fatalf("direct retry did not converge pending intent: %+v", retried)
+	}
+	snapshot, err := registry.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := snapshot.State()
+	if got := state.SessionByID(session.ID); got == nil || got.Name != "after" || got.RuntimeName != SessionName("after") {
+		t.Fatalf("direct retry Registry state = %+v", got)
+	}
+}
+
+func TestLifecycleRenameReconcilesLostRegistryResponse(t *testing.T) {
+	lifecycle, runtime, registry, _ := lifecycleHarness(t)
+	session := registerLifecycleSession(t, registry, runtime, Session{
+		ID: "session-registry", Name: "before", RuntimeName: "runtime-before",
+	}, true)
+	wrapper := &responseLostLifecycleRegistry{registry: registry, loseRenameOnce: true}
+	lifecycle.registry = wrapper
+
+	result, err := lifecycle.Rename(context.Background(), session.ID, session.Name, "after")
+	if err == nil {
+		t.Fatal("expected lost Registry response")
+	}
+	if result.Record.Phase != LifecycleFailed || !result.Record.Applied.RuntimeRenameSettled || !result.Record.Applied.RuntimeRenamed {
+		t.Fatalf("verified runtime postcondition was not retained: %+v", result.Record)
+	}
+	snapshot, _ := registry.Snapshot(context.Background())
+	state := snapshot.State()
+	if got := state.SessionByID(session.ID); got == nil || got.Name != "after" || got.RuntimeName != SessionName("after") {
+		t.Fatalf("Registry did not apply before response loss: %+v", got)
+	}
+
+	reconciled, err := lifecycle.Reconcile(context.Background())
+	if err != nil || len(reconciled.Problems) != 0 {
+		t.Fatalf("reconcile = %+v, %v", reconciled, err)
+	}
+	if runtime.renameCalls != 1 {
+		t.Fatalf("verified runtime rename replayed %d times", runtime.renameCalls)
+	}
+	ledger, err := lifecycle.Snapshot(context.Background())
+	if err != nil || len(ledger.Records) != 1 || ledger.Records[0].Phase != LifecycleConverged {
+		t.Fatalf("rename ledger did not converge: %+v, %v", ledger, err)
 	}
 }
 

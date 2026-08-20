@@ -60,7 +60,7 @@ func TestHandoffUsesCustomSourceAndTargetRuntimeNames(t *testing.T) {
 	source, target := customRuntimeAgents()
 	handoffTestState(t, source, target)
 
-	if err := (&App{}).HandoffSession(string(source.ID), string(target.ID)); err != nil {
+	if err := newHandoffTestApp().HandoffSession(string(source.ID), string(target.ID)); err != nil {
 		t.Fatal(err)
 	}
 	assertLiteralTmuxTarget(t, logPath, core.TargetPane(customTargetRuntime))
