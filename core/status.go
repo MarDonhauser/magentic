@@ -239,7 +239,7 @@ func CollectStatuses(agents []Agent) (map[string]AgentStatus, map[string]string,
 			}
 		}
 		contents[a.Name] = content
-		if a.IsTerm() {
+		if a.IsTerm() && DetectAgentTool(info.Command, false) == "" {
 			statuses[a.Name] = DetectTermStatus(exists)
 			continue
 		}

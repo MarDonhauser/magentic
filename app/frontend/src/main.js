@@ -819,7 +819,7 @@ function updateHydraHandoffState() {
 
     if (!handoffSourceName) {
       button.disabled = handoffBusy || !!sourceReason;
-      button.setAttribute('aria-label', `Kontext aus Session ${name} weitergeben`);
+      button.setAttribute('aria-label', sourceReason ? `${name}: ${sourceReason}` : `Kontext aus Session ${name} weitergeben`);
       button.title = sourceReason || 'Session-Magnet: auf eine andere KI-Session ziehen oder zum Auswählen aktivieren';
     } else if (isSource) {
       button.disabled = handoffBusy;
@@ -827,7 +827,7 @@ function updateHydraHandoffState() {
       button.title = 'Kontextübergabe abbrechen';
     } else {
       button.disabled = handoffBusy || !!targetReason;
-      button.setAttribute('aria-label', `Kontext aus Session ${handoffSourceName} an ${name} übergeben`);
+      button.setAttribute('aria-label', targetReason ? `${name}: ${targetReason}` : `Kontext aus Session ${handoffSourceName} an ${name} übergeben`);
       button.title = targetReason || `Kontext aus „${handoffSourceName}“ hierhin übergeben`;
     }
   }

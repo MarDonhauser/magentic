@@ -32,16 +32,27 @@ func TestDetectAgentTool(t *testing.T) {
 func TestOverviewCarriesDetectedAgentTool(t *testing.T) {
 	s := &State{
 		Projects: []Project{{Name: "NAVI", Path: "/work/navi", MainBranch: "main"}},
-		Agents:   []Agent{{Name: "term-navi", Project: "NAVI", Dir: "/work/navi", CreatedAt: time.Now()}},
+		Agents: []Agent{
+			{Name: "term-navi", Project: "NAVI", Dir: "/work/navi", Kind: KindTerm, CreatedAt: time.Now()},
+			{Name: "shell-navi", Project: "NAVI", Dir: "/work/navi", Kind: KindTerm, CreatedAt: time.Now()},
+		},
 	}
-	statuses := map[string]AgentStatus{"term-navi": StatusIdle}
-	tools := map[string]string{"term-navi": "codex"}
+	statuses := map[string]AgentStatus{"term-navi": StatusIdle, "shell-navi": StatusTerm}
+	tools := map[string]string{"term-navi": AgentToolCodex, "shell-navi": AgentToolBash}
 
 	got := BuildOverviewWithToolsFrom(s, statuses, map[string]string{}, map[string]time.Time{}, tools)
-	if len(got.Projects) != 1 || len(got.Projects[0].Worktrees) != 1 || len(got.Projects[0].Worktrees[0].Agents) != 1 {
+	if len(got.Projects) != 1 || len(got.Projects[0].Worktrees) != 1 || len(got.Projects[0].Worktrees[0].Agents) != 2 {
 		t.Fatalf("unerwartete Overview-Struktur: %#v", got.Projects)
 	}
-	if tool := got.Projects[0].Worktrees[0].Agents[0].Tool; tool != "codex" {
+	agent := got.Projects[0].Worktrees[0].Agents[0]
+	if tool := agent.Tool; tool != AgentToolCodex {
 		t.Fatalf("Overview tool = %q, want codex", tool)
+	}
+	if !agent.Term || !agent.HandoffSource || !agent.HandoffTarget {
+		t.Fatalf("Codex in Term-Session muss als Handoff-fähige KI sichtbar sein: %#v", agent)
+	}
+	shell := got.Projects[0].Worktrees[0].Agents[1]
+	if shell.Tool != AgentToolBash || shell.HandoffSource || shell.HandoffTarget {
+		t.Fatalf("reine Shell darf nicht Handoff-fähig sein: %#v", shell)
 	}
 }

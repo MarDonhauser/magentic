@@ -9,25 +9,25 @@ import (
 )
 
 type OvAgent struct {
-	Name       string `json:"name"`
-	Tool       string `json:"tool,omitempty"`
-	Status     string `json:"status"`
-	Label      string `json:"label"`
-	Detail     string `json:"detail"`
-	Age        string `json:"age"`
-	Worktree   bool   `json:"worktree"`
-	Term       bool   `json:"term"`
-	Phase      string `json:"phase,omitempty"`
-	PhaseLabel string `json:"phaseLabel,omitempty"`
-	Deployed   bool   `json:"deployed"`
-	Known      bool   `json:"known"`
-	OwnDirty   int    `json:"ownDirty"`
-	OwnCommits int    `json:"ownCommits"`
-	Branch     string `json:"branch,omitempty"`
-	Unread     bool   `json:"unread"`
-	Dock       bool   `json:"dock"`
-	HandoffSource bool `json:"handoffSource"`
-	HandoffTarget bool `json:"handoffTarget"`
+	Name          string `json:"name"`
+	Tool          string `json:"tool,omitempty"`
+	Status        string `json:"status"`
+	Label         string `json:"label"`
+	Detail        string `json:"detail"`
+	Age           string `json:"age"`
+	Worktree      bool   `json:"worktree"`
+	Term          bool   `json:"term"`
+	Phase         string `json:"phase,omitempty"`
+	PhaseLabel    string `json:"phaseLabel,omitempty"`
+	Deployed      bool   `json:"deployed"`
+	Known         bool   `json:"known"`
+	OwnDirty      int    `json:"ownDirty"`
+	OwnCommits    int    `json:"ownCommits"`
+	Branch        string `json:"branch,omitempty"`
+	Unread        bool   `json:"unread"`
+	Dock          bool   `json:"dock"`
+	HandoffSource bool   `json:"handoffSource"`
+	HandoffTarget bool   `json:"handoffTarget"`
 }
 
 type OvWorktree struct {
@@ -303,23 +303,23 @@ func toOvAgent(a Agent, statuses map[string]AgentStatus, activity map[string]tim
 	tool := overviewAgentTool(a, tools)
 	handoffCapable := strings.TrimSpace(a.SessionID) != "" || (tool != "" && tool != AgentToolBash)
 	return OvAgent{
-		Name:       a.Name,
-		Tool:       tool,
-		Status:     statusKey(st),
-		Label:      st.Label(),
-		Detail:     detail,
-		Age:        FormatAge(lastActive),
-		Worktree:   a.Worktree,
-		Term:       a.IsTerm(),
-		Phase:      phase,
-		PhaseLabel: phaseLabel,
-		Deployed:   agentAlive(st) && !a.DeployAt.IsZero() && time.Since(a.DeployAt) < 45*time.Minute,
-		Known:      sc.Known,
-		OwnDirty:   len(sc.Files),
-		OwnCommits: sc.Commits,
-		Branch:     branch,
-		Unread:     unread(st, a.SeenAt, lastActive),
-		Dock:       a.IsDock(),
+		Name:          a.Name,
+		Tool:          tool,
+		Status:        statusKey(st),
+		Label:         st.Label(),
+		Detail:        detail,
+		Age:           FormatAge(lastActive),
+		Worktree:      a.Worktree,
+		Term:          a.IsTerm(),
+		Phase:         phase,
+		PhaseLabel:    phaseLabel,
+		Deployed:      agentAlive(st) && !a.DeployAt.IsZero() && time.Since(a.DeployAt) < 45*time.Minute,
+		Known:         sc.Known,
+		OwnDirty:      len(sc.Files),
+		OwnCommits:    sc.Commits,
+		Branch:        branch,
+		Unread:        unread(st, a.SeenAt, lastActive),
+		Dock:          a.IsDock(),
 		HandoffSource: handoffCapable,
 		HandoffTarget: handoffCapable,
 	}
