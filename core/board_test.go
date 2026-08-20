@@ -69,7 +69,7 @@ func TestBoardColumn(t *testing.T) {
 }
 
 func TestMatchesItemRequiresDurableSpecificationReference(t *testing.T) {
-	reference := SpecificationRef("specification:v1:project-1:spec-kit:current:reqspec-v2-default-activation")
+	reference := makeSpecificationRef(Project{ID: "project-1"}, SpecificationSpecKit, "reqspec-v2-default-activation", false)
 	cases := []struct {
 		name      string
 		agent     agentCtx
@@ -80,7 +80,7 @@ func TestMatchesItemRequiresDurableSpecificationReference(t *testing.T) {
 		{"same slug in Branch", agentCtx{branch: "agent/reqspec-v2-default-activation"}, reference, false},
 		{"same slug in Worktree", agentCtx{dir: "/tmp/req.pilot-agents/reqspec-v2-default-activation"}, reference, false},
 		{"same slug in Session name", agentCtx{name: "reqspec-v2-default-activation"}, reference, false},
-		{"different Reference", agentCtx{specificationRef: "specification:v1:project-1:spec-kit:current:other"}, reference, false},
+		{"different Reference", agentCtx{specificationRef: makeSpecificationRef(Project{ID: "project-1"}, SpecificationSpecKit, "other", false)}, reference, false},
 		{"empty candidate", agentCtx{specificationRef: reference}, "", false},
 	}
 	for _, c := range cases {
@@ -91,23 +91,25 @@ func TestMatchesItemRequiresDurableSpecificationReference(t *testing.T) {
 }
 
 func TestLiveSpecificationSessionsRequiresKnownLiveObservation(t *testing.T) {
-	reference := SpecificationRef("specification:v1:project-1:spec-kit:current:login")
+	reference := makeSpecificationRef(Project{ID: "project-1"}, SpecificationSpecKit, "login", false)
 	sessions := []Session{
 		{ID: "live", Name: "live", SpecificationRef: reference},
+		{ID: "shell", Name: "shell", SpecificationRef: reference},
 		{ID: "dead", Name: "dead", SpecificationRef: reference},
 		{ID: "unknown", Name: "unknown", SpecificationRef: reference},
 		{ID: "legacy", Name: "login", SpecificationRef: ""},
 	}
 	snapshot := ObservationSnapshot{Sessions: []SessionObservation{
 		{SessionID: "live", Availability: ObservationAvailable, Presence: SessionPresencePresent, Status: StatusIdle},
+		{SessionID: "shell", Availability: ObservationAvailable, Presence: SessionPresencePresent, Status: StatusShell},
 		{SessionID: "dead", Availability: ObservationAvailable, Presence: SessionPresenceAbsent, Status: StatusDead},
 		{SessionID: "unknown", Availability: ObservationUnavailable, Presence: SessionPresenceUnknown, Status: StatusUnknown},
 		{SessionID: "legacy", Availability: ObservationAvailable, Presence: SessionPresencePresent, Status: StatusRunning},
 	}}
 
 	live, problems := liveSpecificationSessions(sessions, snapshot)
-	if len(live) != 1 || live[0].ID != "live" {
-		t.Fatalf("liveSpecificationSessions() = %#v, want only the known-live linked Session", live)
+	if len(live) != 2 || live[0].ID != "live" || live[1].ID != "shell" {
+		t.Fatalf("liveSpecificationSessions() = %#v, want only the known-live linked Sessions", live)
 	}
 	if len(problems) != 1 {
 		t.Fatalf("liveSpecificationSessions() problems = %#v, want one unknown-runtime diagnostic", problems)
@@ -115,7 +117,7 @@ func TestLiveSpecificationSessionsRequiresKnownLiveObservation(t *testing.T) {
 }
 
 func TestBoardPreservesUnknownSpecificationStage(t *testing.T) {
-	reference := SpecificationRef("specification:v1:project-1:spec-kit:current:login")
+	reference := makeSpecificationRef(Project{ID: "project-1"}, SpecificationSpecKit, "login", false)
 	item := boardItemFromSpecification(Specification{
 		Reference: reference,
 		ID:        "login",

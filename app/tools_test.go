@@ -102,6 +102,22 @@ func TestTimelineUsesNormalizedWorkHistoryForAllProviders(t *testing.T) {
 	if strings.Contains(strings.Join([]string{got.Entries[0].Text, got.Entries[1].Text, got.Entries[2].Text, got.Entries[3].Text}, "|"), "delegated") {
 		t.Fatalf("Timeline included delegated coding-agent work: %#v", got)
 	}
+	hits, err := (&App{}).SearchTranscripts("prompt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	providers := map[string]bool{}
+	for _, hit := range hits {
+		providers[hit.Provider] = true
+		if !hit.ProjectKnown || hit.Project != "Stable project" {
+			t.Fatalf("search attribution = %#v", hit)
+		}
+	}
+	for _, provider := range []string{"Claude Code", "Codex", "Gemini CLI", "GitHub Copilot"} {
+		if !providers[provider] {
+			t.Fatalf("SearchTranscripts omitted %s: %#v", provider, hits)
+		}
+	}
 }
 
 func TestStoredLinksAndSearchUseWorkHistory(t *testing.T) {

@@ -345,7 +345,7 @@ func TestSessionSpecificationReferenceJSONCompatibility(t *testing.T) {
 		t.Fatalf("legacy Session unexpectedly gained SpecificationRef %q", legacy.SpecificationRef)
 	}
 
-	want := SpecificationRef("specification:v1:project-1:spec-kit:current:001-login")
+	want := makeSpecificationRef(Project{ID: "project-1"}, SpecificationSpecKit, "001-login", false)
 	encoded, err := json.Marshal(Session{ID: "session-2", Name: "worker", SpecificationRef: want})
 	if err != nil {
 		t.Fatalf("encode linked Session: %v", err)
@@ -362,7 +362,7 @@ func TestSessionSpecificationReferenceJSONCompatibility(t *testing.T) {
 func TestSpecificationReferenceSurvivesLifecycleAndRegistry(t *testing.T) {
 	lifecycle, _, registry, _ := lifecycleHarness(t)
 	project := registerLifecycleProject(t, registry)
-	reference := SpecificationRef("specification:v1:project-1:spec-kit:current:001-login")
+	reference := makeSpecificationRef(Project{ID: "project-1"}, SpecificationSpecKit, "001-login", false)
 	result, err := lifecycle.Provision(context.Background(), SessionProvision{
 		Project: project, Name: "spec-worker", Directory: project.Path,
 		SpecificationRef: reference,

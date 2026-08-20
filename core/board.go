@@ -254,7 +254,7 @@ func liveSpecificationSessions(sessions []Session, snapshot ObservationSnapshot)
 			continue
 		}
 		switch observation.Status {
-		case StatusRunning, StatusAgents, StatusBlocked, StatusIdle:
+		case StatusRunning, StatusAgents, StatusShell, StatusBlocked, StatusIdle:
 			live = append(live, session)
 		case StatusUnknown:
 			problems = append(problems, "Session-Beobachtung für "+session.Name+": Status unbekannt")

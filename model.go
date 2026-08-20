@@ -117,7 +117,7 @@ type model struct {
 	renameFrom     string
 	confirmKill    bool
 	confirmRmProj  bool
-	notifyPending  map[string]AgentStatus
+	attention      *core.AttentionPlanner
 	poll           pollResult
 	flash          string
 	flashIsErr     bool
@@ -131,7 +131,10 @@ type model struct {
 
 func newModel(s *State) model {
 	reconcile(s)
-	return model{state: s, collapsed: map[string]bool{}, notifyPending: map[string]AgentStatus{}}
+	return model{
+		state: s, collapsed: map[string]bool{},
+		attention: core.NewAttentionPlanner(core.AttentionPlannerConfig{}),
+	}
 }
 
 func reconcile(s *State) {
@@ -142,34 +145,21 @@ func reconcile(s *State) {
 	}
 }
 
-func (m *model) handleStatusChanges(old map[tuiSessionKey]core.SessionObservation) {
-	if old == nil {
-		return
+func (m *model) executeAttentionPlan() {
+	if m.attention == nil {
+		m.attention = core.NewAttentionPlanner(core.AttentionPlannerConfig{})
 	}
+	labels := make(map[core.SessionID]string, len(m.state.Agents))
 	for _, session := range m.state.Agents {
-		key := sessionKey(session)
-		observed, found := m.poll.observed[key]
-		st := StatusUnknown
-		if found {
-			st = observed.Status
+		if observed, found := m.poll.observed[sessionKey(session)]; found && observed.SessionID != "" {
+			labels[observed.SessionID] = session.Name
 		}
-		pendingKey := string(key)
-		if pending, ok := m.notifyPending[pendingKey]; ok && st != StatusUnknown {
-			delete(m.notifyPending, pendingKey)
-			if st == pending {
-				notifyDesktop("magentic · "+session.Name, "Agent ist fertig — bereit für den nächsten Prompt", "Ping")
-			}
-		}
-		previous, seen := old[key]
-		if !seen || previous.Status == st {
-			continue
-		}
-		prev := previous.Status
-		if st == StatusBlocked && (prev == StatusRunning || prev == StatusAgents || prev == StatusShell || prev == StatusIdle) {
-			notifyDesktop("magentic · "+session.Name, "Agent wartet auf deine Eingabe", "Glass")
-		} else if (prev == StatusRunning || prev == StatusAgents || prev == StatusShell) && st == StatusIdle {
-			m.notifyPending[pendingKey] = StatusIdle
-		}
+	}
+	plan := m.attention.Plan(core.AttentionInput{
+		Observation: m.poll.observation, SessionLabels: labels, Now: time.Now(),
+	})
+	for _, notification := range plan.Notifications {
+		notifyDesktop(notification.Title, notification.Message, notification.Sound)
 	}
 }
 
@@ -541,13 +531,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case pollMsg:
 		m.pollBusy = false
-		oldObservations := m.poll.observed
 		var selName string
 		if a := m.selectedAgent(); a != nil {
 			selName = a.Name
 		}
 		m.poll = pollResult(msg)
-		m.handleStatusChanges(oldObservations)
+		m.executeAttentionPlan()
 		if m.poll.diskState != nil {
 			m.state = m.poll.diskState
 		}
