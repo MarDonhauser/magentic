@@ -172,6 +172,28 @@ func TestObserveNormalizesPaneFactsAndDoesNotMutateSessions(t *testing.T) {
 	}
 }
 
+func TestObserveDoesNotApplyClaudeSemanticsToOtherProviders(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	for _, tool := range []string{AgentToolCodex, AgentToolGemini, AgentToolCopilot} {
+		t.Run(tool, func(t *testing.T) {
+			runner := &recordingObservationRunner{run: func(_ context.Context, args ...string) (string, error) {
+				if args[0] == "list-panes" {
+					return "mgt-one\t%3\t" + tool + "\t1787227200\t1\n", nil
+				}
+				// These strings would look blocked or idle to the Claude parser.
+				return "Do you want to run this command?\n❯ 1. Yes\n", nil
+			}}
+			got := observeWithRunner(context.Background(), []Session{{
+				ID: "session-1", Name: "one", RuntimeName: "mgt-one", Kind: KindTerm,
+			}}, runner, testObservationConfig(now))
+			observed := got.Sessions[0]
+			if observed.Tool != tool || observed.Status != StatusUnknown || observed.Attention != AttentionUnknown || observed.Unread {
+				t.Fatalf("unsupported %s status semantics were fabricated: %#v", tool, observed)
+			}
+		})
+	}
+}
+
 func TestObservationAttentionAndUnreadPolicy(t *testing.T) {
 	seen := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
 	after := seen.Add(time.Minute)

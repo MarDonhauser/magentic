@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -37,14 +36,15 @@ type StatsDay struct {
 }
 
 type StatsProject struct {
-	Name      string         `json:"name"`
-	Tokens    int64          `json:"tokens"`
-	Cost      float64        `json:"cost"`
-	CostState StatsCostState `json:"costState"`
-	Prompts   int            `json:"prompts"`
-	Sessions  int            `json:"sessions"`
-	Commits   int            `json:"commits"`
-	Active    int            `json:"active"`
+	Name        string             `json:"name"`
+	Tokens      int64              `json:"tokens"`
+	Cost        float64            `json:"cost"`
+	CostState   StatsCostState     `json:"costState"`
+	Prompts     int                `json:"prompts"`
+	Sessions    int                `json:"sessions"`
+	Commits     int                `json:"commits"`
+	CommitState HistorySourceState `json:"commitState"`
+	Active      int                `json:"active"`
 }
 
 type StatsModel struct {
@@ -73,6 +73,25 @@ type StatsProvider struct {
 	Problems []HistoryProblem    `json:"problems,omitempty"`
 }
 
+// StatsCommitProblem explains why a repository could not contribute an exact
+// own-commit count. Project is kept separate so consumers can group or shorten
+// diagnostics without parsing presentation text.
+type StatsCommitProblem struct {
+	Project string `json:"project"`
+	Kind    string `json:"kind"`
+	Message string `json:"message"`
+}
+
+// StatsCommitCoverage describes whether Commits is an exact total or only a
+// known subtotal. A repository counts as available only when both its Git log
+// and at least one local Git identity field can be read.
+type StatsCommitCoverage struct {
+	State                 HistorySourceState   `json:"state"`
+	Repositories          int                  `json:"repositories"`
+	AvailableRepositories int                  `json:"availableRepositories"`
+	Problems              []StatsCommitProblem `json:"problems,omitempty"`
+}
+
 type StatsTotals struct {
 	Days       int            `json:"days"`
 	Prompts    int            `json:"prompts"`
@@ -92,15 +111,16 @@ type StatsTotals struct {
 }
 
 type Stats struct {
-	Range     int             `json:"range"`
-	Days      []StatsDay      `json:"days"`
-	Projects  []StatsProject  `json:"projects"`
-	Models    []StatsModel    `json:"models"`
-	Providers []StatsProvider `json:"providers"`
-	Heatmap   [][]int         `json:"heatmap"`
-	Hours     []int           `json:"hours"`
-	Totals    StatsTotals     `json:"totals"`
-	Err       string          `json:"err,omitempty"`
+	Range          int                 `json:"range"`
+	Days           []StatsDay          `json:"days"`
+	Projects       []StatsProject      `json:"projects"`
+	Models         []StatsModel        `json:"models"`
+	Providers      []StatsProvider     `json:"providers"`
+	CommitCoverage StatsCommitCoverage `json:"commitCoverage"`
+	Heatmap        [][]int             `json:"heatmap"`
+	Hours          []int               `json:"hours"`
+	Totals         StatsTotals         `json:"totals"`
+	Err            string              `json:"err,omitempty"`
 }
 
 const (
@@ -340,25 +360,78 @@ func statsWeekdayIndex(date string) int {
 
 var statsWeekdayNames = [7]string{"Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"}
 
-// gitIdentity returns the identity used by this repository. Without the
-// filter, shared repositories would attribute other people's commits here.
-func gitIdentity(dir string) (email, name string) {
-	if out, err := GitCmd(dir, "config", "user.email"); err == nil {
-		email = strings.ToLower(strings.TrimSpace(out))
-	}
-	if out, err := GitCmd(dir, "config", "user.name"); err == nil {
-		name = strings.ToLower(strings.TrimSpace(out))
-	}
-	return email, name
+const (
+	statsCommitProblemIdentity = "identity-unavailable"
+	statsCommitProblemLog      = "log-unavailable"
+)
+
+type statsCommitRepositoryResult struct {
+	Project  string
+	Days     map[string]int
+	State    HistorySourceState
+	Problems []StatsCommitProblem
 }
 
-func commitsPerDay(dir, since string) map[string]int {
-	email, name := gitIdentity(dir)
-	out, err := GitCmd(dir, "log", "--all", "--since="+since, "--format=%ct%x1f%ae%x1f%an")
-	if err != nil {
-		return nil
+// gitIdentity returns the effective identity used by this repository. At
+// least one field must be known: an absent identity is an unavailable source,
+// never permission to count every author in a shared repository.
+func gitIdentity(dir string) (email, name string, err error) {
+	return gitIdentityWithGit(dir, GitCmd)
+}
+
+func gitIdentityWithGit(dir string, run gitRunner) (email, name string, err error) {
+	emailOut, emailErr := run(dir, "config", "user.email")
+	if emailErr == nil {
+		email = strings.ToLower(strings.TrimSpace(emailOut))
 	}
-	days := map[string]int{}
+	nameOut, nameErr := run(dir, "config", "user.name")
+	if nameErr == nil {
+		name = strings.ToLower(strings.TrimSpace(nameOut))
+	}
+	if email != "" || name != "" {
+		return email, name, nil
+	}
+
+	switch {
+	case emailErr != nil && nameErr != nil:
+		return "", "", fmt.Errorf("Git-Identität nicht lesbar (user.email: %v; user.name: %v)", emailErr, nameErr)
+	case emailErr != nil:
+		return "", "", fmt.Errorf("keine Git-Identität konfiguriert (user.email nicht lesbar: %v)", emailErr)
+	case nameErr != nil:
+		return "", "", fmt.Errorf("keine Git-Identität konfiguriert (user.name nicht lesbar: %v)", nameErr)
+	default:
+		return "", "", fmt.Errorf("keine Git-Identität konfiguriert")
+	}
+}
+
+func commitsPerDay(dir, since string) statsCommitRepositoryResult {
+	return commitsPerDayWithGit("", dir, since, GitCmd)
+}
+
+func commitsPerDayWithGit(project, dir, since string, run gitRunner) statsCommitRepositoryResult {
+	result := statsCommitRepositoryResult{Project: project, State: HistorySourceUnavailable}
+	email, name, err := gitIdentityWithGit(dir, run)
+	if err != nil {
+		result.Problems = []StatsCommitProblem{{
+			Project: project,
+			Kind:    statsCommitProblemIdentity,
+			Message: err.Error(),
+		}}
+		return result
+	}
+
+	out, err := run(dir, "log", "--all", "--since="+since, "--format=%ct%x1f%ae%x1f%an")
+	if err != nil {
+		result.Problems = []StatsCommitProblem{{
+			Project: project,
+			Kind:    statsCommitProblemLog,
+			Message: "Git-Verlauf nicht lesbar: " + err.Error(),
+		}}
+		return result
+	}
+
+	result.Days = map[string]int{}
+	result.State = HistorySourceAvailable
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -370,15 +443,15 @@ func commitsPerDay(dir, since string) map[string]int {
 		}
 		seconds, err := strconv.ParseInt(fields[0], 10, 64)
 		if err == nil {
-			days[time.Unix(seconds, 0).In(time.Local).Format(statsDateLayout)]++
+			result.Days[time.Unix(seconds, 0).In(time.Local).Format(statsDateLayout)]++
 		}
 	}
-	return days
+	return result
 }
 
 func ownCommit(commitEmail, commitName, email, name string) bool {
 	if email == "" && name == "" {
-		return true
+		return false
 	}
 	if email != "" && strings.EqualFold(strings.TrimSpace(commitEmail), email) {
 		return true
@@ -396,6 +469,10 @@ func BuildStats(state *State, days int) Stats {
 }
 
 func buildStats(ctx context.Context, state *State, days int, history *WorkHistory, now time.Time, historyErr error) Stats {
+	return buildStatsWithGit(ctx, state, days, history, now, historyErr, GitCmd)
+}
+
+func buildStatsWithGit(ctx context.Context, state *State, days int, history *WorkHistory, now time.Time, historyErr error, run gitRunner) Stats {
 	if days <= 0 || days > 365 {
 		days = 30
 	}
@@ -414,8 +491,9 @@ func buildStats(ctx context.Context, state *State, days int, history *WorkHistor
 	before := last.AddDate(0, 0, 1)
 	fromKey, toKey := first.Format(statsDateLayout), last.Format(statsDateLayout)
 
-	commits := collectStatsCommits(state, fromKey)
-	commitsByDay, commitsByProject := selectStatsCommits(commits, fromKey, toKey)
+	commits := collectStatsCommitsWithGit(state, fromKey, run)
+	commitsByDay, commitsByProject := selectStatsCommits(commits.ByProject, fromKey, toKey)
+	result.CommitCoverage = commits.Coverage
 
 	var summary HistorySummary
 	var events []HistoryEvent
@@ -493,7 +571,7 @@ func buildStats(ctx context.Context, state *State, days int, history *WorkHistor
 		totals.Streak++
 		cursor = cursor.AddDate(0, 0, -1)
 	}
-	result.Projects = buildStatsProjects(acc, state, active, commitsByProject)
+	result.Projects = buildStatsProjects(acc, state, active, commitsByProject, commits.ProjectStates)
 	result.Models = buildStatsModels(summary)
 	result.Providers = buildStatsProviders(summary)
 	if statsHistoryCoverageIncomplete(summary.Meta.Coverage) {
@@ -585,28 +663,99 @@ func pagedStatsHistory(ctx context.Context, history *WorkHistory, associations H
 	}
 }
 
-func collectStatsCommits(state *State, since string) map[string]map[string]int {
-	commits := map[string]map[string]int{}
-	var mu sync.Mutex
-	var wait sync.WaitGroup
+type statsCommitCollection struct {
+	ByProject     map[string]map[string]int
+	ProjectStates map[string]HistorySourceState
+	Coverage      StatsCommitCoverage
+}
+
+func collectStatsCommits(state *State, since string) statsCommitCollection {
+	return collectStatsCommitsWithGit(state, since, GitCmd)
+}
+
+func collectStatsCommitsWithGit(state *State, since string, run gitRunner) statsCommitCollection {
+	collection := statsCommitCollection{
+		ByProject:     map[string]map[string]int{},
+		ProjectStates: map[string]HistorySourceState{},
+		Coverage:      StatsCommitCoverage{State: HistorySourceAbsent},
+	}
+	if state == nil {
+		return collection
+	}
+
+	var repositories []Project
 	for _, project := range state.Projects {
-		if project.Path == "" {
-			continue
+		if strings.TrimSpace(project.Path) != "" {
+			repositories = append(repositories, project)
 		}
-		wait.Add(1)
+	}
+	collection.Coverage.Repositories = len(repositories)
+	if len(repositories) == 0 {
+		return collection
+	}
+
+	results := make(chan statsCommitRepositoryResult, len(repositories))
+	for _, project := range repositories {
 		go func(project Project) {
-			defer wait.Done()
-			byDay := commitsPerDay(project.Path, since)
-			if len(byDay) == 0 {
-				return
-			}
-			mu.Lock()
-			commits[project.Name] = byDay
-			mu.Unlock()
+			results <- commitsPerDayWithGit(project.Name, project.Path, since, run)
 		}(project)
 	}
-	wait.Wait()
-	return commits
+
+	for range repositories {
+		result := <-results
+		if result.State == HistorySourceAvailable {
+			collection.Coverage.AvailableRepositories++
+		}
+		if previous, ok := collection.ProjectStates[result.Project]; ok {
+			collection.ProjectStates[result.Project] = mergeStatsCommitStates(previous, result.State)
+		} else {
+			collection.ProjectStates[result.Project] = result.State
+		}
+		if len(result.Days) > 0 {
+			days := collection.ByProject[result.Project]
+			if days == nil {
+				days = map[string]int{}
+				collection.ByProject[result.Project] = days
+			}
+			for date, count := range result.Days {
+				days[date] += count
+			}
+		}
+		collection.Coverage.Problems = append(collection.Coverage.Problems, result.Problems...)
+	}
+
+	switch collection.Coverage.AvailableRepositories {
+	case 0:
+		collection.Coverage.State = HistorySourceUnavailable
+	case collection.Coverage.Repositories:
+		collection.Coverage.State = HistorySourceAvailable
+	default:
+		collection.Coverage.State = HistorySourcePartial
+	}
+	sort.Slice(collection.Coverage.Problems, func(i, j int) bool {
+		left, right := collection.Coverage.Problems[i], collection.Coverage.Problems[j]
+		if left.Project != right.Project {
+			return left.Project < right.Project
+		}
+		if left.Kind != right.Kind {
+			return left.Kind < right.Kind
+		}
+		return left.Message < right.Message
+	})
+	return collection
+}
+
+func mergeStatsCommitStates(left, right HistorySourceState) HistorySourceState {
+	if left == right {
+		return left
+	}
+	if left == HistorySourceAbsent {
+		return right
+	}
+	if right == HistorySourceAbsent {
+		return left
+	}
+	return HistorySourcePartial
 }
 
 func selectStatsCommits(commits map[string]map[string]int, from, to string) (map[string]int, map[string]int) {
@@ -636,21 +785,24 @@ func activeStatsProjects(state *State) map[string]int {
 	return active
 }
 
-func buildStatsProjects(acc *statsAcc, state *State, active, commits map[string]int) []StatsProject {
+func buildStatsProjects(acc *statsAcc, state *State, active, commits map[string]int, commitStates map[string]HistorySourceState) []StatsProject {
 	seen := map[string]bool{}
 	var projects []StatsProject
 	for name, slot := range acc.projects {
 		seen[name] = true
 		projects = append(projects, StatsProject{
 			Name: name, Tokens: slot.tokens(), Cost: slot.Cost, CostState: slot.costState(), Prompts: slot.Prompts,
-			Sessions: len(slot.sessions), Commits: commits[name], Active: active[name],
+			Sessions: len(slot.sessions), Commits: commits[name], CommitState: statsProjectCommitState(commitStates, name), Active: active[name],
 		})
 	}
 	for _, project := range state.Projects {
-		if seen[project.Name] || commits[project.Name] == 0 && active[project.Name] == 0 {
+		commitState := statsProjectCommitState(commitStates, project.Name)
+		if seen[project.Name] || commits[project.Name] == 0 && active[project.Name] == 0 && commitState != HistorySourcePartial && commitState != HistorySourceUnavailable {
 			continue
 		}
-		projects = append(projects, StatsProject{Name: project.Name, Commits: commits[project.Name], Active: active[project.Name]})
+		projects = append(projects, StatsProject{
+			Name: project.Name, Commits: commits[project.Name], CommitState: commitState, Active: active[project.Name],
+		})
 	}
 	sort.Slice(projects, func(i, j int) bool {
 		if projects[i].Tokens != projects[j].Tokens {
@@ -659,6 +811,13 @@ func buildStatsProjects(acc *statsAcc, state *State, active, commits map[string]
 		return projects[i].Name < projects[j].Name
 	})
 	return projects
+}
+
+func statsProjectCommitState(states map[string]HistorySourceState, project string) HistorySourceState {
+	if state := states[project]; state != "" {
+		return state
+	}
+	return HistorySourceAbsent
 }
 
 func buildStatsModels(summary HistorySummary) []StatsModel {

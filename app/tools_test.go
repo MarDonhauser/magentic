@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -28,12 +29,12 @@ func TestExtractURLs(t *testing.T) {
 	}
 }
 
-func TestKnownWorktreePathDeniesUnknownRepositoryFacts(t *testing.T) {
+func TestResolveWorktreeTargetDeniesUnknownRepositoryFacts(t *testing.T) {
 	_, _, _, statePath := configureHistoryAppTest(t)
 	unknownPath := filepath.Join(t.TempDir(), "missing-repository")
 	writeAppState(t, statePath, core.State{Projects: []core.Project{{ID: core.ProjectID("unknown"), Name: "Unknown", Path: unknownPath}}})
-	if knownWorktreePath(unknownPath) {
-		t.Fatal("unknown repository topology authorized a Worktree path")
+	if _, _, err := resolveWorktreeTarget(context.Background(), "unknown", "wt_untrusted"); err == nil {
+		t.Fatal("unknown repository topology authorized a Worktree reference")
 	}
 }
 

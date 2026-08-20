@@ -1,6 +1,6 @@
 body { --dk-current-h: var(--dk-h, 280px); }
 body.dk-no-tabs { --dk-current-h: 104px; }
-body.dk-open #layout { height: calc(100% - 28px - var(--dk-current-h)); }
+body.dk-open #layout { height: calc(100% - var(--titlebar-h) - var(--dk-current-h)); }
 
 .dk-dock {
   position: fixed;

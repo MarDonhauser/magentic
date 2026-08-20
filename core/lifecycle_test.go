@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 type fakeLifecycleRuntime struct {
@@ -205,6 +207,200 @@ func TestLifecycleParkRecordsDesiredStateBeforeStopping(t *testing.T) {
 	if snapshot.State().Agents[0].LaterAt.IsZero() {
 		t.Fatal("Registry was not updated with later intent")
 	}
+}
+
+func TestLifecycleResumeReopensRegistryAndRemainsRunningAfterReconcile(t *testing.T) {
+	lifecycle, runtime, registry, _ := lifecycleHarness(t)
+	project := registerLifecycleProject(t, registry)
+	created, err := lifecycle.Provision(context.Background(), SessionProvision{
+		Project: project, Name: "iris", Directory: project.Path,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lifecycle.Park(context.Background(), created.Session.ID, created.Session.Name); err != nil {
+		t.Fatal(err)
+	}
+	parkedSnapshot, err := registry.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parkedSnapshot.State().Agents[0].LaterAt.IsZero() {
+		t.Fatal("Park did not persist the later intent")
+	}
+
+	resumed, err := lifecycle.Resume(context.Background(), created.Session.ID, created.Session.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Record.Phase != LifecycleConverged || !resumed.Record.Applied.RuntimePresent {
+		t.Fatalf("Resume did not converge: %+v", resumed.Record)
+	}
+	if !resumed.Record.Session.LaterAt.IsZero() {
+		t.Fatalf("resumed ledger Session still carries LaterAt: %+v", resumed.Record.Session)
+	}
+	resumedSnapshot, err := registry.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resumedSnapshot.State().Agents[0].LaterAt.IsZero() {
+		t.Fatal("Resume did not apply the semantic Registry reopen")
+	}
+	if !runtime.present[created.Session.ID] {
+		t.Fatal("Resume did not restore the runtime")
+	}
+
+	runtime.onStop = func(Session) { t.Error("Reconcile stopped a reopened Session") }
+	reconciled, err := lifecycle.Reconcile(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reconciled.Problems) != 0 || !runtime.present[created.Session.ID] {
+		t.Fatalf("reopened Session did not remain running: %+v", reconciled)
+	}
+}
+
+func TestLifecycleSerializesParkAndResumeAcrossInstances(t *testing.T) {
+	lifecycle, runtime, registry, ledgerPath := lifecycleHarness(t)
+	project := registerLifecycleProject(t, registry)
+	created, err := lifecycle.Provision(context.Background(), SessionProvision{
+		Project: project, Name: "rhea", Directory: project.Path,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumeLifecycle := newSessionLifecycle(
+		registry,
+		runtime,
+		fakeLifecycleRepositories{worktreePath: filepath.Join(filepath.Dir(ledgerPath), "project-agents", "rhea")},
+		ledgerPath,
+	)
+
+	stopEntered := make(chan struct{})
+	releaseStop := make(chan struct{})
+	runtime.onStop = func(Session) {
+		close(stopEntered)
+		<-releaseStop
+	}
+	type transitionOutcome struct {
+		result SessionLifecycleResult
+		err    error
+	}
+	parkDone := make(chan transitionOutcome, 1)
+	go func() {
+		result, parkErr := lifecycle.Park(context.Background(), created.Session.ID, created.Session.Name)
+		parkDone <- transitionOutcome{result: result, err: parkErr}
+	}()
+	<-stopEntered
+
+	resumeDone := make(chan transitionOutcome, 1)
+	go func() {
+		result, resumeErr := resumeLifecycle.Resume(context.Background(), created.Session.ID, created.Session.Name)
+		resumeDone <- transitionOutcome{result: result, err: resumeErr}
+	}()
+
+	// Park still owns the per-Session transition lock while Stop is paused at
+	// the runtime Seam. Resume must not be able to persist or converge a newer
+	// record until that side effect and its Registry update are complete.
+	returnedBeforeParkFinished := false
+	select {
+	case <-resumeDone:
+		returnedBeforeParkFinished = true
+	case <-time.After(250 * time.Millisecond):
+	}
+	close(releaseStop)
+	parked := <-parkDone
+	if parked.err != nil {
+		t.Fatal(parked.err)
+	}
+	var resumed transitionOutcome
+	if returnedBeforeParkFinished {
+		// Consume a deterministic value for the assertions and ensure the Park
+		// goroutine is released before failing the test.
+		resumed = transitionOutcome{}
+	} else {
+		resumed = <-resumeDone
+	}
+	if returnedBeforeParkFinished {
+		t.Fatal("Resume crossed the runtime Seam while Park still owned the transition")
+	}
+	if resumed.err != nil {
+		t.Fatal(resumed.err)
+	}
+	if resumed.result.Record.Desired != SessionDesiredRunning || resumed.result.Record.Phase != LifecycleConverged {
+		t.Fatalf("newest transition did not converge: %+v", resumed.result.Record)
+	}
+	runtime.onStop = nil
+	if !runtime.present[created.Session.ID] {
+		t.Fatal("superseded Park left the resumed runtime absent")
+	}
+	registrySnapshot, err := registry.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !registrySnapshot.State().Agents[0].LaterAt.IsZero() {
+		t.Fatal("newest Resume intent did not reopen the Registry Session")
+	}
+	ledgerSnapshot, err := lifecycle.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ledgerSnapshot.Records) != 1 || ledgerSnapshot.Records[0].Desired != SessionDesiredRunning || ledgerSnapshot.Records[0].Phase != LifecycleConverged {
+		t.Fatalf("ledger does not retain the newest running postcondition: %+v", ledgerSnapshot.Records)
+	}
+}
+
+func TestTmuxLifecycleRuntimeDistinguishesAbsenceFromUnavailable(t *testing.T) {
+	tests := []struct {
+		name       string
+		output     string
+		wantAbsent bool
+	}{
+		{name: "missing target", output: "can't find session: mgt-iris\n", wantAbsent: true},
+		{name: "no server", output: "no server running on /tmp/tmux-501/default\n", wantAbsent: true},
+		{name: "permission denied", output: "error connecting to /tmp/tmux-501/default (Permission denied)\n"},
+		{name: "server failure", output: "server exited unexpectedly\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := tmuxLifecycleRuntime{command: failingLifecycleCommand(test.output)}
+			exists, err := runtime.Exists(context.Background(), Session{Name: "iris", RuntimeName: "mgt-iris"})
+			if exists {
+				t.Fatal("failed has-session command cannot prove presence")
+			}
+			if test.wantAbsent && err != nil {
+				t.Fatalf("known target absence returned an error: %v", err)
+			}
+			if !test.wantAbsent {
+				if err == nil {
+					t.Fatal("tmux failure was fabricated as target absence")
+				}
+				var exitErr *exec.ExitError
+				if !errors.As(err, &exitErr) {
+					t.Fatalf("tmux execution failure was not preserved: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func failingLifecycleCommand(output string) lifecycleCommandRunner {
+	return func(ctx context.Context, _ string, _ ...string) ([]byte, error) {
+		command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestLifecycleTmuxExitHelper$")
+		command.Env = append(os.Environ(),
+			"MAGENTIC_LIFECYCLE_TMUX_HELPER=1",
+			"MAGENTIC_LIFECYCLE_TMUX_OUTPUT="+output,
+		)
+		return command.CombinedOutput()
+	}
+}
+
+func TestLifecycleTmuxExitHelper(t *testing.T) {
+	if os.Getenv("MAGENTIC_LIFECYCLE_TMUX_HELPER") != "1" {
+		return
+	}
+	_, _ = os.Stderr.WriteString(os.Getenv("MAGENTIC_LIFECYCLE_TMUX_OUTPUT"))
+	os.Exit(1)
 }
 
 func TestLifecycleManagedWorktreeIsOwnedByProvisioning(t *testing.T) {

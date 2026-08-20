@@ -49,11 +49,6 @@ function laneColor(lane, mainLane) {
   return PALETTE[i % PALETTE.length];
 }
 
-function baseName(path) {
-  const parts = String(path ?? '').split('/').filter(Boolean);
-  return parts.length ? parts[parts.length - 1] : '';
-}
-
 function mainLaneOf(branches, commits, mainName) {
   const b = branches.find(x => x.isMain) || branches.find(x => x.name === mainName);
   if (b) return clampLane(b.lane);
@@ -82,7 +77,7 @@ function agentChip(name, opts) {
 
 function refRank(r) {
   if (r.kind === 'head') return 0;
-  if (r.kind === 'branch') return r.worktree ? 1 : 2;
+  if (r.kind === 'branch') return r.worktreeRef ? 1 : 2;
   if (r.kind === 'tag') return 3;
   return 4;
 }
@@ -93,12 +88,14 @@ function refChip(r, mainName, color, byName) {
   if (r.kind === 'tag') return `<span class="gg-chip gg-tag" title="Tag ${name}">${ico('tag')}<span class="gg-chip-label">${name}</span></span>`;
   if (r.kind === 'remote') return `<span class="gg-chip gg-remote" title="Remote-Ref ${name}">${ico('cloud')}<span class="gg-chip-label">${name}</span></span>`;
   const isMain = r.name === mainName;
-  const worktree = r.worktree || (byName.get(r.name) || {}).worktree || '';
+  const branch = byName.get(r.name) || {};
+  const worktree = r.worktreeRef || branch.worktreeRef || '';
+  const location = r.worktreeLocation || branch.worktreeLocation || r.name;
   const cls = ['gg-chip', 'gg-branch'];
   if (isMain) cls.push('is-main');
   if (worktree) cls.push('is-wt');
   const title = worktree
-    ? `${r.name} — ausgecheckt in ${worktree}`
+    ? `${r.name} — ausgecheckt in ${location}`
     : (isMain ? `Hauptbranch ${r.name}` : `Branch ${r.name}`);
   const lead = worktree ? ico('folder') : ico('branch');
   return `<span class="${cls.join(' ')}" style="--gg-c:${color}" data-branch="${name}" title="${esc(title)}">${lead}<span class="gg-chip-label">${name}</span></span>`;
@@ -124,8 +121,8 @@ function legendHtml(branches, mainLane, mainName, opts) {
           ? `<span class="gg-ab">${ahead ? `<span class="gg-ahead" title="${ahead} Commits vor ${esc(mainName)}">↑${ahead}</span>` : ''}${behind ? `<span class="gg-behind" title="${behind} Commits hinter ${esc(mainName)}">↓${behind}</span>` : ''}${!ahead && !behind ? '<span title="deckungsgleich mit ' + esc(mainName) + '">=</span>' : ''}</span>`
           : `<span class="gg-ab gg-ab-unknown" title="Abstand zu ${esc(mainName)} konnte nicht ermittelt werden">?</span>`);
     const merged = b.merged && !isMain ? `<span class="gg-badge gg-merged">merged</span>` : '';
-    const wt = b.worktree
-      ? `<span class="gg-wt-hint" title="Worktree ${esc(b.worktree)}">${ico('folder')}${esc(baseName(b.worktree))}</span>`
+    const wt = b.worktreeRef
+      ? `<span class="gg-wt-hint" title="Worktree ${esc(b.worktreeLocation || b.name)}">${ico('folder')}${esc(b.worktreeLocation || b.name)}</span>`
       : '';
     const agents = (b.agents || []).map(a => agentChip(a, opts)).join('');
     return `<div class="gg-leg-row${isMain ? ' is-main' : ''}" data-branch="${esc(b.name)}" data-lane="${lane}">`

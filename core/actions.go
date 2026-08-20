@@ -162,8 +162,7 @@ func inspectLivePromptTarget(session, expectedTool string) (string, string, erro
 		return "", "", fmt.Errorf("KI-Tool in Ziel-Session %q wechselte von %s zu %s", strings.TrimPrefix(session, SessionPrefix), expectedTool, tool)
 	}
 	content := TmuxCapturePane(session, 0)
-	status := DetectClaudeStatus(true, info.Command, LastLines(content, 25))
-	if err := validateHandoffTargetStatus(strings.TrimPrefix(session, SessionPrefix), status); err != nil {
+	if err := validatePromptTargetRuntime(strings.TrimPrefix(session, SessionPrefix), tool, info.Command, content); err != nil {
 		return "", "", err
 	}
 	return tool, content, nil
@@ -325,7 +324,11 @@ func SendSkill(name, cmd string) error {
 		}
 	}
 	infos := TmuxPaneInfos()
-	status := DetectClaudeStatus(true, infos[sn].Command, LastLines(TmuxCapturePane(sn, 0), 25))
+	info, exists := infos[sn]
+	if !exists || DetectAgentTool(info.Command, false) != AgentToolClaude {
+		return fmt.Errorf("in Session %q läuft kein unterstütztes Claude-Tool", name)
+	}
+	status := statusForAgentRuntime(true, AgentToolClaude, info.Command, TmuxCapturePane(sn, 0))
 	switch status {
 	case StatusBlocked:
 		return fmt.Errorf("%s wartet auf eine Antwort — erst den offenen Dialog beantworten", name)
@@ -476,6 +479,16 @@ func validateHandoffTargetStatus(name string, status AgentStatus) error {
 	}
 }
 
+func validatePromptTargetRuntime(name, tool, command, content string) error {
+	status := statusForAgentRuntime(true, tool, command, content)
+	if status == StatusUnknown && tool != AgentToolClaude {
+		// The non-Claude prompt Adapters support literal queued input, but do not
+		// claim UI-phase semantics that Observation cannot establish.
+		return nil
+	}
+	return validateHandoffTargetStatus(name, status)
+}
+
 // HandoffSession asks the target agent to locate and summarize the source
 // transcript. It never copies transcript contents into the target itself.
 func HandoffSession(st *State, sourceName, targetName string) error {
@@ -503,8 +516,7 @@ func HandoffSession(st *State, sourceName, targetName string) error {
 		return fmt.Errorf("in Ziel-Session %q wurde kein laufendes unterstütztes KI-Tool erkannt", target.Name)
 	}
 	targetContent := LastLines(TmuxCapturePane(targetSession, 0), 25)
-	targetStatus := DetectClaudeStatus(true, targetInfo.Command, targetContent)
-	if err := validateHandoffTargetStatus(target.Name, targetStatus); err != nil {
+	if err := validatePromptTargetRuntime(target.Name, targetTool, targetInfo.Command, targetContent); err != nil {
 		return err
 	}
 
@@ -657,22 +669,8 @@ func RemoveWorktree(st *State, proj *Project, path string) error {
 		}
 	}
 	observations := Observe(ctx, onPath)
-	if observations.Availability == ObservationUnavailable && len(onPath) > 0 {
-		return fmt.Errorf("Session-Runtimes sind derzeit nicht verlässlich beobachtbar")
-	}
-	byID := make(map[SessionID]SessionObservation, len(observations.Sessions))
-	for _, observation := range observations.Sessions {
-		byID[observation.SessionID] = observation
-	}
-	for _, a := range onPath {
-		observation := byID[a.ID]
-		if observation.Presence == SessionPresenceUnknown || observation.Availability == ObservationUnavailable {
-			return fmt.Errorf("Session %q kann derzeit nicht verlässlich geprüft werden", a.Name)
-		}
-		switch observation.Status {
-		case StatusRunning, StatusAgents, StatusShell, StatusBlocked:
-			return fmt.Errorf("Agent %q arbeitet gerade in diesem Worktree", a.Name)
-		}
+	if err := validateWorktreeRemovalObservations(onPath, observations); err != nil {
+		return err
 	}
 	lifecycle := lifecycleForState(st)
 	for _, a := range onPath {
@@ -684,6 +682,34 @@ func RemoveWorktree(st *State, proj *Project, path string) error {
 		return err
 	}
 	return refreshState(st)
+}
+
+func validateWorktreeRemovalObservations(sessions []Agent, snapshot ObservationSnapshot) error {
+	byID := make(map[SessionID]SessionObservation, len(snapshot.Sessions))
+	for _, observation := range snapshot.Sessions {
+		byID[observation.SessionID] = observation
+	}
+	for _, session := range sessions {
+		observation, found := byID[session.ID]
+		if !found || observation.Availability != ObservationAvailable {
+			return fmt.Errorf("Session %q kann derzeit nicht verlässlich geprüft werden", session.Name)
+		}
+		switch observation.Presence {
+		case SessionPresenceAbsent:
+			continue
+		case SessionPresencePresent:
+			if observation.Status == StatusIdle || observation.Status == StatusExited {
+				continue
+			}
+			if observation.Status == StatusUnknown {
+				return fmt.Errorf("Status von Session %q ist unbekannt", session.Name)
+			}
+			return fmt.Errorf("Agent %q arbeitet gerade in diesem Worktree", session.Name)
+		default:
+			return fmt.Errorf("Session %q kann derzeit nicht verlässlich geprüft werden", session.Name)
+		}
+	}
+	return nil
 }
 
 func CreateAgentSession(st *State, projName string, worktree bool, name string) (string, error) {

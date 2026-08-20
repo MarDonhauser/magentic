@@ -69,6 +69,7 @@
   --radius-control: 8px;
   --radius-panel: 12px;
   --radius-composer: 16px;
+  --titlebar-h: 40px;
   --duration-fast: 150ms;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -170,33 +171,34 @@ html, body {
 #titlebar {
   position: relative;
   display: flex;
-  align-items: center;
-  height: 28px;
-  background: linear-gradient(
-    to right,
-    var(--panel) 0,
-    var(--panel) 249px,
-    var(--border) 249px,
-    var(--border) 250px,
-    var(--page) 250px
-  );
-  box-shadow: inset 0 -1px 0 var(--border);
+  align-items: stretch;
+  height: var(--titlebar-h);
+  border-bottom: 1px solid var(--border);
+  background: var(--page);
   --wails-draggable: drag;
 }
 
+.titlebar-rail {
+  width: 250px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+}
+
 #theme-toggle {
-  position: absolute;
-  top: 2px;
-  right: 8px;
-  width: 28px;
-  height: 24px;
+  position: relative;
+  width: 40px;
+  height: 32px;
+  margin: 4px 8px 4px auto;
   display: grid;
   place-items: center;
   padding: 0;
-  border: 0;
-  border-radius: 6px;
+  border: 1px solid transparent;
+  border-radius: 7px;
   background: transparent;
-  color: var(--muted);
+  color: var(--ink-2);
   cursor: pointer;
   --wails-draggable: no-drag;
 }
@@ -204,26 +206,26 @@ html, body {
 #theme-toggle::after {
   content: "";
   position: absolute;
-  inset: -2px -6px;
+  inset: -5px -1px;
 }
 
 #theme-toggle:hover {
   background: var(--raise);
   color: var(--ink);
-  box-shadow: 0 0 0 1px var(--border);
+  border-color: var(--border);
 }
 #theme-toggle:active { background: var(--raise-2); }
 .theme-icon {
   grid-area: 1 / 1;
-  width: 14px;
-  height: 14px;
-  opacity: 0;
+  display: none;
+  width: 16px;
+  height: 16px;
   pointer-events: none;
 }
-:root[data-theme="light"] .theme-icon-sun { color: var(--warning); opacity: 1; }
-:root[data-theme="dark"] .theme-icon-moon { color: var(--ink-2); opacity: 1; }
+:root[data-theme="light"] .theme-icon-moon { display: block; }
+:root[data-theme="dark"] .theme-icon-sun { display: block; color: var(--warning); }
 #titlebar button:focus-visible { outline-offset: -2px; }
-#layout { display: flex; height: calc(100% - 28px); }
+#layout { display: flex; height: calc(100% - var(--titlebar-h)); }
 
 #sidebar {
   width: 250px;
@@ -236,24 +238,22 @@ html, body {
 }
 
 #sidebar-head {
-  position: absolute;
-  top: 0;
-  left: 76px;
   width: auto;
-  height: 28px;
+  height: 32px;
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 0 8px;
+  gap: 6px;
+  margin-left: 76px;
+  padding: 0 10px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 7px;
   background: transparent;
   font: inherit;
   text-align: left;
   font-weight: 650;
-  font-size: 12.5px;
+  font-size: 13px;
   letter-spacing: -0.01em;
-  color: var(--ink-2);
+  color: var(--ink);
   cursor: pointer;
   --wails-draggable: no-drag;
 }

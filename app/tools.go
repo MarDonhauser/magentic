@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -11,56 +10,42 @@ import (
 	"magentic/core"
 )
 
-func knownWorktreePath(path string) bool {
+func resolveWorktreeTarget(ctx context.Context, projectKey, reference string) (*core.State, core.RepositoryWorktreeTarget, error) {
 	st, err := core.LoadState()
 	if err != nil {
-		return false
+		return nil, core.RepositoryWorktreeTarget{}, err
 	}
-	survey, err := core.NewRepositories().Survey(context.Background(), st.Projects)
+	project := st.ProjectByID(core.ProjectID(strings.TrimSpace(projectKey)))
+	if project == nil {
+		project = st.ProjectByName(strings.TrimSpace(projectKey))
+	}
+	if project == nil {
+		return nil, core.RepositoryWorktreeTarget{}, fmt.Errorf("unbekanntes Projekt: %s", projectKey)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	target, err := core.NewRepositories().ResolveWorktree(ctx, *project, core.WorktreeRef(reference))
 	if err != nil {
-		return false
+		return nil, core.RepositoryWorktreeTarget{}, fmt.Errorf("Worktree konnte nicht frisch aufgelöst werden: %w", err)
 	}
-	target := filepath.Clean(path)
-	for _, project := range survey.Projects {
-		if project.Presence != core.RepositoryKnown || !project.Worktrees.Known() {
-			continue
-		}
-		for _, worktree := range project.Worktrees.Value {
-			if filepath.Clean(worktree.Path) == target {
-				return true
-			}
-		}
-	}
-	return false
+	return st, target, nil
 }
 
-func (a *App) WorktreeDiff(path string) (string, error) {
-	if !knownWorktreePath(path) {
-		return "", fmt.Errorf("Pfad gehört zu keinem Projekt")
+func (a *App) WorktreeDiff(project, reference string) (string, error) {
+	_, target, err := resolveWorktreeTarget(a.ctx, project, reference)
+	if err != nil {
+		return "", err
 	}
-	var b strings.Builder
-	if status, err := core.GitCmd(path, "status", "--short"); err == nil && strings.TrimSpace(status) != "" {
-		b.WriteString("── Status ──\n")
-		b.WriteString(status)
-		b.WriteString("\n")
-	}
-	if diff, err := core.GitCmd(path, "diff", "HEAD"); err == nil && strings.TrimSpace(diff) != "" {
-		b.WriteString("── Diff (gegen HEAD) ──\n")
-		b.WriteString(diff)
-	}
-	if untracked, err := core.GitCmd(path, "ls-files", "--others", "--exclude-standard"); err == nil {
-		files := strings.Fields(strings.TrimSpace(untracked))
-		if len(files) > 0 {
-			b.WriteString("\n── Neue Dateien (untracked) ──\n")
-			for _, f := range files {
-				b.WriteString("+ " + f + "\n")
-			}
+	fact := core.NewRepositories().WorktreeDiff(a.ctx, target.Worktree)
+	if !fact.Known() {
+		message := "Worktree-Diff ist derzeit nicht verfügbar"
+		if fact.Problem != nil && strings.TrimSpace(fact.Problem.Message) != "" {
+			message = fact.Problem.Message
 		}
+		return "", fmt.Errorf("%s", message)
 	}
-	out := b.String()
-	if out == "" {
-		out = "Keine Änderungen."
-	}
+	out := fact.Value
 	const cap = 400_000
 	if len(out) > cap {
 		out = out[:cap] + "\n… (gekürzt)"

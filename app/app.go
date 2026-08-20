@@ -427,12 +427,18 @@ func (a *App) SendSkill(name, cmd string) error {
 	return nil
 }
 
-func (a *App) Cleanup(path, mainBranch string) (string, error) {
-	st, err := core.LoadState()
+func (a *App) Cleanup(project, reference string) (string, error) {
+	st, target, err := resolveWorktreeTarget(a.ctx, project, reference)
 	if err != nil {
 		return "", err
 	}
-	name, err := core.StartCleanup(st, path, mainBranch)
+	if target.Worktree.Main {
+		return "", fmt.Errorf("Cleanup ist nur für verwaltete Worktrees verfügbar")
+	}
+	if !target.MainBranch.Known() || strings.TrimSpace(target.MainBranch.Value) == "" {
+		return "", fmt.Errorf("Hauptbranch ist derzeit nicht verlässlich bekannt")
+	}
+	name, err := core.StartCleanup(st, target.Worktree.Path, target.MainBranch.Value)
 	if err != nil {
 		return "", err
 	}
@@ -471,16 +477,12 @@ func (a *App) Deploy(project string) (string, error) {
 	return name, nil
 }
 
-func (a *App) RemoveWorktree(project, path string) error {
-	st, err := core.LoadState()
+func (a *App) RemoveWorktree(project, reference string) error {
+	st, target, err := resolveWorktreeTarget(a.ctx, project, reference)
 	if err != nil {
 		return err
 	}
-	proj := st.ProjectByName(project)
-	if proj == nil {
-		return fmt.Errorf("unbekanntes Projekt: %s", project)
-	}
-	if err := core.RemoveWorktree(st, proj, path); err != nil {
+	if err := core.RemoveWorktree(st, &target.Project, target.Worktree.Path); err != nil {
 		return err
 	}
 	return nil

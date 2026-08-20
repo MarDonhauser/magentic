@@ -2,10 +2,12 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -116,6 +118,10 @@ func TestRepositoriesSurveyHasBoundedCommandBudgetAndCoherentFacts(t *testing.T)
 		t.Fatalf("Worktrees = %#v", project.Worktrees)
 	}
 	main, topic := project.Worktrees.Value[0], project.Worktrees.Value[1]
+	if main.Reference == "" || topic.Reference == "" || main.Reference == topic.Reference ||
+		main.Location == "" || topic.Location == "" || filepath.IsAbs(topic.Location) {
+		t.Fatalf("opaque Worktree identity/location missing: main=%#v topic=%#v", main, topic)
+	}
 	if !main.Main || main.Divergence.Value != (RepositoryDivergence{Base: "main"}) {
 		t.Fatalf("main Worktree = %#v", main)
 	}
@@ -127,6 +133,40 @@ func TestRepositoriesSurveyHasBoundedCommandBudgetAndCoherentFacts(t *testing.T)
 	}
 	if !topic.Divergence.Known() || topic.Divergence.Value != (RepositoryDivergence{Base: "main", Ahead: 3, Behind: 2}) {
 		t.Fatalf("topic divergence = %#v", topic.Divergence)
+	}
+}
+
+func TestRepositoriesResolveWorktreeRefreshesAndKeepsPathsPrivate(t *testing.T) {
+	projectPath := filepath.Join(t.TempDir(), "project")
+	project := Project{ID: "project-1", Name: "demo", Path: projectPath}
+	topology := repositoriesTopologyFixture(repositoriesTopologyWorktree{Path: projectPath, Head: "aaaa", Branch: "main"})
+	steps := []repositoriesRunnerStep{
+		{dir: projectPath, args: []string{"worktree", "list", "--porcelain"}, output: topology},
+		{dir: projectPath, args: []string{"status", "--porcelain=v2", "--branch"}, output: repositoriesStatusFixture("aaaa", "main")},
+		{dir: projectPath, args: []string{"worktree", "list", "--porcelain"}, output: topology},
+		{dir: projectPath, args: []string{"status", "--porcelain=v2", "--branch"}, output: repositoriesStatusFixture("aaaa", "main")},
+	}
+	runner := &repositoriesRecordingRunner{t: t, steps: steps}
+	repositories := newRepositories(runner)
+	survey, err := repositories.Survey(context.Background(), []Project{project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := survey.Projects[0].Worktrees.Value[0].Reference
+	target, err := repositories.ResolveWorktree(context.Background(), project, reference)
+	if err != nil {
+		t.Fatalf("ResolveWorktree() error = %v", err)
+	}
+	runner.assertDone()
+	if target.Worktree.Reference != reference || !sameRepositoryPath(target.Worktree.Path, projectPath) {
+		t.Fatalf("ResolveWorktree() = %#v", target)
+	}
+	encoded, err := json.Marshal(target.Worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), projectPath) || strings.Contains(string(encoded), `"path"`) {
+		t.Fatalf("RepositoryWorktree leaked its private path: %s", encoded)
 	}
 }
 
@@ -207,9 +247,45 @@ func TestRepositoriesTopologyPreservesCheckoutAndMaintenanceFacts(t *testing.T) 
 		t.Fatalf("detached Worktree = %#v", detached)
 	}
 
-	unborn := parseRepositoriesStatus(repositoriesStatusFixture("(initial)", "topic", "? untracked file.go"))
+	unborn, err := parseRepositoriesStatus(repositoriesStatusFixture("(initial)", "topic", "? untracked file.go"))
+	if err != nil {
+		t.Fatalf("parseRepositoriesStatus() error = %v", err)
+	}
 	if unborn.Checkout.Kind != RepositoryUnborn || unborn.Checkout.Branch != "topic" || unborn.Head != "" {
 		t.Fatalf("unborn status = %#v", unborn)
+	}
+}
+
+func TestRepositoriesStatusRejectsMalformedSuccessfulOutput(t *testing.T) {
+	for _, malformed := range []string{
+		"",
+		"nonsense that is not porcelain\n",
+		"# branch.oid aaaa\n",
+		"# branch.oid aaaa\n# branch.head main\n1 malformed\n",
+		"# branch.oid aaaa\n# branch.head main\n? \n",
+	} {
+		if got, err := parseRepositoriesStatus(malformed); err == nil {
+			t.Fatalf("malformed successful output became known clean: input=%q result=%#v", malformed, got)
+		}
+	}
+}
+
+func TestRepositoriesSurveyDoesNotTreatMalformedStatusAsClean(t *testing.T) {
+	projectPath := filepath.Join(t.TempDir(), "project")
+	runner := &repositoriesRecordingRunner{t: t, steps: []repositoriesRunnerStep{
+		{dir: projectPath, args: []string{"worktree", "list", "--porcelain"}, output: repositoriesTopologyFixture(
+			repositoriesTopologyWorktree{Path: projectPath, Head: "aaaa", Branch: "main"},
+		)},
+		{dir: projectPath, args: []string{"status", "--porcelain=v2", "--branch"}, output: "successful but malformed\n"},
+	}}
+	survey, err := newRepositories(runner).Survey(context.Background(), []Project{{ID: "project-1", Name: "demo", Path: projectPath}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.assertDone()
+	worktree := survey.Projects[0].Worktrees.Value[0]
+	if worktree.Changes.Known() || worktree.Changes.Problem == nil {
+		t.Fatalf("malformed status authorized a known clean Worktree: %#v", worktree.Changes)
 	}
 }
 

@@ -443,8 +443,8 @@ func fallbackOverviewWorktree(project Project, repository RepositoryProjectSurve
 	}
 	worktree := OvWorktree{
 		Reference: repositoryWorktreeReference(project, project.Path),
-		Location: repositoryWorktreeLocation(project.Path, project.Path),
-		Path: project.Path, ShortPath: repositoryWorktreeLocation(project.Path, project.Path), Branch: branch, IsMain: true,
+		Location:  repositoryWorktreeLocation(project.Path, project.Path),
+		Path:      project.Path, ShortPath: repositoryWorktreeLocation(project.Path, project.Path), Branch: branch, IsMain: true,
 	}
 	worktree.Problems = appendOverviewProblem(worktree.Problems, repository.Problem)
 	worktree.Problems = appendOverviewProblem(worktree.Problems, problem)

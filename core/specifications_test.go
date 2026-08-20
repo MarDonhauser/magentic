@@ -273,6 +273,28 @@ func TestSpecificationReferenceAndStartTokenAreStableAndControlled(t *testing.T)
 	}
 }
 
+func TestSpecificationResolveStartRejectsSymlinkedSourceOutsideProject(t *testing.T) {
+	projectRoot := t.TempDir()
+	externalRoot := t.TempDir()
+	writeSpecificationTestFile(t, externalRoot, []string{"001-login", "spec.md"}, "# Escaped login\n")
+	if err := os.Symlink(externalRoot, filepath.Join(projectRoot, "specs")); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	project := Project{ID: "project-1", Name: "demo", Path: projectRoot}
+	module := NewSpecifications()
+	discovery, err := module.Discover(context.Background(), project, SpecificationQuery{Sources: []SpecificationSourceKind{SpecificationSpecKit}})
+	if err != nil {
+		t.Fatalf("Discover() error = %v", err)
+	}
+	if len(discovery.Specifications) != 1 || discovery.Specifications[0].StartToken == "" {
+		t.Fatalf("Discover() did not expose the source for resolver validation: %#v", discovery.Specifications)
+	}
+	_, err = module.ResolveStart(context.Background(), project, discovery.Specifications[0].StartToken)
+	if err == nil || !strings.Contains(err.Error(), "source escapes Project") {
+		t.Fatalf("ResolveStart() error = %v, want physical containment rejection", err)
+	}
+}
+
 func TestSpecificationLifecycleOnlyUsesTerminalFactsForDone(t *testing.T) {
 	allDone := SpecificationProgress{Total: 2, Completed: 2}
 	if lifecycle := specificationLifecycle(allDone, true, false, false); lifecycle.Stage != SpecificationReview || lifecycle.Terminal {

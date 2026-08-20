@@ -1558,7 +1558,7 @@ function attentionOverview() {
     `<div class="attention-queue">${queue}</div></section>`;
 }
 
-function gitState(wt) {
+function gitState(p, wt) {
   if (wt.branch === '(kein git)') return '';
   if (!wt.changesKnown) {
     const detail = (wt.problems || []).map(problem => problem?.message).filter(Boolean).join('; ');
@@ -1569,12 +1569,13 @@ function gitState(wt) {
   if (wt.staged) parts.push(`${wt.staged} staged`);
   if (wt.modified) parts.push(`${wt.modified} geändert`);
   if (wt.untracked) parts.push(`${wt.untracked} neu`);
-  return `<span class="git-state clickable" data-diff="${esc(wt.path)}" title="Diff anzeigen">` +
+  return `<span class="git-state clickable" data-project="${esc(p.id || p.name)}" data-worktree="${esc(wt.reference)}" title="Diff anzeigen">` +
     `<span style="color:var(--warning);font-weight:700">±</span> ${parts.join(' · ')}</span>`;
 }
 
 function worktreeActions(p, wt) {
   if (!p.path) return '';
+	const projectRef = p.id || p.name;
   const busy = (wt.agents || []).some(a => !a.dock && ['running', 'agents', 'blocked'].includes(a.status));
   const anySession = (wt.agents || []).some(a => !a.dock && ['running', 'agents', 'blocked', 'idle'].includes(a.status));
   let btns = '';
@@ -1584,15 +1585,15 @@ function worktreeActions(p, wt) {
   }
   if (!wt.isMain && !anySession) {
     if (wt.changesKnown && wt.divergenceKnown && (!wt.clean || wt.ahead > 0)) {
-      btns += `<button class="btn" data-act="cleanup" data-path="${esc(wt.path)}" data-main="${esc(p.mainBranch)}" title="Claude-Session zum Committen und Mergen">${icon('broom')} Cleanup</button>`;
+      btns += `<button class="btn" data-act="cleanup" data-project="${esc(projectRef)}" data-worktree="${esc(wt.reference)}" title="Claude-Session zum Committen und Mergen">${icon('broom')} Cleanup</button>`;
     }
     if (!wt.changesKnown) {
       btns += `<button class="btn danger" disabled title="Git-Änderungen sind unbekannt — Entfernen wäre nicht sicher">${icon('trash')} entfernen</button>`;
     } else if (wt.clean) {
-      const key = p.name + '|' + wt.path;
+      const key = projectRef + '|' + wt.reference;
       btns += confirmRemove === key
-        ? `<button class="btn danger confirm" data-act="remove2" data-project="${esc(p.name)}" data-path="${esc(wt.path)}">wirklich entfernen?</button>`
-        : `<button class="btn danger" data-act="remove1" data-project="${esc(p.name)}" data-path="${esc(wt.path)}">${icon('trash')} entfernen</button>`;
+        ? `<button class="btn danger confirm" data-act="remove2" data-project="${esc(projectRef)}" data-worktree="${esc(wt.reference)}">wirklich entfernen?</button>`
+        : `<button class="btn danger" data-act="remove1" data-project="${esc(projectRef)}" data-worktree="${esc(wt.reference)}">${icon('trash')} entfernen</button>`;
     } else {
       btns += `<button class="btn danger" disabled title="uncommittete Änderungen — erst aufräumen">${icon('trash')} entfernen</button>`;
     }
@@ -1617,11 +1618,11 @@ function worktreeRow(p, wt, idx, total) {
   const problem = problemText
     ? `<span class="warn repo-unknown" title="${esc(problemText)}"><span class="ic">${icon('warn')}</span>Git-Fakten unvollständig</span>`
     : '';
-  const pathHtml = wt.isMain ? '' : `<span class="wt-path" title="${esc(wt.path)}">${esc(wt.shortPath)}</span>`;
+  const pathHtml = wt.isMain ? '' : `<span class="wt-path" title="${esc(wt.location)}">${esc(wt.location)}</span>`;
   const last = wt.lastMsg ? `<span class="lastmsg" title="letzter Commit">„${esc(wt.lastMsg)}“</span>` : '';
   const branch = wt.checkoutKnown ? wt.branch : 'Branch unbekannt';
   return `<div class="${cls.join(' ')}">` +
-    `<span class="branch${wt.checkoutKnown ? '' : ' unknown'}">${esc(branch)}</span>${abHtml}${gitState(wt)}${agents}${warns}${problem}${pathHtml}${last}${worktreeActions(p, wt)}</div>`;
+    `<span class="branch${wt.checkoutKnown ? '' : ' unknown'}">${esc(branch)}</span>${abHtml}${gitState(p, wt)}${agents}${warns}${problem}${pathHtml}${last}${worktreeActions(p, wt)}</div>`;
 }
 
 function projectCard(p) {
@@ -1902,12 +1903,12 @@ function renderAll() {
 }
 
 overviewEl.addEventListener('click', async e => {
-  const gs = e.target.closest('.git-state[data-diff]');
+  const gs = e.target.closest('.git-state[data-worktree]');
   if (gs) {
-    showModal('Diff · ' + gs.dataset.diff, 'lade…', false);
+    showModal('Worktree-Diff', 'lade…', false);
     try {
-      const diff = await WorktreeDiff(gs.dataset.diff);
-      showModal('Diff · ' + gs.dataset.diff, diff, true);
+      const diff = await WorktreeDiff(gs.dataset.project, gs.dataset.worktree);
+      showModal('Worktree-Diff', diff, true);
     } catch (err) {
       showModal('Diff', 'Fehler: ' + err, false);
     }
@@ -1933,7 +1934,7 @@ overviewEl.addEventListener('click', async e => {
       case 'showboard': await showBoard(d.project); break;
       case 'showstats': await showStats(d.project); break;
       case 'done': await act(DoneAgent(d.agent), `/done an „${d.agent}" gesendet — Plan in der Session bestätigen`); break;
-      case 'cleanup': await act(Cleanup(d.path, d.main), n => `Cleanup-Agent „${n}" gestartet`); break;
+      case 'cleanup': await act(Cleanup(d.project, d.worktree), n => `Cleanup-Agent „${n}" gestartet`); break;
       case 'merge': await act(Merge(d.project, d.source, d.target), n => `Merge-Agent „${n}" gestartet (${d.source} → ${d.target})`); break;
       case 'deploy':
         await act(Deploy(d.project), n => `Deploy-Agent „${n}" gestartet (/deploy)`);
@@ -1956,10 +1957,10 @@ overviewEl.addEventListener('click', async e => {
         confirmRemoveProject = null;
         await act(RemoveProject(d.project), `Repository „${d.project}" entfernt`);
         break;
-      case 'remove1': confirmRemove = d.project + '|' + d.path; renderOverview(); break;
+      case 'remove1': confirmRemove = d.project + '|' + d.worktree; renderOverview(); break;
       case 'remove2':
         confirmRemove = null;
-        await act(RemoveWorktree(d.project, d.path), 'Worktree entfernt');
+        await act(RemoveWorktree(d.project, d.worktree), 'Worktree entfernt');
         break;
       case 'mainedit': editingMain = d.project; renderOverview(); $('main-input')?.focus(); break;
       case 'maincancel': editingMain = null; renderOverview(); break;

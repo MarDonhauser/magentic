@@ -1,6 +1,24 @@
 package core
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func TestGitGraphJSONKeepsWorktreePathsPrivate(t *testing.T) {
+	graph := GitGraph{
+		Branches: []GraphBranch{{Name: "topic", Worktree: "/private/topic", WorktreeRef: "wt_topic", WorktreeLocation: "project-agents/topic"}},
+		Commits:  []GraphCommit{{Refs: []GraphRef{{Name: "topic", Worktree: "/private/topic", WorktreeRef: "wt_topic", WorktreeLocation: "project-agents/topic"}}}},
+	}
+	data, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "/private/topic") || !strings.Contains(string(data), `"worktreeRef":"wt_topic"`) {
+		t.Fatalf("GitGraph Worktree projection is not opaque: %s", data)
+	}
+}
 
 func laneOf(commits []GraphCommit, hash string) int {
 	for _, c := range commits {

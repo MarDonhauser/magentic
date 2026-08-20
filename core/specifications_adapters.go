@@ -17,6 +17,7 @@ type specificationsFilesystem interface {
 	ReadFile(string) ([]byte, error)
 	Stat(string) (os.FileInfo, error)
 	Lstat(string) (os.FileInfo, error)
+	EvalSymlinks(string) (string, error)
 	WalkDir(string, fs.WalkDirFunc) error
 }
 
@@ -36,6 +37,10 @@ func (osSpecificationsFilesystem) Stat(path string) (os.FileInfo, error) {
 
 func (osSpecificationsFilesystem) Lstat(path string) (os.FileInfo, error) {
 	return os.Lstat(path)
+}
+
+func (osSpecificationsFilesystem) EvalSymlinks(path string) (string, error) {
+	return filepath.EvalSymlinks(path)
 }
 
 func (osSpecificationsFilesystem) WalkDir(root string, walk fs.WalkDirFunc) error {
@@ -359,13 +364,24 @@ func (a directorySpecificationSourceAdapter) Resolve(
 	}
 	root := filepath.Join(append([]string{project.Path}, a.root...)...)
 	target := filepath.Join(root, id)
+	projectAbsolute, projectErr := filepath.Abs(filepath.Clean(project.Path))
 	rootAbsolute, rootErr := filepath.Abs(root)
 	targetAbsolute, targetErr := filepath.Abs(target)
-	if rootErr != nil || targetErr != nil {
+	if projectErr != nil || rootErr != nil || targetErr != nil {
 		return "", ErrInvalidSpecificationStartToken
 	}
-	relative, err := filepath.Rel(rootAbsolute, targetAbsolute)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+	projectPhysical, err := filesystem.EvalSymlinks(projectAbsolute)
+	if err != nil {
+		return "", fmt.Errorf("resolve Project: %w", err)
+	}
+	rootPhysical, err := filesystem.EvalSymlinks(rootAbsolute)
+	if err != nil {
+		return "", fmt.Errorf("resolve Specification source: %w", err)
+	}
+	if !specificationPathContained(projectPhysical, rootPhysical) {
+		return "", errors.New("resolve Specification: source escapes Project")
+	}
+	if !specificationPathContained(rootAbsolute, targetAbsolute) {
 		return "", ErrInvalidSpecificationStartToken
 	}
 	info, err := filesystem.Lstat(targetAbsolute)
@@ -375,7 +391,21 @@ func (a directorySpecificationSourceAdapter) Resolve(
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return "", errors.New("resolve Specification: target is not a directory")
 	}
-	return filepath.Clean(targetAbsolute), nil
+	targetPhysical, err := filesystem.EvalSymlinks(targetAbsolute)
+	if err != nil {
+		return "", fmt.Errorf("resolve Specification: %w", err)
+	}
+	if !specificationPathContained(projectPhysical, targetPhysical) || !specificationPathContained(rootPhysical, targetPhysical) {
+		return "", errors.New("resolve Specification: target escapes source")
+	}
+	return filepath.Clean(targetPhysical), nil
+}
+
+func specificationPathContained(parent, child string) bool {
+	parent = filepath.Clean(parent)
+	child = filepath.Clean(child)
+	relative, err := filepath.Rel(parent, child)
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative)
 }
 
 func (d *specificationSourceDiscovery) addProblem(operation string, ref SpecificationRef, err error) {

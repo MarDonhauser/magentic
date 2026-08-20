@@ -35,8 +35,124 @@ func TestOwnCommit(t *testing.T) {
 }
 
 func TestOwnCommitOhneIdentitaet(t *testing.T) {
-	if !ownCommit("wer@auch.immer", "Wer Auch Immer", "", "") {
-		t.Fatal("ohne konfigurierte Identität muss alles zählen")
+	if ownCommit("wer@auch.immer", "Wer Auch Immer", "", "") {
+		t.Fatal("ohne konfigurierte Identität darf kein fremder Commit als eigener zählen")
+	}
+}
+
+func TestCommitsPerDayReportsMissingOrUnreadableIdentity(t *testing.T) {
+	tests := []struct {
+		name string
+		run  gitRunner
+	}{
+		{
+			name: "identity absent",
+			run: func(_ string, args ...string) (string, error) {
+				if len(args) > 0 && args[0] == "log" {
+					return "", errors.New("log unexpectedly read")
+				}
+				return "", nil
+			},
+		},
+		{
+			name: "config unavailable",
+			run: func(_ string, args ...string) (string, error) {
+				if len(args) > 0 && args[0] == "log" {
+					return "", errors.New("log unexpectedly read")
+				}
+				return "", errors.New("config denied")
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := commitsPerDayWithGit("Project", "/repo", "2026-01-01", test.run)
+			if result.State != HistorySourceUnavailable || len(result.Days) != 0 {
+				t.Fatalf("identity failure became an empty successful count: %#v", result)
+			}
+			if len(result.Problems) != 1 || result.Problems[0].Kind != statsCommitProblemIdentity {
+				t.Fatalf("identity diagnostic = %#v", result.Problems)
+			}
+		})
+	}
+}
+
+func TestCommitsPerDayReportsGitLogFailure(t *testing.T) {
+	run := func(_ string, args ...string) (string, error) {
+		if len(args) < 2 {
+			return "", errors.New("unexpected git command")
+		}
+		if args[0] == "config" && args[1] == "user.email" {
+			return "me@example.com\n", nil
+		}
+		if args[0] == "config" && args[1] == "user.name" {
+			return "", errors.New("name not configured")
+		}
+		if args[0] == "log" {
+			return "", errors.New("log denied")
+		}
+		return "", errors.New("unexpected git command")
+	}
+
+	result := commitsPerDayWithGit("Project", "/repo", "2026-01-01", run)
+	if result.State != HistorySourceUnavailable || len(result.Days) != 0 {
+		t.Fatalf("log failure became an empty successful count: %#v", result)
+	}
+	if len(result.Problems) != 1 || result.Problems[0].Kind != statsCommitProblemLog || !strings.Contains(result.Problems[0].Message, "log denied") {
+		t.Fatalf("log diagnostic = %#v", result.Problems)
+	}
+}
+
+func TestBuildStatsExposesPartialCommitCoverageAndKnownSubtotal(t *testing.T) {
+	const commitTimestamp = "1700000000"
+	now := time.Unix(1700003600, 0).In(time.Local)
+	state := &State{Projects: []Project{
+		{Name: "Readable", Path: "/readable"},
+		{Name: "Blocked", Path: "/blocked"},
+		{Name: "No repository"},
+	}}
+	run := func(dir string, args ...string) (string, error) {
+		if dir == "/blocked" {
+			return "", errors.New("config denied")
+		}
+		if len(args) < 2 {
+			return "", errors.New("unexpected git command")
+		}
+		switch {
+		case args[0] == "config" && args[1] == "user.email":
+			return "me@example.com\n", nil
+		case args[0] == "config" && args[1] == "user.name":
+			return "Me\n", nil
+		case args[0] == "log":
+			return commitTimestamp + "\x1fme@example.com\x1fMe\n" +
+				commitTimestamp + "\x1fother@example.com\x1fOther\n", nil
+		default:
+			return "", errors.New("unexpected git command")
+		}
+	}
+
+	stats := buildStatsWithGit(context.Background(), state, 7, nil, now, nil, run)
+	coverage := stats.CommitCoverage
+	if coverage.State != HistorySourcePartial || coverage.Repositories != 2 || coverage.AvailableRepositories != 1 {
+		t.Fatalf("commit coverage = %#v", coverage)
+	}
+	if len(coverage.Problems) != 1 || coverage.Problems[0].Project != "Blocked" || coverage.Problems[0].Kind != statsCommitProblemIdentity {
+		t.Fatalf("commit diagnostics = %#v", coverage.Problems)
+	}
+	if stats.Totals.Commits != 1 {
+		t.Fatalf("known own-commit subtotal = %d, want 1", stats.Totals.Commits)
+	}
+	readable := findStatsProject(t, stats.Projects, "Readable")
+	if readable.Commits != 1 || readable.CommitState != HistorySourceAvailable {
+		t.Fatalf("readable project commits = %#v", readable)
+	}
+	blocked := findStatsProject(t, stats.Projects, "Blocked")
+	if blocked.Commits != 0 || blocked.CommitState != HistorySourceUnavailable {
+		t.Fatalf("blocked project looked like an exact zero: %#v", blocked)
+	}
+	if got := statsProjectCommitState(map[string]HistorySourceState{}, "No repository"); got != HistorySourceAbsent {
+		t.Fatalf("project without repository state = %q", got)
 	}
 }
 
@@ -219,4 +335,15 @@ func findStatsProvider(t *testing.T, providers []StatsProvider, provider History
 	}
 	t.Fatalf("provider %s missing: %#v", provider, providers)
 	return StatsProvider{}
+}
+
+func findStatsProject(t *testing.T, projects []StatsProject, name string) StatsProject {
+	t.Helper()
+	for _, project := range projects {
+		if project.Name == name {
+			return project
+		}
+	}
+	t.Fatalf("project %s missing: %#v", name, projects)
+	return StatsProject{}
 }

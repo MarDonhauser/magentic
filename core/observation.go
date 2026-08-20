@@ -400,7 +400,27 @@ func statusFromObservation(session Session, paneCommand, content string) AgentSt
 	if session.IsTerm() && tool == AgentToolBash {
 		return StatusTerm
 	}
-	return DetectClaudeStatus(true, normalizedPaneCommand(paneCommand), LastLines(content, 25))
+	return statusForAgentRuntime(true, tool, paneCommand, content)
+}
+
+// statusForAgentRuntime dispatches only to status semantics the Module knows.
+// Provider presence is not enough to infer that an unfamiliar UI is idle or
+// finished; unsupported provider Adapters therefore remain explicitly unknown.
+func statusForAgentRuntime(sessionExists bool, tool, paneCommand, content string) AgentStatus {
+	if !sessionExists {
+		return StatusDead
+	}
+	command := normalizedPaneCommand(paneCommand)
+	switch tool {
+	case AgentToolClaude:
+		return DetectClaudeStatus(true, command, LastLines(content, 25))
+	case AgentToolCodex, AgentToolGemini, AgentToolCopilot:
+		return StatusUnknown
+	}
+	if shellCommands[command] {
+		return StatusExited
+	}
+	return StatusUnknown
 }
 
 func statusWithoutPaneContent(session Session, paneCommand string) AgentStatus {

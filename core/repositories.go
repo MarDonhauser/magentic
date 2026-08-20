@@ -113,6 +113,55 @@ type RepositoryWorktreeTarget struct {
 	MainBranch RepositoryFact[string]
 }
 
+// WorktreeDiff reports a human-readable checkout diff without collapsing
+// command failures into a clean result.
+func (r *Repositories) WorktreeDiff(ctx context.Context, target RepositoryWorktree) RepositoryFact[string] {
+	dir := strings.TrimSpace(target.Path)
+	if dir == "" {
+		return repositoryUnknownFact[string]("diff", errors.New("resolved Worktree path is required"))
+	}
+	status, err := r.runner.Run(ctx, dir, "status", "--short")
+	if err != nil {
+		return repositoryFactForError[string]("diff_status", err)
+	}
+	diff, err := r.runner.Run(ctx, dir, "diff", "HEAD")
+	if err != nil {
+		return repositoryFactForError[string]("diff_content", err)
+	}
+	untracked, err := r.runner.Run(ctx, dir, "ls-files", "--others", "--exclude-standard")
+	if err != nil {
+		return repositoryFactForError[string]("diff_untracked", err)
+	}
+
+	var output strings.Builder
+	if strings.TrimSpace(status) != "" {
+		output.WriteString("── Status ──\n")
+		output.WriteString(status)
+		if !strings.HasSuffix(status, "\n") {
+			output.WriteByte('\n')
+		}
+	}
+	if strings.TrimSpace(diff) != "" {
+		output.WriteString("── Diff (gegen HEAD) ──\n")
+		output.WriteString(diff)
+		if !strings.HasSuffix(diff, "\n") {
+			output.WriteByte('\n')
+		}
+	}
+	files := strings.Fields(strings.TrimSpace(untracked))
+	if len(files) > 0 {
+		output.WriteString("── Neue Dateien (untracked) ──\n")
+		for _, file := range files {
+			output.WriteString("+ " + file + "\n")
+		}
+	}
+	text := strings.TrimRight(output.String(), "\n")
+	if text == "" {
+		text = "Keine Änderungen."
+	}
+	return repositoryKnownFact(text)
+}
+
 // RepositoryBaseline is portable Registry data. The Repositories Module owns
 // its interpretation; callers only retain it and pass it back to Inspect.
 type RepositoryBaseline struct {
@@ -367,7 +416,12 @@ func repositoryWorktreeLocation(projectPath, worktreePath string) string {
 	if sameRepositoryPath(projectPath, worktreePath) {
 		return filepath.Base(projectPath)
 	}
-	return ShortPath(worktreePath)
+	base := filepath.Base(worktreePath)
+	parent := filepath.Base(filepath.Dir(worktreePath))
+	if parent == "" || parent == "." || parent == string(filepath.Separator) {
+		return base
+	}
+	return filepath.ToSlash(filepath.Join(parent, base))
 }
 
 func resolveRepositoryMainBranch(project Project, worktrees []RepositoryWorktree) RepositoryFact[string] {
@@ -598,12 +652,14 @@ func (r *Repositories) loadStatus(ctx context.Context, dir string) (repositories
 	if err != nil {
 		return repositoriesStatus{}, err
 	}
-	return parseRepositoriesStatus(out), nil
+	return parseRepositoriesStatus(out)
 }
 
-func parseRepositoriesStatus(out string) repositoriesStatus {
+func parseRepositoriesStatus(out string) (repositoriesStatus, error) {
 	var result repositoriesStatus
 	unborn := false
+	seenOID := false
+	seenHead := false
 	seenPaths := map[string]bool{}
 	addPath := func(path string) {
 		path = strings.TrimSpace(path)
@@ -613,10 +669,18 @@ func parseRepositoriesStatus(out string) repositoriesStatus {
 		seenPaths[path] = true
 		result.Changes.Paths = append(result.Changes.Paths, path)
 	}
-	for _, line := range strings.Split(out, "\n") {
+	for lineNumber, line := range strings.Split(out, "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if line == "" {
+			continue
+		}
 		switch {
 		case strings.HasPrefix(line, "# branch.oid "):
 			oid := strings.TrimSpace(strings.TrimPrefix(line, "# branch.oid "))
+			if seenOID || oid == "" {
+				return repositoriesStatus{}, fmt.Errorf("invalid branch.oid at status line %d", lineNumber+1)
+			}
+			seenOID = true
 			if oid == "(initial)" || allZeroOID(oid) {
 				unborn = true
 			} else {
@@ -624,57 +688,85 @@ func parseRepositoriesStatus(out string) repositoriesStatus {
 			}
 		case strings.HasPrefix(line, "# branch.head "):
 			head := strings.TrimSpace(strings.TrimPrefix(line, "# branch.head "))
+			if seenHead || head == "" {
+				return repositoriesStatus{}, fmt.Errorf("invalid branch.head at status line %d", lineNumber+1)
+			}
+			seenHead = true
 			switch head {
 			case "(detached)":
 				result.Checkout = RepositoryCheckout{Kind: RepositoryDetached}
 			case "(initial)":
 				result.Checkout = RepositoryCheckout{Kind: RepositoryUnborn}
-			case "":
 			default:
 				result.Checkout = RepositoryCheckout{Kind: RepositoryBranchCheckout, Branch: head}
 			}
+		case strings.HasPrefix(line, "# branch.upstream "), strings.HasPrefix(line, "# branch.ab "), strings.HasPrefix(line, "# stash "):
+			// Optional documented porcelain-v2 headers do not change the facts
+			// returned by this Interface.
 		case strings.HasPrefix(line, "1 "):
-			if len(line) >= 4 {
-				xy := line[2:4]
-				if xy[0] != '.' {
-					result.Changes.Staged++
-				}
-				if xy[1] != '.' {
-					result.Changes.Modified++
-				}
+			fields := strings.SplitN(line, " ", 9)
+			if len(fields) != 9 || !validRepositoryXY(fields[1]) || strings.TrimSpace(fields[8]) == "" {
+				return repositoriesStatus{}, fmt.Errorf("invalid ordinary change at status line %d", lineNumber+1)
 			}
-			if fields := strings.SplitN(line, " ", 9); len(fields) == 9 {
-				addPath(decodeRepositoryPath(fields[8]))
-			}
+			countRepositoryXY(&result.Changes, fields[1])
+			addPath(decodeRepositoryPath(fields[8]))
 		case strings.HasPrefix(line, "2 "):
-			if len(line) >= 4 {
-				xy := line[2:4]
-				if xy[0] != '.' {
-					result.Changes.Staged++
-				}
-				if xy[1] != '.' {
-					result.Changes.Modified++
-				}
+			fields := strings.SplitN(line, " ", 10)
+			if len(fields) != 10 || !validRepositoryXY(fields[1]) {
+				return repositoriesStatus{}, fmt.Errorf("invalid renamed change at status line %d", lineNumber+1)
 			}
-			if fields := strings.SplitN(line, " ", 10); len(fields) == 10 {
-				path, _, _ := strings.Cut(fields[9], "\t")
-				addPath(decodeRepositoryPath(path))
+			path, original, hasOriginal := strings.Cut(fields[9], "\t")
+			if strings.TrimSpace(path) == "" || !hasOriginal || strings.TrimSpace(original) == "" {
+				return repositoriesStatus{}, fmt.Errorf("invalid renamed paths at status line %d", lineNumber+1)
 			}
+			countRepositoryXY(&result.Changes, fields[1])
+			addPath(decodeRepositoryPath(path))
 		case strings.HasPrefix(line, "u "):
-			result.Changes.Conflicted++
-			if fields := strings.SplitN(line, " ", 11); len(fields) == 11 {
-				addPath(decodeRepositoryPath(fields[10]))
+			fields := strings.SplitN(line, " ", 11)
+			if len(fields) != 11 || !validRepositoryXY(fields[1]) || strings.TrimSpace(fields[10]) == "" {
+				return repositoriesStatus{}, fmt.Errorf("invalid unmerged change at status line %d", lineNumber+1)
 			}
+			result.Changes.Conflicted++
+			addPath(decodeRepositoryPath(fields[10]))
 		case strings.HasPrefix(line, "? "):
+			if strings.TrimSpace(strings.TrimPrefix(line, "? ")) == "" {
+				return repositoriesStatus{}, fmt.Errorf("invalid untracked path at status line %d", lineNumber+1)
+			}
 			result.Changes.Untracked++
 			addPath(decodeRepositoryPath(strings.TrimPrefix(line, "? ")))
+		case strings.HasPrefix(line, "! "):
+			if strings.TrimSpace(strings.TrimPrefix(line, "! ")) == "" {
+				return repositoriesStatus{}, fmt.Errorf("invalid ignored path at status line %d", lineNumber+1)
+			}
+		default:
+			return repositoriesStatus{}, fmt.Errorf("unrecognized status line %d", lineNumber+1)
 		}
+	}
+	if !seenOID || !seenHead {
+		return repositoriesStatus{}, errors.New("git status omitted required branch headers")
 	}
 	if unborn {
 		result.Checkout.Kind = RepositoryUnborn
 	}
 	sort.Strings(result.Changes.Paths)
-	return result
+	return result, nil
+}
+
+func validRepositoryXY(xy string) bool {
+	if len(xy) != 2 {
+		return false
+	}
+	const allowed = ".MADRCUT?"
+	return strings.ContainsRune(allowed, rune(xy[0])) && strings.ContainsRune(allowed, rune(xy[1]))
+}
+
+func countRepositoryXY(changes *RepositoryWorkingChanges, xy string) {
+	if xy[0] != '.' {
+		changes.Staged++
+	}
+	if xy[1] != '.' {
+		changes.Modified++
+	}
 }
 
 func decodeRepositoryPath(path string) string {

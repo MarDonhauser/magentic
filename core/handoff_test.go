@@ -187,3 +187,13 @@ func TestValidateHandoffTargetStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestPromptTargetRuntimeKeepsProviderSemanticsSeparate(t *testing.T) {
+	content := "Do you want to run this command?\n❯ 1. Yes"
+	if err := validatePromptTargetRuntime("codex", AgentToolCodex, "codex", content); err != nil {
+		t.Fatalf("Codex queued-input Adapter reused Claude status semantics: %v", err)
+	}
+	if err := validatePromptTargetRuntime("claude", AgentToolClaude, "claude", content); err == nil {
+		t.Fatal("Claude blocked status was not enforced")
+	}
+}

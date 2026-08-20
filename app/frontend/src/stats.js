@@ -56,6 +56,18 @@ function costValue(value, state) {
   return `${state === 'partial' ? 'ab ' : ''}${money(value)}`;
 }
 
+const SOURCE_STATES = new Set(['available', 'absent', 'partial', 'unavailable']);
+function normalizeSourceState(value, fallback = 'unavailable') {
+  const state = String(value || '');
+  return SOURCE_STATES.has(state) ? state : fallback;
+}
+
+function commitValue(value, state, format = (number) => nf0.format(number)) {
+  if (state === 'available') return format(num(value));
+  if (state === 'partial') return `ab ${format(num(value))}`;
+  return '–';
+}
+
 function mergeCostStates(states) {
   let known = false;
   let unknown = false;
@@ -138,6 +150,22 @@ function tipRow(name, value, color) {
 
 function normalize(raw) {
   const src = raw && typeof raw === 'object' ? raw : {};
+  const rawCommitCoverage = src.commitCoverage && typeof src.commitCoverage === 'object'
+    ? src.commitCoverage
+    : null;
+  const commitCoverage = {
+    reported: !!rawCommitCoverage,
+    state: normalizeSourceState(rawCommitCoverage && rawCommitCoverage.state),
+    repositories: num(rawCommitCoverage && rawCommitCoverage.repositories),
+    availableRepositories: num(rawCommitCoverage && rawCommitCoverage.availableRepositories),
+    problems: (rawCommitCoverage && Array.isArray(rawCommitCoverage.problems) ? rawCommitCoverage.problems : [])
+      .filter(Boolean)
+      .map((problem) => ({
+        project: String(problem.project || ''),
+        kind: String(problem.kind || ''),
+        message: String(problem.message || ''),
+      })),
+  };
   const days = (Array.isArray(src.days) ? src.days : []).filter(Boolean).map((d) => ({
     date: String(d.date || ''),
     weekday: String(d.weekday || ''),
@@ -174,6 +202,7 @@ function normalize(raw) {
     prompts: num(p.prompts),
     sessions: num(p.sessions),
     commits: num(p.commits),
+    commitState: normalizeSourceState(p.commitState),
     active: num(p.active),
   }));
 
@@ -193,9 +222,7 @@ function normalize(raw) {
   const providers = (Array.isArray(src.providers) ? src.providers : []).filter(Boolean).map((p) => ({
     provider: String(p.provider || ''),
     source: String(p.source || p.provider || ''),
-    state: ['available', 'absent', 'partial', 'unavailable'].includes(String(p.state))
-      ? String(p.state)
-      : 'unavailable',
+    state: normalizeSourceState(p.state),
     prompts: num(p.prompts),
     turns: num(p.turns),
     tokens: num(p.tokens),
@@ -238,6 +265,7 @@ function normalize(raw) {
     projects,
     models,
     providers,
+    commitCoverage,
     totals,
   };
 }
@@ -263,7 +291,7 @@ function dateTicks(days, plotW) {
   return out;
 }
 
-function drawActivity(host, days) {
+function drawActivity(host, days, commitCoverage) {
   const W = measure(host, 320);
   const padL = PAD_L;
   const padR = 10;
@@ -328,7 +356,7 @@ function drawActivity(host, days) {
         tipRow('Turns', esc(nf0.format(d.turns)), SERIES[1]) +
         `<div class="st-tip-sep"></div>` +
         tipRow('Sessions', esc(nf0.format(d.sessions))) +
-        tipRow('Commits', esc(nf0.format(d.commits))),
+        tipRow(commitCoverage.state === 'partial' ? 'bekannte Commits' : 'Commits', esc(commitValue(d.commits, commitCoverage.state))),
       band: { x: padL + band * i, y: padT, w: band, h: mainH + gapH + subH },
       cross: { x: cx(i), pts: [cy(d.prompts), cys(d.turns)] },
     });
@@ -609,14 +637,14 @@ function drawProjects(host, projects, focusName = '') {
     s += `<text class="st-ax" x="${barX + w + 7}" y="${y + rowH / 2}" dominant-baseline="middle">${esc(compact(p.tokens))}</text>`;
     s += `<text class="st-ax" x="${costX}" y="${y + rowH / 2}" text-anchor="end" dominant-baseline="middle" fill="var(--ink-2)">${esc(costValue(p.cost, p.costState))}</text>`;
     if (!narrow) s += `<text class="st-ax" x="${promptsX}" y="${y + rowH / 2}" text-anchor="end" dominant-baseline="middle">${esc(compact(p.prompts))}</text>`;
-    s += `<text class="st-ax" x="${commitsX}" y="${y + rowH / 2}" text-anchor="end" dominant-baseline="middle">${esc(nf0.format(p.commits))}</text>`;
+    s += `<text class="st-ax" x="${commitsX}" y="${y + rowH / 2}" text-anchor="end" dominant-baseline="middle">${esc(commitValue(p.commits, p.commitState))}</text>`;
     tips.push({
       html: `<div class="st-tip-t">${esc(label)}${focused ? ' · Projektfokus' : ''}${active ? ' · aktive Session' : ''}</div>` +
         tipRow('Tokens', esc(compact(p.tokens)), active ? SERIES[0] : FADED) +
         tipRow('bekannte Kosten', esc(costValue(p.cost, p.costState))) +
         tipRow('Prompts', esc(nf0.format(p.prompts))) +
         tipRow('Sessions', esc(nf0.format(p.sessions))) +
-        tipRow('Commits', esc(nf0.format(p.commits))),
+        tipRow(p.commitState === 'partial' ? 'bekannte Commits' : 'Commits', esc(commitValue(p.commits, p.commitState))),
       band: { x: 0, y, w: W, h: rowH },
     });
   });
@@ -654,15 +682,20 @@ function drawModelBar(host, allModels, slotOf) {
   bindPlot(host, s + '</svg>', tips);
 }
 
-function drawSpark(host, days, key, color) {
+function drawSpark(host, days, key, color, coverage) {
   const W = measure(host, 60);
   const H = 40;
   const n = days.length;
   if (!n) return bindPlot(host, emptyPlot(W, H), []);
+  if (coverage.state === 'unavailable') return bindPlot(host, emptyPlot(W, H, 'Git-Daten nicht verfügbar'), []);
+  if (coverage.state === 'absent') return bindPlot(host, emptyPlot(W, H, 'keine Repositories'), []);
   const max = Math.max(1, ...days.map((d) => d[key]));
   const band = W / n;
   const bw = Math.max(1, Math.min(6, band - 1));
-  let s = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img">`;
+  const label = coverage.state === 'partial'
+    ? 'Bekannte eigene Git-Commits pro Tag; weitere Repositories fehlen'
+    : 'Eigene Git-Commits pro Tag';
+  let s = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(label)}">`;
   const tips = [];
   for (let i = 0; i < n; i++) {
     const h = (days[i][key] / max) * (H - 4);
@@ -671,7 +704,7 @@ function drawSpark(host, days, key, color) {
     s += `<rect class="st-hit" data-t="${i}" x="${band * i}" y="0" width="${band}" height="${H}"/>`;
     tips.push({
       html: `<div class="st-tip-t">${esc(days[i].weekday)}, ${esc(longDate(days[i].date))}</div>` +
-        tipRow('Commits', esc(nf0.format(days[i][key])), color),
+        tipRow(coverage.state === 'partial' ? 'bekannte Commits' : 'Commits', esc(commitValue(days[i][key], coverage.state)), color),
     });
   }
   s += `<line class="st-base" x1="0" y1="${H}" x2="${W}" y2="${H}"/>`;
@@ -709,9 +742,9 @@ function projectFocusHtml(name, project, range) {
       `<span><b>${esc(costValue(project.cost, project.costState))}</b> bekannte Kosten</span>` +
       `<span><b>${esc(nf0.format(project.prompts))}</b> Prompts</span>` +
       `<span><b>${esc(nf0.format(project.sessions))}</b> Sessions</span>` +
-      `<span><b>${esc(nf0.format(project.commits))}</b> Commits</span></div>`
+      `<span><b>${esc(commitValue(project.commits, project.commitState))}</b> Commits</span></div>`
     : `<div class="st-project-empty"><strong>Keine bekannte Aktivität für dieses Projekt</strong>` +
-      `<span>Im gewählten Zeitraum sind keine zuordenbaren Sessions oder Commits bekannt.</span></div>`;
+      `<span>Im gewählten Zeitraum sind keine zuordenbaren Agent-Sessions bekannt. Die Git-Abdeckung steht bei den Quellen.</span></div>`;
   return `<section class="st-project-focus" aria-label="Projektfokus ${esc(name)}">` +
     `<div class="st-project-focus-head"><div><h2>${esc(name)}</h2>` +
     `<p>Projektwerte für ${esc(nf0.format(range))} Tage. Alle Kennzahlen und Diagramme darunter zeigen weiterhin alle Projekte.</p></div>` +
@@ -725,31 +758,73 @@ const SOURCE_STATE_LABELS = {
   unavailable: 'nicht verfügbar',
 };
 
-function coverageHtml(providers) {
-  if (!providers.length) return '';
-  const rows = providers.map((provider) => {
-    const messages = provider.problems.map((problem) => problem.message || problem.kind).filter(Boolean);
+function coverageHtml(providers, commitCoverage) {
+  const sources = providers.map((provider) => ({
+    source: provider.source,
+    state: provider.state,
+    stateLabel: SOURCE_STATE_LABELS[provider.state],
+    problems: provider.problems,
+  }));
+  if (commitCoverage.reported) {
+    const stateLabel = commitCoverage.state === 'absent'
+      ? 'nicht eingerichtet'
+      : SOURCE_STATE_LABELS[commitCoverage.state];
+    const repositoryCount = commitCoverage.repositories > 0
+      ? ` · ${nf0.format(commitCoverage.availableRepositories)}/${nf0.format(commitCoverage.repositories)} Repos`
+      : '';
+    sources.push({
+      source: 'Git-Commits',
+      state: commitCoverage.state,
+      stateLabel: stateLabel + repositoryCount,
+      problems: commitCoverage.problems,
+    });
+  }
+  if (!sources.length) return '';
+
+  const rows = sources.map((source) => {
+    const messages = source.problems.map((problem) => {
+      const message = problem.message || problem.kind;
+      return problem.project && message ? `${problem.project}: ${message}` : message;
+    }).filter(Boolean);
     const firstProblem = messages[0] || '';
     const more = messages.length > 1 ? ` (+${nf0.format(messages.length - 1)})` : '';
     const detail = messages.join(' · ');
     const title = messages.length ? ` title="${esc(detail)}"` : '';
-    const aria = ` aria-label="${esc(`${provider.source}: ${SOURCE_STATE_LABELS[provider.state]}${detail ? `. ${detail}` : ''}`)}"`;
-    return `<li class="st-source st-source-${esc(provider.state)}"${title}${aria}>` +
-      `<i aria-hidden="true"></i><span class="st-source-name">${esc(provider.source)}</span>` +
-      `<span class="st-source-state">${esc(SOURCE_STATE_LABELS[provider.state])}</span>` +
+    const aria = ` aria-label="${esc(`${source.source}: ${source.stateLabel}${detail ? `. ${detail}` : ''}`)}"`;
+    return `<li class="st-source st-source-${esc(source.state)}"${title}${aria}>` +
+      `<i aria-hidden="true"></i><span class="st-source-name">${esc(source.source)}</span>` +
+      `<span class="st-source-state">${esc(source.stateLabel)}</span>` +
       (firstProblem ? `<span class="st-source-problem">${esc(firstProblem + more)}</span>` : '') +
       `</li>`;
   }).join('');
-  return `<section class="st-coverage" aria-label="Abdeckung des Arbeitsverlaufs">` +
+  return `<section class="st-coverage" aria-label="Abdeckung der Statistikquellen">` +
     `<span class="st-coverage-label">Quellen</span><ul>${rows}</ul></section>`;
+}
+
+function emptyCommitNote(coverage, commits) {
+  if (!coverage.reported) return '';
+  switch (coverage.state) {
+    case 'available':
+      return commits > 0
+        ? ` ${nf0.format(commits)} Git-${commits === 1 ? 'Commit wurde' : 'Commits wurden'} unabhängig davon gefunden.`
+        : '';
+    case 'partial':
+      return commits > 0
+        ? ` Mindestens ${nf0.format(commits)} Git-${commits === 1 ? 'Commit ist' : 'Commits sind'} bekannt; weitere Repositories fehlen.`
+        : ' In den lesbaren Repositories sind keine eigenen Git-Commits bekannt; weitere Repositories fehlen.';
+    case 'unavailable':
+      return ' Git-Commits konnten nicht bewertet werden.';
+    case 'absent':
+      return ' Für Git-Commits sind keine Repository-Pfade eingerichtet.';
+    default:
+      return '';
+  }
 }
 
 function emptyStatsHtml(data) {
   const t = data.totals;
   const incomplete = data.providers.filter((provider) => provider.state === 'partial' || provider.state === 'unavailable');
-  const commitNote = t.commits > 0
-    ? ` ${nf0.format(t.commits)} Git-${t.commits === 1 ? 'Commit wurde' : 'Commits wurden'} unabhängig davon gefunden.`
-    : '';
+  const commitNote = emptyCommitNote(data.commitCoverage, t.commits);
   if (data.err) {
     return `<div class="st-empty" role="status"><b>Arbeitsverlauf nicht verfügbar</b>` +
       `Agent-Aktivität und Kosten lassen sich für diesen Zeitraum nicht bewerten.${esc(commitNote)}</div>`;
@@ -761,6 +836,30 @@ function emptyStatsHtml(data) {
   }
   return `<div class="st-empty" role="status"><b>Keine Agent-Aktivität im Zeitraum</b>` +
     `In den verfügbaren Verläufen wurden keine Prompts oder Antworten gefunden.${esc(commitNote)}</div>`;
+}
+
+function commitTilePresentation(coverage, commits, range) {
+  const title = coverage.state === 'available' || coverage.state === 'partial'
+    ? 'Nur Commits aus lesbaren Repositories, die zur dort wirksamen Git-Identität passen. Fremde Commits zählen nicht mit.'
+    : 'Ohne lesbare Git-Identität und Git-Verlauf wird kein eigener Commit-Wert angenommen.';
+  switch (coverage.state) {
+    case 'available':
+      return {
+        value: commitValue(commits, coverage.state, compact),
+        note: `nur deine · ${nf1.format(range > 0 ? commits / range : 0)} pro Kalendertag`,
+        title,
+      };
+    case 'partial':
+      return {
+        value: commitValue(commits, coverage.state, compact),
+        note: `${nf0.format(coverage.availableRepositories)}/${nf0.format(coverage.repositories)} Repositories lesbar`,
+        title,
+      };
+    case 'absent':
+      return { value: '–', note: 'keine Repository-Pfade', title };
+    default:
+      return { value: '–', note: 'Git-Daten nicht lesbar', title };
+  }
 }
 
 export function renderStats(el, stats, opts = {}) {
@@ -799,7 +898,7 @@ export function renderStats(el, stats, opts = {}) {
     `${busiest ? ` · aktivster Tag <b>${esc(busiest.weekday)}, ${esc(longDate(busiest.date))}</b> (${esc(busiestActivity)})` : ''}</div></div>` +
     `<div class="st-head-r">${rangeBtns}</div></div>` +
     (data.err ? `<div class="st-err" role="alert">${esc(data.err)}</div>` : '') +
-    coverageHtml(data.providers);
+    coverageHtml(data.providers, data.commitCoverage);
 
   if (t.prompts <= 0 && t.turns <= 0 && t.tokens <= 0) {
     el.innerHTML = head + projectFocus + emptyStatsHtml(data);
@@ -831,6 +930,7 @@ export function renderStats(el, stats, opts = {}) {
   const activeCount = projects.filter((p) => p.active > 0).length;
   const avgPrompts = t.days > 0 ? t.prompts / t.days : 0;
   const perPrompt = t.prompts > 0 ? t.cost / t.prompts : 0;
+  const commitTile = commitTilePresentation(data.commitCoverage, t.commits, data.range);
   const knownCost = t.costState === 'priced' || t.costState === 'partial';
   const costTileNote = t.costState === 'priced'
     ? `Claude-Listenpreise${t.prompts > 0 ? ` · ${money(perPrompt)} pro Prompt` : ''}`
@@ -856,8 +956,8 @@ export function renderStats(el, stats, opts = {}) {
     tileHtml('Kosten', costValue(t.cost, t.costState), costTileNote) +
     tileHtml('Cache-Treffer', pct(t.cacheHit, true), `${compact(t.cacheRead)} gelesen`) +
     tileHtml('Serie', nf0.format(t.streak), `${t.streak === 1 ? 'Tag' : 'Tage'} in Folge aktiv`) +
-    `<div class="st-tile wide" title="Nur Commits, die unter deiner git-Identität stehen — fremde Commits im selben Repository zählen nicht mit."><div class="tx"><div class="k">Commits</div>` +
-      `<div class="v">${esc(compact(t.commits))}</div><div class="n">nur deine · ${esc(nf1.format(t.days > 0 ? t.commits / t.days : 0))} pro Tag</div></div>` +
+    `<div class="st-tile wide" title="${esc(commitTile.title)}"><div class="tx"><div class="k">Commits</div>` +
+      `<div class="v">${esc(commitTile.value)}</div><div class="n">${esc(commitTile.note)}</div></div>` +
       `<div class="st-plot" data-plot="spark"></div></div>` +
     `</div>` +
 
@@ -911,8 +1011,8 @@ export function renderStats(el, stats, opts = {}) {
   el.querySelectorAll('[data-plot]').forEach((p) => { plots[p.getAttribute('data-plot')] = p; });
 
   function draw() {
-    if (plots.spark) drawSpark(plots.spark, d, 'commits', SERIES[0]);
-    if (plots.activity) drawActivity(plots.activity, d);
+    if (plots.spark) drawSpark(plots.spark, d, 'commits', SERIES[0], data.commitCoverage);
+    if (plots.activity) drawActivity(plots.activity, d, data.commitCoverage);
     if (plots.tokens) drawTokens(plots.tokens, d, state.tokenMode);
     if (plots.cost) drawCost(plots.cost, d);
     if (plots.heatmap) drawHeatmap(plots.heatmap, data.heatmap, data.hours);
