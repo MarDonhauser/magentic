@@ -1,4 +1,5 @@
 import './style.css';
+import './overview.css';
 import '@xterm/xterm/css/xterm.css';
 
 import { Terminal } from '@xterm/xterm';
@@ -100,6 +101,7 @@ let view = 'overview';
 let activeTerm = null;
 let ov = null;
 let projects = [];
+let overviewSync = { kind: 'loading', error: '', lastOkAt: '' };
 let confirmRemove = null;
 let confirmRemoveProject = null;
 let editingMain = null;
@@ -110,6 +112,13 @@ let suppressHeadClick = false;
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function errorText(err) {
+  return String(err ?? 'Unbekannter Fehler')
+    .replace(/^Error:\s*/i, '')
+    .replace(/^Fehler:\s*/i, '')
+    .trim() || 'Unbekannter Fehler';
 }
 
 const ICONS = {
@@ -129,6 +138,7 @@ const ICONS = {
   square: '<rect x="3" y="3" width="18" height="18" rx="2"/>',
   terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/>',
   gitbranch: '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+  chart: '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M7 16v-5"/><path d="M12 16V8"/><path d="M17 16v-3"/>',
   cloud: '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
   warn: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
 };
@@ -577,7 +587,7 @@ function showSearch() {
   renderSidebar();
 }
 
-let graphProject = null, boardProject = null, statsRange = 30;
+let graphProject = null, boardProject = null, statsProject = '', statsRange = 30;
 let graphBusy = false, boardBusy = false, statsBusy = false;
 
 function projectNames() {
@@ -670,9 +680,10 @@ async function loadBoard() {
   });
 }
 
-async function showStats() {
+async function showStats(project = '') {
   view = 'stats';
   leaveTerm();
+  statsProject = project ? pickProject(project) : '';
   showPanel('stats-view');
   renderSidebar();
   await loadStats();
@@ -689,9 +700,15 @@ async function loadStats() {
   statsBusy = false;
   if (view !== 'stats') return;
   el.dataset.filled = '1';
-  renderStats(el, s, {
+  const render = () => renderStats(el, s, {
+    project: statsProject,
     onRange: days => { statsRange = days; loadStats(); },
+    onProject: project => {
+      statsProject = project ? pickProject(project) : '';
+      render();
+    },
   });
+  render();
 }
 
 BuildInfo()
@@ -1330,28 +1347,39 @@ function projectCard(p) {
   let projectTools = '';
   if (p.path) {
     const mainCfg = editingMain === p.name
-      ? `<span class="maincfg"><input class="inline-input" id="main-input" value="${esc(p.mainBranch)}" placeholder="main">` +
-        `<button class="btn tiny" data-act="mainsave" data-project="${esc(p.name)}">${icon('check')}</button>` +
-        `<button class="btn tiny" data-act="maincancel">${icon('x')}</button></span>`
-      : `<span class="maincfg">Hauptbranch <b>${esc(p.mainBranch)}</b></span>` +
-        `<button class="btn tiny" data-act="mainedit" data-project="${esc(p.name)}" title="Hauptbranch ändern">${icon('pencil')}</button>`;
+      ? `<div class="project-menu-config"><label for="main-input">Hauptbranch</label>` +
+        `<span class="maincfg"><input class="inline-input" id="main-input" value="${esc(p.mainBranch)}" placeholder="main">` +
+        `<button class="btn tiny" data-act="mainsave" data-project="${esc(p.name)}" title="Hauptbranch speichern">${icon('check')}</button>` +
+        `<button class="btn tiny" data-act="maincancel" title="Änderung verwerfen">${icon('x')}</button></span></div>`
+      : `<button class="project-menu-item" data-act="mainedit" data-project="${esc(p.name)}" title="Hauptbranch ändern">` +
+        `<span>${icon('gitbranch')} Hauptbranch</span><b>${esc(p.mainBranch)}</b></button>`;
     const rmProj = confirmRemoveProject === p.name
-      ? `<button class="btn danger confirm" data-act="rmproj2" data-project="${esc(p.name)}">Repo wirklich entfernen?</button>`
-      : `<button class="btn danger" data-act="rmproj1" data-project="${esc(p.name)}" title="Repository aus magentic entfernen — löscht keine Dateien">${icon('x')} Repo</button>`;
-    projectTools = `<div class="project-tools">${mainCfg}<span class="actions">` +
-      `<button class="btn" data-act="showgraph" data-project="${esc(p.name)}" title="Git-Graph dieses Projekts — wo Worktrees abzweigen und zusammenlaufen">${developerIcon('git')} Graph</button>` +
-      `<button class="btn" data-act="showboard" data-project="${esc(p.name)}" title="Board aus allen Spec-Ordnern — Plan, Tasks und was gerade läuft">${developerIcon('markdown')} Board</button>` +
-      `<button class="btn" data-act="newsession" data-project="${esc(p.name)}" title="Neue Claude-Session im Projekt">${developerIcon('claude')} Session</button>` +
+      ? `<button class="project-menu-item danger confirm" data-act="rmproj2" data-project="${esc(p.name)}">${icon('x')} Repository wirklich entfernen?</button>`
+      : `<button class="project-menu-item danger" data-act="rmproj1" data-project="${esc(p.name)}" title="Repository aus magentic entfernen — löscht keine Dateien">${icon('x')} Repository entfernen</button>`;
+    const menuOpen = editingMain === p.name || confirmRemoveProject === p.name ? ' open' : '';
+    projectTools = `<div class="project-tools">` +
+      `<div class="project-lenses"><span class="project-tools-label">Ansichten</span>` +
+      `<button class="project-lens" data-act="showgraph" data-project="${esc(p.name)}" title="Git-Graph dieses Projekts — wo Worktrees abzweigen und zusammenlaufen">${developerIcon('git')} Graph</button>` +
+      `<button class="project-lens" data-act="showboard" data-project="${esc(p.name)}" title="Board aus allen Spec-Ordnern — Plan, Tasks und was gerade läuft">${developerIcon('markdown')} Board</button>` +
+      `<button class="project-lens" data-act="showstats" data-project="${esc(p.name)}" title="Statistik mit Fokus auf dieses Projekt">${icon('chart')} Statistik</button></div>` +
+      `<div class="project-primary-actions">` +
+      `<button class="btn primary" data-act="newsession" data-project="${esc(p.name)}" title="Neue Session im Projekt">${icon('play')} Session</button>` +
       `<button class="btn" data-act="newworktree" data-project="${esc(p.name)}" title="Neue Session in eigenem Worktree">${developerIcon('git')} Worktree</button>` +
-      `<button class="btn" data-act="newterm" data-project="${esc(p.name)}" title="Reines Terminal im Projekt — Shell statt Claude">${developerIcon('bash')} Terminal</button>` +
-      `<button class="btn" data-act="deploy" data-project="${esc(p.name)}" title="Neue Claude-Session, die /deploy ausführt">${icon('rocket')} deploy</button>${rmProj}</span></div>`;
+      `<details class="project-more"${menuOpen}><summary>Mehr</summary><div class="project-more-menu">` +
+      `<button class="project-menu-item" data-act="newterm" data-project="${esc(p.name)}" title="Reines Terminal im Projekt — Shell statt Agent">${developerIcon('bash')} Terminal öffnen</button>` +
+      `<button class="project-menu-item" data-act="deploy" data-project="${esc(p.name)}" title="Neue Session, die /deploy ausführt">${icon('rocket')} Deploy starten</button>` +
+      `<div class="project-menu-separator"></div>${mainCfg}${rmProj}</div></details></div></div>`;
   }
-  return `<div class="card"><div class="card-head"><h2>${esc(p.name)}</h2>` +
+  const mainBranch = p.path
+    ? `<span class="project-main-branch" title="Hauptbranch">${icon('gitbranch')} ${esc(p.mainBranch)}</span>`
+    : '';
+  return `<div class="card project-card"><div class="card-head"><h2>${esc(p.name)}</h2>${mainBranch}` +
     `<span class="path">${esc(p.path || '')}</span></div><div class="rows">${rows}</div>${projectTools}</div>`;
 }
 
 let deployStatus = null;
 let deployStamp = '';
+let deploySync = { kind: 'loading', error: '', lastOkAt: '' };
 let argoExpanded = false;
 let dsWatchUntil = 0;
 let deploySawRunning = false;
@@ -1395,6 +1423,13 @@ function deployStage() {
 }
 
 function renderDeployBadge() {
+  if (deploySync.kind === 'stale') {
+    deployBadgeEl.className = 'db-stale';
+    deployBadgeEl.innerHTML =
+      `<div class="db-line"><span class="db-title">${icon('warn')} Deploy-Stand unklar</span></div>` +
+      `<div class="db-sub">Letzter erfolgreicher Stand bleibt sichtbar</div>`;
+    return;
+  }
   const s = deployStage();
   if (!s) { deployBadgeEl.className = ''; deployBadgeEl.innerHTML = ''; return; }
   deployBadgeEl.className = s.cls;
@@ -1560,6 +1595,7 @@ overviewEl.addEventListener('click', async e => {
       case 'open': await openSession(d.agent); break;
       case 'showgraph': await showGraph(d.project); break;
       case 'showboard': await showBoard(d.project); break;
+      case 'showstats': await showStats(d.project); break;
       case 'done': await act(DoneAgent(d.agent), `/done an „${d.agent}" gesendet — Plan in der Session bestätigen`); break;
       case 'cleanup': await act(Cleanup(d.path, d.main), n => `Cleanup-Agent „${n}" gestartet`); break;
       case 'merge': await act(Merge(d.project, d.source, d.target), n => `Merge-Agent „${n}" gestartet (${d.source} → ${d.target})`); break;
@@ -1597,7 +1633,7 @@ overviewEl.addEventListener('click', async e => {
         await act(SetMainBranch(d.project, v), v ? `Hauptbranch: ${v}` : 'Hauptbranch: automatisch');
         break;
       }
-      case 'dsrefresh': refreshDeployStatus(); break;
+      case 'dsrefresh': await refreshDeployStatus(); break;
       case 'azsub': await openSubPicker(b); break;
       case 'azlogin': AzLogin(); toast('Browser öffnet sich für den Azure-Login…'); break;
       case 'argologin': ArgoLogin(); toast('Browser öffnet sich für den Argo-SSO-Login…'); break;
