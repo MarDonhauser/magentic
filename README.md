@@ -223,7 +223,7 @@ Wert) wird zugleich die neue Voreinstellung. Alles liegt in
 **Tasten in der App:** `⌘0` Übersicht · `⌘1`–`⌘9` Session aus der Sidebar ·
 `⌘G` Git-Graph · `⌘B` Board · `⌘⇧S` Statistik · `⌃\`` Terminal-Dock ·
 `Esc` beendet die Pausenansicht ·
-`⌘W` zurück zur Übersicht · `⌘⇧W` Session beenden · **`⌘T` Terminal im
+`⌘W` zurück zur Übersicht · `⌘⇧W` Session für später schließen · **`⌘T` Terminal im
 Verzeichnis der gerade offenen Session** (funktioniert auch, wenn der Fokus im
 Terminal liegt — Claude bekommt die Kombo nicht zu sehen).
 - **Zeitgeist** — Widget links unten: Timer starten/pausieren/stoppen,

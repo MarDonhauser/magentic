@@ -188,7 +188,7 @@ async function act(promise, okMsg) {
     await refresh(true);
     return res;
   } catch (err) {
-    toast('Fehler: ' + err, true);
+    toast('Aktion fehlgeschlagen: ' + errorText(err), true);
     throw err;
   }
 }
@@ -352,8 +352,8 @@ function updateTermBar() {
     (a?.project && a.project !== '(ohne Projekt)' ? `<span class="tb-proj">${esc(a.project)}</span>` : '') +
     `<span class="tb-actions">` + claudeActions +
     `<button class="btn tiny" id="tb-links" title="Links aus dieser Session anzeigen — Klick öffnet im Browser, ⌥-Klick kopiert">${icon('link')} links</button>` +
-    `<button class="btn tiny" id="tb-later" title="Für später schließen — Session wird beendet, bleibt aber in der Seitenleiste unter „Für später" und lässt sich dort wieder öffnen">${icon('clock')}</button>` +
-    `<button class="btn tiny danger" id="tb-kill" title="Session beenden (⌘⇧W)">${icon('x')}</button></span>`;
+    `<button class="btn tiny" id="tb-later" title="Für später schließen (⌘⇧W) — bleibt in der Seitenleiste und lässt sich wieder öffnen">${icon('clock')}</button>` +
+    `<button class="btn tiny danger" id="tb-kill" title="Session endgültig beenden">${icon('x')}</button></span>`;
   $('tb-back').onclick = showOverview;
   if (!a?.term) {
     $('tb-done').onclick = () =>
@@ -728,6 +728,9 @@ sidebarToolsEl.addEventListener('click', e => {
 });
 document.addEventListener('mousedown', e => {
   if (sidebarToolsEl.open && !sidebarToolsEl.contains(e.target)) sidebarToolsEl.open = false;
+  document.querySelectorAll('.project-more[open]').forEach(menu => {
+    if (!menu.contains(e.target)) menu.open = false;
+  });
 });
 
 for (const id of ['graph-view', 'board-view']) {
@@ -1485,9 +1488,29 @@ function argoRow(a) {
     `<span class="ds-info" style="color:${healthColor}">${esc(a.health)}</span></div>`;
 }
 
+function deploySyncState() {
+  if (!['stale', 'error'].includes(deploySync.kind)) return '';
+  const hasData = !!deployStatus;
+  const title = deploySync.kind === 'stale'
+    ? 'Pipeline-Status konnte nicht aktualisiert werden'
+    : 'Pipeline-Status ist nicht erreichbar';
+  const last = deploySync.lastOkAt
+    ? ` Letzter erfolgreicher Stand: ${deploySync.lastOkAt}.`
+    : '';
+  return `<div class="overview-sync ${hasData ? 'is-stale' : 'is-error'}" role="${hasData ? 'status' : 'alert'}">` +
+    `<span class="overview-sync-icon">${icon('warn')}</span>` +
+    `<span class="overview-sync-copy"><strong>${title}</strong>` +
+    `<span>${esc(deploySync.error)}${esc(last)}</span></span>` +
+    `<button class="btn" data-act="dsrefresh">Erneut versuchen</button></div>`;
+}
+
 function deployCard() {
   const ds = deployStatus;
   if (!ds) {
+    if (deploySync.kind === 'error') {
+      return `<div class="card" id="deploy-card"><div class="card-head"><h2>${icon('rocket')} Pipelines &amp; Argo</h2></div>` +
+        `${deploySyncState()}</div>`;
+    }
     return `<div class="card" id="deploy-card"><div class="card-head"><h2>${icon('rocket')} Pipelines &amp; Argo</h2>` +
       `<span class="path">lade…</span></div></div>`;
   }
@@ -1521,7 +1544,7 @@ function deployCard() {
     `${azChip}${subChip}${argoChip}${watching}` +
     `<span class="actions"><span class="path">${esc(deployStamp)}</span>` +
     `<button class="btn tiny" data-act="dsrefresh" title="Status neu laden">↻</button></span></div>` +
-    `<div class="ds-cols"><div class="ds-col"><div class="ds-title">${developerIcon('azure')} Azure DevOps Builds</div>${builds}</div>` +
+    `${deploySyncState()}<div class="ds-cols"><div class="ds-col"><div class="ds-title">${developerIcon('azure')} Azure DevOps Builds</div>${builds}</div>` +
     `<div class="ds-col"><div class="ds-title">${developerIcon('kubernetes')} ArgoCD</div>${argoHtml}</div></div></div>`;
 }
 
@@ -1531,10 +1554,24 @@ async function refreshDeployStatus() {
   dsLoading = true;
   try {
     deployStatus = await DeployStatus();
-    deployStamp = 'Stand ' + new Date().toLocaleTimeString('de-DE');
+    const now = new Date().toLocaleTimeString('de-DE');
+    deployStamp = 'Stand ' + now;
+    deploySync = { kind: 'fresh', error: '', lastOkAt: now };
     renderDeployBadge();
     if (view === 'overview') renderOverview();
-  } catch (e) { /* Backend nicht bereit */ }
+  } catch (e) {
+    const next = {
+      kind: deployStatus ? 'stale' : 'error',
+      error: errorText(e),
+      lastOkAt: deploySync.lastOkAt,
+    };
+    const changed = next.kind !== deploySync.kind || next.error !== deploySync.error;
+    deploySync = next;
+    if (changed) {
+      renderDeployBadge();
+      if (view === 'overview') renderOverview();
+    }
+  }
   dsLoading = false;
 }
 
@@ -1547,14 +1584,33 @@ EventsOn('login:argo', msg => {
   refreshDeployStatus();
 });
 
+function overviewSyncState() {
+  if (!['stale', 'error'].includes(overviewSync.kind)) return '';
+  const hasData = !!ov;
+  const title = hasData ? 'Aktualisierung unterbrochen' : 'Übersicht ist nicht erreichbar';
+  const last = overviewSync.lastOkAt
+    ? ` Daten vom letzten erfolgreichen Stand (${overviewSync.lastOkAt}) bleiben sichtbar.`
+    : '';
+  return `<section class="overview-sync ${hasData ? 'is-stale' : 'is-error'}" role="${hasData ? 'status' : 'alert'}">` +
+    `<span class="overview-sync-icon">${icon('warn')}</span>` +
+    `<span class="overview-sync-copy"><strong>${title}</strong>` +
+    `<span>${esc(overviewSync.error)}${esc(last)}</span></span>` +
+    `<button class="btn" data-act="retryoverview">Erneut versuchen</button></section>`;
+}
+
 function renderOverview() {
-  if (!ov) { overviewEl.innerHTML = '<div class="none" style="padding:30px">lade…</div>'; return; }
+  if (!ov) {
+    overviewEl.innerHTML = overviewSync.kind === 'error'
+      ? `<div class="overview-initial-error">${overviewSyncState()}</div>`
+      : '<div class="none" style="padding:30px">lade…</div>';
+    return;
+  }
   const ae = document.activeElement;
   if (ae && overviewEl.contains(ae) && ['INPUT', 'SELECT', 'TEXTAREA'].includes(ae.tagName)) {
     return;
   }
   const cards = (ov.projects || []).map(projectCard).join('');
-  overviewEl.innerHTML = `${attentionOverview()}${cards}${deployCard()}` +
+  overviewEl.innerHTML = `${overviewSyncState()}${attentionOverview()}${cards}${deployCard()}` +
     `<div class="add-repo"><button class="btn" data-act="addproject" title="Git-Repository als Projekt hinzufügen">+ Repository hinzufügen…</button></div>` +
     `<div class="stamp">Stand ${esc(ov.generatedAt || '')}</div>`;
 }
@@ -1592,6 +1648,7 @@ overviewEl.addEventListener('click', async e => {
   b.disabled = true;
   try {
     switch (d.act) {
+      case 'retryoverview': await refresh(true); break;
       case 'open': await openSession(d.agent); break;
       case 'showgraph': await showGraph(d.project); break;
       case 'showboard': await showBoard(d.project); break;
@@ -1642,16 +1699,23 @@ overviewEl.addEventListener('click', async e => {
   b.disabled = false;
 });
 
-let refreshing = false;
 let lastDataKey = '';
-async function refresh(force) {
-  if (refreshing && !force) return;
-  refreshing = true;
+let refreshPromise = null;
+let refreshQueuedForce = false;
+
+async function refreshOnce(force) {
+  const previousKind = overviewSync.kind;
   try {
     const [o, p] = await Promise.all([Overview(!!force), Projects()]);
     ov = o; projects = p || [];
+    overviewSync = {
+      kind: 'fresh',
+      error: '',
+      lastOkAt: o.generatedAt || new Date().toLocaleTimeString('de-DE'),
+    };
     const key = JSON.stringify([{ ...o, generatedAt: '' }, projects]);
-    if (key === lastDataKey && !force) {
+    const recovered = previousKind === 'stale' || previousKind === 'error';
+    if (key === lastDataKey && !force && !recovered) {
       const stamp = document.querySelector('.stamp');
       if (stamp) stamp.textContent = 'Stand ' + (o.generatedAt || '');
     } else {
@@ -1659,8 +1723,36 @@ async function refresh(force) {
       if (editingMain === null || force) renderAll();
       else renderSidebar();
     }
-  } catch (e) { /* Backend noch nicht bereit */ }
-  refreshing = false;
+  } catch (e) {
+    const next = {
+      kind: ov ? 'stale' : 'error',
+      error: errorText(e),
+      lastOkAt: overviewSync.lastOkAt || ov?.generatedAt || '',
+    };
+    const changed = next.kind !== overviewSync.kind || next.error !== overviewSync.error;
+    overviewSync = next;
+    if (changed && view === 'overview') renderOverview();
+  }
+}
+
+async function refresh(force = false) {
+  if (refreshPromise) {
+    if (force) refreshQueuedForce = true;
+    return refreshPromise;
+  }
+  refreshPromise = (async () => {
+    let nextForce = !!force;
+    do {
+      refreshQueuedForce = false;
+      await refreshOnce(nextForce);
+      nextForce = refreshQueuedForce;
+    } while (nextForce);
+  })();
+  try {
+    await refreshPromise;
+  } finally {
+    refreshPromise = null;
+  }
 }
 
 window.addEventListener('resize', () => {
@@ -2048,6 +2140,8 @@ window.addEventListener('keydown', e => {
   if (e.key === 'Escape' && subMenuEl.style.display === 'block') { hideSubMenu(); return; }
   if (e.key === 'Escape' && modalEl.style.display === 'flex') { modalEl.style.display = 'none'; return; }
   if (e.key === 'Escape' && menuEl.style.display === 'block') { hideMenu(); return; }
+  const projectMenu = document.querySelector('.project-more[open]');
+  if (e.key === 'Escape' && projectMenu) { projectMenu.open = false; return; }
   if (!e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.key >= '1' && e.key <= '9') {
     const name = sidebarSessions[parseInt(e.key) - 1];
@@ -2058,7 +2152,7 @@ window.addEventListener('keydown', e => {
   } else if (e.key.toLowerCase() === 'w') {
     e.preventDefault();
     if (e.shiftKey) {
-      if (activeTerm) killSession(activeTerm);
+      if (activeTerm) parkSession(activeTerm);
     } else if (view !== 'overview') {
       showOverview();
     }

@@ -508,7 +508,7 @@ function drawHeatmap(host, heatmap, hours) {
   bindPlot(host, s + '</svg>', tips);
 }
 
-function drawProjects(host, projects) {
+function drawProjects(host, projects, focusName = '') {
   const W = measure(host, 300);
   const rowH = 34;
   const padT = 18;
@@ -537,11 +537,16 @@ function drawProjects(host, projects) {
   projects.forEach((p, i) => {
     const y = padT + i * rowH;
     const active = p.active > 0;
+    const focused = !!focusName && p.name === focusName;
     const w = Math.max(2, (p.tokens / max) * barW);
     const label = p.name || 'ohne Projekt';
     const maxChars = Math.max(8, Math.floor(nameW / 6.6));
     const clipped = label.length > maxChars ? label.slice(0, maxChars - 1) + '…' : label;
-    s += `<text class="st-ax-s" x="0" y="${y + rowH / 2}" dominant-baseline="middle" fill="${active ? 'var(--ink)' : 'var(--ink-2)'}">${esc(clipped)}</text>`;
+    if (focused) {
+      s += `<rect class="st-project-focus-row" x="0" y="${y + 2}" width="${W}" height="${rowH - 4}" rx="5"/>`;
+      s += `<rect x="0" y="${y + 8}" width="3" height="${rowH - 16}" rx="1.5" fill="var(--accent)"/>`;
+    }
+    s += `<text class="st-ax-s" x="${focused ? 8 : 0}" y="${y + rowH / 2}" dominant-baseline="middle" fill="${active || focused ? 'var(--ink)' : 'var(--ink-2)'}"${focused ? ' font-weight="700"' : ''}>${esc(clipped)}</text>`;
     if (active) s += `<circle cx="${nameW + 4}" cy="${y + rowH / 2}" r="3" fill="var(--accent)"/>`;
     s += `<path d="${rightRound(barX, y + rowH / 2 - 7, w, 14, 4)}" fill="${active ? SERIES[0] : FADED}"/>`;
     s += `<text class="st-ax" x="${barX + w + 7}" y="${y + rowH / 2}" dominant-baseline="middle">${esc(compact(p.tokens))}</text>`;
@@ -549,7 +554,7 @@ function drawProjects(host, projects) {
     if (!narrow) s += `<text class="st-ax" x="${promptsX}" y="${y + rowH / 2}" text-anchor="end" dominant-baseline="middle">${esc(compact(p.prompts))}</text>`;
     s += `<text class="st-ax" x="${commitsX}" y="${y + rowH / 2}" text-anchor="end" dominant-baseline="middle">${esc(nf0.format(p.commits))}</text>`;
     tips.push({
-      html: `<div class="st-tip-t">${esc(label)}${active ? ' · aktive Session' : ''}</div>` +
+      html: `<div class="st-tip-t">${esc(label)}${focused ? ' · Projektfokus' : ''}${active ? ' · aktive Session' : ''}</div>` +
         tipRow('Tokens', esc(compact(p.tokens)), active ? SERIES[0] : FADED) +
         tipRow('Kosten', esc(money(p.cost))) +
         tipRow('Prompts', esc(nf0.format(p.prompts))) +
@@ -638,6 +643,23 @@ function tileHtml(label, value, note, unit) {
     `<div class="n">${esc(note || '')}</div></div>`;
 }
 
+function projectFocusHtml(name, project, range) {
+  if (!name) return '';
+  const metrics = project
+    ? `<div class="st-project-metrics">` +
+      `<span><b>${esc(compact(project.tokens))}</b> Tokens</span>` +
+      `<span><b>${esc(money(project.cost))}</b> Kosten</span>` +
+      `<span><b>${esc(nf0.format(project.prompts))}</b> Prompts</span>` +
+      `<span><b>${esc(nf0.format(project.sessions))}</b> Sessions</span>` +
+      `<span><b>${esc(nf0.format(project.commits))}</b> Commits</span></div>`
+    : `<div class="st-project-empty"><strong>Keine Aktivität für dieses Projekt</strong>` +
+      `<span>Im gewählten Zeitraum wurden keine zuordenbaren Sessions oder Commits gefunden.</span></div>`;
+  return `<section class="st-project-focus" aria-label="Projektfokus ${esc(name)}">` +
+    `<div class="st-project-focus-head"><div><h2>${esc(name)}</h2>` +
+    `<p>Projektwerte für ${esc(nf0.format(range))} Tage. Alle Kennzahlen und Diagramme darunter zeigen weiterhin alle Projekte.</p></div>` +
+    `<button type="button" data-clear-project>Gesamtansicht</button></div>${metrics}</section>`;
+}
+
 export function renderStats(el, stats, opts = {}) {
   if (!el) return;
   if (typeof el.__statsCleanup === 'function') el.__statsCleanup();
@@ -646,6 +668,11 @@ export function renderStats(el, stats, opts = {}) {
   const data = normalize(stats);
   const d = data.days;
   const t = data.totals;
+  const focusName = String(opts.project || '');
+  const focusedProject = focusName
+    ? data.projects.find((project) => project.name === focusName)
+    : null;
+  const projectFocus = projectFocusHtml(focusName, focusedProject, data.range);
   const state = { tokenMode: 'abs' };
 
   el.classList.add('st-root');
@@ -666,10 +693,11 @@ export function renderStats(el, stats, opts = {}) {
     (data.err ? `<div class="st-err">${esc(data.err)}</div>` : '');
 
   if (t.prompts <= 0) {
-    el.innerHTML = head +
+    el.innerHTML = head + projectFocus +
       `<div class="st-empty"><b>Noch keine Aktivität im Zeitraum</b>` +
       `Sobald du Sessions startest und Prompts schickst, füllen sich hier Verlauf, Arbeitsrhythmus, Projekte und Kosten.</div>`;
     wireRange(el, opts);
+    wireProject(el, opts);
     el.__statsCleanup = () => {};
     return;
   }
@@ -689,7 +717,7 @@ export function renderStats(el, stats, opts = {}) {
   const avgPrompts = t.days > 0 ? t.prompts / t.days : 0;
   const perPrompt = t.prompts > 0 ? t.cost / t.prompts : 0;
 
-  el.innerHTML = head +
+  el.innerHTML = head + projectFocus +
     `<div class="st-tiles">` +
     tileHtml('Prompts', compact(t.prompts), `Ø ${nf1.format(avgPrompts)} pro Tag`) +
     tileHtml('Turns', compact(t.turns), t.prompts > 0 ? `${nf1.format(t.turns / t.prompts)} pro Prompt` : '') +
@@ -760,7 +788,7 @@ export function renderStats(el, stats, opts = {}) {
     if (plots.tokens) drawTokens(plots.tokens, d, state.tokenMode);
     if (plots.cost) drawCost(plots.cost, d);
     if (plots.heatmap) drawHeatmap(plots.heatmap, data.heatmap, data.hours);
-    if (plots.projects) drawProjects(plots.projects, projects);
+    if (plots.projects) drawProjects(plots.projects, projects, focusName);
     if (plots.models) drawModelBar(plots.models, modelsSorted, slotOf);
     if (note) note.textContent = noteText[state.tokenMode] || '';
   }
@@ -778,6 +806,7 @@ export function renderStats(el, stats, opts = {}) {
     });
   }
   wireRange(el, opts);
+  wireProject(el, opts);
 
   function hideTip() {
     tip.classList.remove('on');
@@ -874,6 +903,12 @@ function wireRange(el, opts) {
     box.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
     opts.onRange(+b.getAttribute('data-range'));
   });
+}
+
+function wireProject(el, opts) {
+  if (typeof opts.onProject !== 'function') return;
+  const clear = el.querySelector('[data-clear-project]');
+  if (clear) clear.addEventListener('click', () => opts.onProject(''));
 }
 
 export default renderStats;

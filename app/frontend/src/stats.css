@@ -81,6 +81,98 @@
   margin-bottom: 6px;
 }
 
+.st-project-focus {
+  margin: -2px 0 16px;
+  padding: 13px 15px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.st-project-focus-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.st-project-focus-head > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.st-project-focus h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.st-project-focus p {
+  max-width: 78ch;
+  margin: 3px 0 0;
+  color: var(--ink-2);
+  font-size: 11.5px;
+}
+
+.st-project-focus button {
+  flex: none;
+  padding: 4px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11.5px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.st-project-focus button:hover {
+  background: var(--raise);
+  color: var(--ink);
+}
+
+.st-project-metrics {
+  display: flex;
+  align-items: baseline;
+  gap: 9px 22px;
+  flex-wrap: wrap;
+  margin-top: 11px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.st-project-metrics span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.st-project-metrics b {
+  color: var(--ink);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.st-project-empty {
+  display: flex;
+  gap: 5px;
+  flex-direction: column;
+  margin-top: 11px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  color: var(--ink-2);
+  font-size: 11.5px;
+}
+
+.st-project-empty strong {
+  color: var(--ink);
+  font-size: 12.5px;
+}
+
 .st-tiles {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
@@ -207,6 +299,7 @@
 .st-gl { stroke: var(--grid); stroke-width: 1; shape-rendering: crispEdges; }
 .st-base { stroke: var(--border); stroke-width: 1; shape-rendering: crispEdges; }
 .st-band { fill: var(--raise); opacity: 0; pointer-events: none; }
+.st-project-focus-row { fill: var(--accent-soft); pointer-events: none; }
 .st-cross { opacity: 0; pointer-events: none; }
 .st-cross line { stroke: var(--muted); stroke-width: 1; }
 .st-hit { fill: transparent; cursor: default; }
@@ -314,3 +407,15 @@
   cursor: help;
 }
 .st-tile:hover .st-q { color: var(--ink-2); border-color: var(--ink-2); }
+
+.st-project-focus button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 680px) {
+  .st-project-focus-head {
+    flex-direction: column;
+    gap: 8px;
+  }
+}
