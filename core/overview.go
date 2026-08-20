@@ -26,6 +26,8 @@ type OvAgent struct {
 	Branch     string `json:"branch,omitempty"`
 	Unread     bool   `json:"unread"`
 	Dock       bool   `json:"dock"`
+	HandoffSource bool `json:"handoffSource"`
+	HandoffTarget bool `json:"handoffTarget"`
 }
 
 type OvWorktree struct {
@@ -298,9 +300,11 @@ func toOvAgent(a Agent, statuses map[string]AgentStatus, activity map[string]tim
 		sc = CollectSessionChangesCached(a, gi)
 		branch = gi.Branch
 	}
+	tool := overviewAgentTool(a, tools)
+	handoffCapable := strings.TrimSpace(a.SessionID) != "" || (tool != "" && tool != AgentToolBash)
 	return OvAgent{
 		Name:       a.Name,
-		Tool:       overviewAgentTool(a, tools),
+		Tool:       tool,
 		Status:     statusKey(st),
 		Label:      st.Label(),
 		Detail:     detail,
@@ -316,14 +320,19 @@ func toOvAgent(a Agent, statuses map[string]AgentStatus, activity map[string]tim
 		Branch:     branch,
 		Unread:     unread(st, a.SeenAt, lastActive),
 		Dock:       a.IsDock(),
+		HandoffSource: handoffCapable,
+		HandoffTarget: handoffCapable,
 	}
 }
 
 func overviewAgentTool(a Agent, tools map[string]string) string {
+	if tool := tools[a.Name]; tool != "" {
+		return tool
+	}
 	if a.IsTerm() {
 		return AgentToolBash
 	}
-	return tools[a.Name]
+	return ""
 }
 
 func unread(st AgentStatus, seenAt, lastActive time.Time) bool {

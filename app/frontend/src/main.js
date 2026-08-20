@@ -141,7 +141,7 @@ const ICONS = {
   chart: '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M7 16v-5"/><path d="M12 16V8"/><path d="M17 16v-3"/>',
   cloud: '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
   warn: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
-  magnet: '<path d="m6 15-4-4 6.6-6.6a4.95 4.95 0 0 1 7 7L9 18"/><path d="m13 7 4 4"/><path d="m5 12 4 4"/>',
+  magnet: '<path d="M6 8v4a6 6 0 0 0 12 0V8"/><path d="M4 3h4v5H4z"/><path d="M16 3h4v5h-4z"/>',
 };
 
 function icon(name) {
@@ -757,7 +757,7 @@ let suppressHandoffClick = false;
 
 function handoffSourceReason(agent) {
   if (!agent) return 'Session nicht gefunden';
-  if (agent.term) return 'Reine Terminals haben keinen KI-Verlauf zum Übergeben';
+  if (agent.term && agent.handoffSource !== true) return 'Reine Terminals haben keinen KI-Verlauf zum Übergeben';
   if (agent.handoffSource === false) return 'Für diese Session ist keine übertragbare Session-ID bekannt';
   return '';
 }
@@ -765,7 +765,7 @@ function handoffSourceReason(agent) {
 function handoffTargetReason(source, agent) {
   if (!agent) return 'Zielsession nicht gefunden';
   if (agent.name === source) return 'Quelle und Ziel müssen verschieden sein';
-  if (agent.term) return 'Kontext kann nur an eine KI-Session übergeben werden';
+  if (agent.term && agent.handoffTarget !== true) return 'Kontext kann nur an eine KI-Session übergeben werden';
   if (agent.handoffTarget === false) return 'Dieses Ziel unterstützt noch keine sichere Kontextübergabe';
   if (agent.status === 'blocked') return `${agent.name} wartet auf eine Eingabe — zuerst den offenen Dialog beantworten`;
   if (['exited', 'dead'].includes(agent.status)) return `${agent.name} läuft nicht mehr`;
@@ -892,7 +892,6 @@ function sessionMagnetPointerDown(e, term) {
   if (e.button !== 0 || handoffBusy) return;
   if (handoffSourceName && handoffSourceName !== term.name) return;
   if (handoffSourceReason(agentInfo(term.name))) return;
-  e.preventDefault();
   e.stopPropagation();
   handoffDrag = {
     source: term.name,

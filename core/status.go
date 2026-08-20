@@ -177,7 +177,13 @@ func CollectAgentTools(agents []Agent) map[string]string {
 	infos := TmuxPaneInfos()
 	tools := make(map[string]string, len(agents))
 	for _, agent := range agents {
-		tool := DetectAgentTool(infos[SessionName(agent.Name)].Command, agent.IsTerm())
+		// KindTerm beschreibt, wie die Session gestartet wurde. Sobald darin ein
+		// unterstützter KI-Client läuft, ist dessen aktueller Prozess die ehrlichere
+		// Identität; nur eine weiterhin reine Shell bleibt "bash".
+		tool := DetectAgentTool(infos[SessionName(agent.Name)].Command, false)
+		if tool == "" && agent.IsTerm() {
+			tool = AgentToolBash
+		}
 		if tool != "" {
 			tools[agent.Name] = tool
 		}

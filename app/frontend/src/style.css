@@ -1594,17 +1594,19 @@ body.tl-open #timeline { display: flex; }
   overflow: hidden;
   min-height: 0;
   min-width: 0;
+  transition: border-color var(--duration-fast) var(--ease-out),
+              box-shadow var(--duration-fast) var(--ease-out);
 }
-#hydra-grid .term-wrap .term-inner { top: 24px; }
+#hydra-grid .term-wrap .term-inner { top: 30px; }
 #hydra-grid .term-wrap.focused { border-color: var(--accent); }
 .hydra-head {
   display: none;
   position: absolute;
   top: 0; left: 0; right: 0;
-  height: 24px;
+  height: 30px;
   align-items: center;
-  gap: 7px;
-  padding: 0 8px;
+  gap: 6px;
+  padding: 0 3px 0 8px;
   background: var(--surface);
   border-bottom: 1px solid var(--grid);
   font-size: 11px;
@@ -1615,18 +1617,136 @@ body.tl-open #timeline { display: flex; }
 .hydra-head .hh-avatar { display: flex; flex: none; }
 .hydra-head .hh-name { font-weight: 650; color: var(--ink); }
 .hydra-head .hh-status { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-.hydra-head .hh-max {
-  border: none; background: none; color: var(--muted);
-  cursor: pointer; font-size: 13px; padding: 0 2px;
-}
-.hydra-head .hh-max:hover { color: var(--accent); }
+.hydra-head .hh-magnet,
+.hydra-head .hh-max,
 .hydra-head .hh-kill {
-  border: none; background: none; color: var(--muted);
-  cursor: pointer; font-size: 12px; padding: 0 2px;
+  position: relative;
+  min-width: 26px;
+  height: 26px;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out),
+              background-color var(--duration-fast) var(--ease-out),
+              box-shadow var(--duration-fast) var(--ease-out);
+}
+.hydra-head .hh-magnet .ico { width: 14px; height: 14px; }
+.hydra-head .hh-max { font-size: 13px; }
+.hydra-head .hh-kill { font-size: 12px; white-space: nowrap; }
+.hydra-head .hh-magnet:hover:not(:disabled),
+.hydra-head .hh-max:hover {
+  background: var(--raise-2);
+  color: var(--accent);
+}
+.hydra-head .hh-kill:hover,
+.hydra-head .hh-kill[data-confirm] {
+  background: color-mix(in srgb, var(--critical) 10%, transparent);
+  color: var(--critical);
+}
+.hydra-head .hh-magnet:disabled { cursor: not-allowed; opacity: 0.32; }
+.hydra-head .hh-magnet.is-source {
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 36%, transparent);
+}
+.hydra-head .hh-magnet.is-target { color: var(--accent); }
+.hydra-head .hh-magnet.is-target:hover {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+#hydra-grid .term-wrap.handoff-source,
+#hydra-grid .term-wrap.handoff-target {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--grid));
+}
+#hydra-grid .term-wrap.handoff-source::after,
+#hydra-grid .term-wrap.handoff-target::after {
+  position: absolute;
+  z-index: 5;
+  top: 38px;
+  right: 8px;
+  padding: 3px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 36%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--term-bg) 92%, transparent);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 650;
+  pointer-events: none;
+  box-shadow: var(--card-shadow);
+}
+#hydra-grid .term-wrap.handoff-source::after { content: "Quelle"; }
+#hydra-grid .term-wrap.handoff-target::after { content: "Hier ablegen"; }
+#hydra-grid .term-wrap.handoff-over {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+#hydra-grid .term-wrap.handoff-over::before {
+  content: "Loslassen: Kontext übergeben";
+  position: absolute;
+  z-index: 4;
+  inset: 30px 0 0;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 650;
+  pointer-events: none;
+}
+
+#hydra-handoff-status.is-handoff {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  color: var(--accent);
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.hydra-head .hh-kill:hover, .hydra-head .hh-kill[data-confirm] { color: var(--critical); }
+#hydra-handoff-status.is-handoff .ico { width: 13px; height: 13px; }
+#hydra-handoff-status.is-handoff span { overflow: hidden; text-overflow: ellipsis; }
+
+.session-magnet-ghost {
+  position: fixed;
+  z-index: var(--z-tooltip, 60);
+  top: 0;
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 6px 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 44%, transparent);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 650;
+  pointer-events: none;
+  user-select: none;
+  box-shadow: var(--popover-shadow);
+  will-change: transform;
+}
+.session-magnet-ghost .ico { width: 14px; height: 14px; }
+.session-magnet-ghost span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.session-magnet-dragging,
+body.session-magnet-dragging * { cursor: grabbing !important; user-select: none !important; }
 #hydra-grid .none { grid-column: 1 / -1; align-self: center; text-align: center; }
+
+@media (prefers-reduced-motion: reduce) {
+  #hydra-grid .term-wrap,
+  .hydra-head .hh-magnet,
+  .hydra-head .hh-max,
+  .hydra-head .hh-kill { transition: none; }
+}
 
 .proj-head .pname { cursor: pointer; }
 .proj-head .pname:hover { color: var(--accent); }
