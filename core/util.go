@@ -55,6 +55,10 @@ func SanitizeName(name string) string {
 	return name
 }
 
+func ShellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 func NewUUID() string {
 	b := make([]byte, 16)
 	rand.Read(b)

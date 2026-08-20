@@ -49,7 +49,7 @@ func TmuxNewClaudeSession(session, dir string, extraArgs string) error {
 	if err := TmuxNewShellSession(session, dir); err != nil {
 		return err
 	}
-	cmd := "claude"
+	cmd := "claude --name " + ShellQuote(session)
 	if extraArgs != "" {
 		cmd += " " + extraArgs
 	}
