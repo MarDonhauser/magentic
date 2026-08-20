@@ -53,6 +53,8 @@ type specificationSourceDiscovery struct {
 	archivedReturned int
 }
 
+var errSpecificationContainment = errors.New("Specification path escapes its physical boundary")
+
 type specificationSourceAdapter interface {
 	Kind() SpecificationSourceKind
 	WorkInstructions() SpecificationWorkInstructions
@@ -159,12 +161,24 @@ func (a directorySpecificationSourceAdapter) Discover(
 		Availability: SpecificationAbsent,
 	}}
 
-	info, err := filesystem.Stat(root)
+	_, err := filesystem.Lstat(root)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			result.summary.Availability = SpecificationUnavailable
 			result.addProblem("discover_source", "", err)
 		}
+		return result
+	}
+	projectPhysical, rootPhysical, err := specificationDiscoveryRoots(filesystem, project.Path, root)
+	if err != nil {
+		result.summary.Availability = SpecificationUnavailable
+		result.addProblem("contain_source", "", err)
+		return result
+	}
+	info, err := filesystem.Stat(rootPhysical)
+	if err != nil {
+		result.summary.Availability = SpecificationUnavailable
+		result.addProblem("discover_source", "", err)
 		return result
 	}
 	if !info.IsDir() {
@@ -187,13 +201,17 @@ func (a directorySpecificationSourceAdapter) Discover(
 			result.addProblem("discover_canceled", "", err)
 			return result
 		}
-		specification := a.readSpecification(ctx, filesystem, project, root, entry.Name(), false)
+		specification := a.readSpecification(ctx, filesystem, project, projectPhysical, rootPhysical, root, entry.Name(), false)
 		result.addSpecification(specification)
 	}
 
 	if a.archive != "" {
 		archiveRoot := filepath.Join(root, a.archive)
-		archived, archiveErr := filesystem.ReadDir(archiveRoot)
+		archivePhysical, archiveErr := specificationOptionalContainedDirectory(filesystem, archiveRoot, projectPhysical, rootPhysical)
+		var archived []os.DirEntry
+		if archiveErr == nil && archivePhysical != "" {
+			archived, archiveErr = filesystem.ReadDir(archiveRoot)
+		}
 		switch {
 		case archiveErr == nil:
 			archived = specificationDirectoryEntries(archived, "")
@@ -210,7 +228,7 @@ func (a directorySpecificationSourceAdapter) Discover(
 						result.addProblem("discover_canceled", "", err)
 						return result
 					}
-					specification := a.readSpecification(ctx, filesystem, project, archiveRoot, entry.Name(), true)
+					specification := a.readSpecification(ctx, filesystem, project, projectPhysical, rootPhysical, archiveRoot, entry.Name(), true)
 					result.addSpecification(specification)
 					result.archivedReturned++
 				}
@@ -222,7 +240,11 @@ func (a directorySpecificationSourceAdapter) Discover(
 
 	if len(a.referenceRoot) > 0 {
 		referenceRoot := filepath.Join(append([]string{project.Path}, a.referenceRoot...)...)
-		entries, referenceErr := filesystem.ReadDir(referenceRoot)
+		referencePhysical, referenceErr := specificationOptionalContainedDirectory(filesystem, referenceRoot, projectPhysical)
+		var entries []os.DirEntry
+		if referenceErr == nil && referencePhysical != "" {
+			entries, referenceErr = filesystem.ReadDir(referenceRoot)
+		}
 		if referenceErr == nil {
 			result.summary.ReferenceSpecifications = len(specificationDirectoryEntries(entries, ""))
 		} else if !errors.Is(referenceErr, os.ErrNotExist) {
@@ -236,6 +258,8 @@ func (a directorySpecificationSourceAdapter) readSpecification(
 	ctx context.Context,
 	filesystem specificationsFilesystem,
 	project Project,
+	projectPhysical string,
+	rootPhysical string,
 	parent string,
 	id string,
 	archived bool,
@@ -251,6 +275,23 @@ func (a directorySpecificationSourceAdapter) readSpecification(
 		Availability:     SpecificationAvailable,
 		WorkInstructions: a.WorkInstructions(),
 	}
+	directoryInfo, directoryErr := filesystem.Lstat(directory)
+	if directoryErr != nil || !directoryInfo.IsDir() || directoryInfo.Mode()&os.ModeSymlink != 0 {
+		if directoryErr == nil {
+			directoryErr = fmt.Errorf("%w: Specification directory is not a physical directory", errSpecificationContainment)
+		}
+		specification.Availability = SpecificationUnavailable
+		specification.Problems = append(specification.Problems, specificationProblem(a.kind, ref, "contain_specification", directoryErr))
+		specification.Lifecycle = specificationLifecycle(SpecificationProgress{}, false, archived, false)
+		return specification
+	}
+	directoryPhysical, directoryErr := specificationContainedPhysicalPath(filesystem, directory, projectPhysical, rootPhysical)
+	if directoryErr != nil {
+		specification.Availability = SpecificationUnavailable
+		specification.Problems = append(specification.Problems, specificationProblem(a.kind, ref, "contain_specification", directoryErr))
+		specification.Lifecycle = specificationLifecycle(SpecificationProgress{}, false, archived, false)
+		return specification
+	}
 	entries, err := filesystem.ReadDir(directory)
 	if err != nil {
 		specification.Availability = SpecificationUnavailable
@@ -264,10 +305,14 @@ func (a directorySpecificationSourceAdapter) readSpecification(
 		entryByName[entry.Name()] = entry
 	}
 	tasksKnown := true
+	safeToStart := true
 	if tasksEntry, ok := entryByName["tasks.md"]; ok && !tasksEntry.IsDir() {
-		data, readErr := filesystem.ReadFile(filepath.Join(directory, "tasks.md"))
+		data, readErr := readContainedSpecificationFile(filesystem, filepath.Join(directory, "tasks.md"), projectPhysical, rootPhysical, directoryPhysical)
 		if readErr != nil {
 			tasksKnown = false
+			if errors.Is(readErr, errSpecificationContainment) {
+				safeToStart = false
+			}
 			specification.Problems = append(specification.Problems, specificationProblem(a.kind, ref, "read_tasks", readErr))
 		} else {
 			specification.Tasks = parseSpecificationTasks(data)
@@ -279,8 +324,11 @@ func (a directorySpecificationSourceAdapter) readSpecification(
 		if !ok || entry.IsDir() {
 			continue
 		}
-		data, readErr := filesystem.ReadFile(filepath.Join(directory, name))
+		data, readErr := readContainedSpecificationFile(filesystem, filepath.Join(directory, name), projectPhysical, rootPhysical, directoryPhysical)
 		if readErr != nil {
+			if errors.Is(readErr, errSpecificationContainment) {
+				safeToStart = false
+			}
 			specification.Problems = append(specification.Problems, specificationProblem(a.kind, ref, "read_document", readErr))
 			continue
 		}
@@ -304,6 +352,17 @@ func (a directorySpecificationSourceAdapter) readSpecification(
 		if walkErr != nil {
 			specification.Problems = append(specification.Problems, specificationProblem(a.kind, ref, "read_document_tree", walkErr))
 			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			physical, containmentErr := specificationContainedPhysicalPath(filesystem, path, projectPhysical, rootPhysical, directoryPhysical)
+			if containmentErr != nil {
+				safeToStart = false
+				specification.Problems = append(specification.Problems, specificationProblem(a.kind, ref, "contain_document", containmentErr))
+				return nil
+			}
+			if _, infoErr := filesystem.Stat(physical); infoErr != nil {
+				specification.Problems = append(specification.Problems, specificationProblem(a.kind, ref, "read_document_time", infoErr))
+			}
 		}
 		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
 			return nil
@@ -344,7 +403,7 @@ func (a directorySpecificationSourceAdapter) readSpecification(
 	if len(specification.Problems) > 0 && specification.Availability == SpecificationAvailable {
 		specification.Availability = SpecificationPartial
 	}
-	if !archived && !specification.Lifecycle.Terminal && specification.Availability != SpecificationUnavailable {
+	if safeToStart && !archived && !specification.Lifecycle.Terminal && specification.Availability != SpecificationUnavailable {
 		specification.StartToken = startTokenForSpecification(ref)
 	}
 	return specification
@@ -398,7 +457,97 @@ func (a directorySpecificationSourceAdapter) Resolve(
 	if !specificationPathContained(projectPhysical, targetPhysical) || !specificationPathContained(rootPhysical, targetPhysical) {
 		return "", errors.New("resolve Specification: target escapes source")
 	}
+	if err := validateSpecificationTreeContainment(filesystem, projectPhysical, rootPhysical, targetPhysical); err != nil {
+		return "", fmt.Errorf("resolve Specification: %w", err)
+	}
 	return filepath.Clean(targetPhysical), nil
+}
+
+func specificationDiscoveryRoots(filesystem specificationsFilesystem, projectPath, root string) (string, string, error) {
+	projectAbsolute, err := filepath.Abs(filepath.Clean(projectPath))
+	if err != nil {
+		return "", "", fmt.Errorf("resolve Project: %w", err)
+	}
+	rootAbsolute, err := filepath.Abs(filepath.Clean(root))
+	if err != nil || !specificationPathContained(projectAbsolute, rootAbsolute) {
+		return "", "", fmt.Errorf("%w: source is outside Project", errSpecificationContainment)
+	}
+	projectPhysical, err := filesystem.EvalSymlinks(projectAbsolute)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve Project: %w", err)
+	}
+	rootPhysical, err := specificationContainedPhysicalPath(filesystem, rootAbsolute, projectPhysical)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve Specification source: %w", err)
+	}
+	return filepath.Clean(projectPhysical), filepath.Clean(rootPhysical), nil
+}
+
+func specificationOptionalContainedDirectory(filesystem specificationsFilesystem, path string, parents ...string) (string, error) {
+	_, err := filesystem.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	physical, err := specificationContainedPhysicalPath(filesystem, path, parents...)
+	if err != nil {
+		return "", err
+	}
+	info, err := filesystem.Stat(physical)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", errors.New("Specification location is not a directory")
+	}
+	return physical, nil
+}
+
+func specificationContainedPhysicalPath(filesystem specificationsFilesystem, path string, parents ...string) (string, error) {
+	absolute, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return "", err
+	}
+	physical, err := filesystem.EvalSymlinks(absolute)
+	if err != nil {
+		return "", err
+	}
+	for _, parent := range parents {
+		if !specificationPathContained(parent, physical) {
+			return "", fmt.Errorf("%w: %s", errSpecificationContainment, filepath.Base(path))
+		}
+	}
+	return filepath.Clean(physical), nil
+}
+
+func readContainedSpecificationFile(filesystem specificationsFilesystem, path string, parents ...string) ([]byte, error) {
+	physical, err := specificationContainedPhysicalPath(filesystem, path, parents...)
+	if err != nil {
+		return nil, err
+	}
+	info, err := filesystem.Stat(physical)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("Specification document is not a regular file")
+	}
+	return filesystem.ReadFile(physical)
+}
+
+func validateSpecificationTreeContainment(filesystem specificationsFilesystem, projectPhysical, rootPhysical, targetPhysical string) error {
+	return filesystem.WalkDir(targetPhysical, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink == 0 {
+			return nil
+		}
+		_, err := specificationContainedPhysicalPath(filesystem, path, projectPhysical, rootPhysical, targetPhysical)
+		return err
+	})
 }
 
 func specificationPathContained(parent, child string) bool {

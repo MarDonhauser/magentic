@@ -126,8 +126,11 @@ func TestParseRefsEmpty(t *testing.T) {
 }
 
 func TestParseGraphCommits(t *testing.T) {
-	out := "aaa\x1fa\x1fbbb ccc\x1fMerge branch 'x'\x1fMartin\x1f1754200000\x1fHEAD -> main\x1e" +
-		"bbb\x1fb\x1f\x1fInitial\x1fMartin\x1f1754100000\x1f\x1e"
+	hashA := strings.Repeat("a", 40)
+	hashB := strings.Repeat("b", 40)
+	hashC := strings.Repeat("c", 40)
+	out := hashA + "\x1f" + hashA[:7] + "\x1f" + hashB + " " + hashC + "\x1fMerge branch 'x'\x1fMartin\x1f1754200000\x1fHEAD -> main\x1e" +
+		"\n" + hashB + "\x1f" + hashB[:7] + "\x1f\x1fInitial\x1fMartin\x1f1754100000\x1f\x1e"
 	history, err := parseRepositoryCommitHistory(out)
 	if err != nil {
 		t.Fatal(err)

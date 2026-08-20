@@ -7,9 +7,9 @@ import (
 	"magentic/core"
 )
 
-func (a *App) SetActiveTerm(name string) {
+func (a *App) SetActiveTerm(sessionID string) {
 	a.mu.Lock()
-	a.activeTerm = name
+	a.activeTerm = sessionID
 	a.mu.Unlock()
 }
 
@@ -87,7 +87,8 @@ func (a *App) watchLoop() {
 					lastErrLog = time.Now()
 				}
 			} else {
-				st = changed.Snapshot.MutableState()
+				state := changed.Snapshot.State()
+				st = &state
 			}
 		}
 		snapshot := core.Observe(context.Background(), st.Agents)

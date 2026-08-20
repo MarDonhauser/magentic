@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -109,33 +110,86 @@ func TestRegistrySemanticChangesPreserveUnrelatedConcurrentWrites(t *testing.T) 
 	}
 }
 
-func TestRegistryMutableCompatibilityMergesDifferentFields(t *testing.T) {
+func TestRegistryBaselineReopenPreservesConcurrentSessionChange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	registryA := OpenRegistry(path)
+	registryB := OpenRegistry(path)
+	laterAt := time.Unix(100, 0)
+	seenAt := time.Unix(200, 0)
+	session := Session{ID: "session-1", Name: "legacy", Dir: "/workspace/project", LaterAt: laterAt}
+	if _, err := registryA.Change(context.Background(), RegisterSession(session)); err != nil {
+		t.Fatal(err)
+	}
+
+	errs := make(chan error, 2)
+	go func() {
+		_, err := registryA.Change(context.Background(), ReopenRegisteredSessionWithBaseline(
+			session.ID, session.Name, "abc123", []string{"dirty.txt"},
+		))
+		errs <- err
+	}()
+	go func() {
+		_, err := registryB.Change(context.Background(), MarkSessionSeen(session.ID, session.Name, seenAt))
+		errs <- err
+	}()
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	snapshot, err := registryA.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := snapshot.State()
+	got := state.SessionByID(session.ID)
+	if got == nil || got.BaseCommit != "abc123" || !equalStringSlice(got.BaseDirty, []string{"dirty.txt"}) ||
+		!got.LaterAt.IsZero() || !got.SeenAt.Equal(seenAt) {
+		t.Fatalf("atomic baseline reopen lost concurrent Registry truth: %+v", got)
+	}
+}
+
+func TestRegistryBaselineReopenRejectsConflictingOverwriteAtomically(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	registry := OpenRegistry(path)
-	project := Project{ID: ProjectID("project-1"), Name: "project", Path: "/workspace/project"}
-	session := Session{ID: SessionID("session-1"), Name: "hera", ProjectID: project.ID, Project: project.Name, Dir: project.Path}
-	if _, err := registry.Change(context.Background(), RegisterProject(project)); err != nil {
-		t.Fatal(err)
+	laterAt := time.Unix(100, 0)
+	session := Session{
+		ID: "session-1", Name: "known", Dir: "/workspace/project", LaterAt: laterAt,
+		BaseCommit: "original", BaseDirty: []string{"original.txt"},
 	}
 	if _, err := registry.Change(context.Background(), RegisterSession(session)); err != nil {
 		t.Fatal(err)
 	}
-	one, _ := registry.Snapshot(context.Background())
-	two, _ := registry.Snapshot(context.Background())
-	first := one.MutableState()
-	second := two.MutableState()
-	first.Agents[0].SeenAt = time.Unix(100, 0)
-	second.Agents[0].LaterAt = time.Unix(200, 0)
-	if err := first.Save(); err != nil {
-		t.Fatal(err)
+
+	_, err := registry.Change(context.Background(), ReopenRegisteredSessionWithBaseline(
+		session.ID, session.Name, "different", []string{"different.txt"},
+	))
+	if !errors.Is(err, ErrRegistryConflict) {
+		t.Fatalf("conflicting baseline error = %v, want ErrRegistryConflict", err)
 	}
-	if err := second.Save(); err != nil {
-		t.Fatal(err)
+	snapshot, snapshotErr := registry.Snapshot(context.Background())
+	if snapshotErr != nil {
+		t.Fatal(snapshotErr)
 	}
-	latest, _ := registry.Snapshot(context.Background())
-	got := latest.State().Agents[0]
-	if got.SeenAt.Unix() != 100 || got.LaterAt.Unix() != 200 {
-		t.Fatalf("field-level compatibility merge lost an update: %+v", got)
+	state := snapshot.State()
+	got := state.SessionByID(session.ID)
+	if got == nil || got.BaseCommit != session.BaseCommit || !equalStringSlice(got.BaseDirty, session.BaseDirty) ||
+		!got.LaterAt.Equal(laterAt) {
+		t.Fatalf("conflicting baseline partially reopened Session: %+v", got)
+	}
+
+	result, err := registry.Change(context.Background(), ReopenRegisteredSessionWithBaseline(
+		session.ID, session.Name, session.BaseCommit, session.BaseDirty,
+	))
+	if err != nil || !result.Applied {
+		t.Fatalf("matching baseline reopen = %+v, %v", result, err)
+	}
+	retry, err := registry.Change(context.Background(), ReopenRegisteredSessionWithBaseline(
+		session.ID, session.Name, session.BaseCommit, session.BaseDirty,
+	))
+	if err != nil || retry.Applied || retry.Revision != result.Revision {
+		t.Fatalf("idempotent baseline reopen retry = %+v, %v", retry, err)
 	}
 }
 

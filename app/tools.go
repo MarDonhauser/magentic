@@ -51,16 +51,31 @@ func (a *App) WorktreeDiff(projectID, reference string) (string, error) {
 	return out, nil
 }
 
-func (a *App) SessionPreview(sessionID string) string {
+const sessionRuntimeSource = "runtime"
+
+type SessionPreviewResult struct {
+	Content      string         `json:"content"`
+	ContentKnown bool           `json:"contentKnown"`
+	Source       TimelineSource `json:"source"`
+}
+
+func (a *App) SessionPreview(sessionID string) SessionPreviewResult {
 	_, session, err := loadSessionByID(sessionID)
 	if err != nil {
-		return ""
+		return SessionPreviewResult{Source: TimelineSource{
+			Source: sessionRuntimeSource, State: string(core.HistorySourceUnavailable),
+			Problems: []string{err.Error()},
+		}}
 	}
-	sn := session.TmuxName()
-	if !core.TmuxHasSession(sn) {
-		return ""
+	observed, source := sessionRuntimeObservation(a.observationFor([]core.Session{session}, true), session.ID)
+	result := SessionPreviewResult{
+		ContentKnown: observed.Presence == core.SessionPresencePresent && observed.ContentKnown,
+		Source:       source,
 	}
-	return core.LastLines(strings.TrimRight(core.TmuxCapturePane(sn, 0), "\n"), 16)
+	if result.ContentKnown {
+		result.Content = core.LastLines(strings.TrimRight(observed.Content, "\n"), 16)
+	}
+	return result
 }
 
 type LinkInfo struct {
@@ -82,14 +97,19 @@ func extractURLs(text string) []string {
 	return out
 }
 
-func (a *App) SessionLinks(sessionID string) ([]LinkInfo, error) {
+type SessionLinksResult struct {
+	Links   []LinkInfo       `json:"links"`
+	Sources []TimelineSource `json:"sources"`
+}
+
+func (a *App) SessionLinks(sessionID string) (SessionLinksResult, error) {
 	st, session, err := loadSessionByID(sessionID)
 	if err != nil {
-		return nil, err
+		return SessionLinksResult{}, err
 	}
 	seen := map[string]bool{}
 	var out []LinkInfo
-	runtimeName := ""
+	var sources []TimelineSource
 	add := func(l LinkInfo) {
 		if seen[l.URL] {
 			return
@@ -97,44 +117,42 @@ func (a *App) SessionLinks(sessionID string) ([]LinkInfo, error) {
 		seen[l.URL] = true
 		out = append(out, l)
 	}
-	if session.ID != "" {
-		runtimeName = session.TmuxName()
-		history, err := core.OpenWorkHistory(core.WorkHistoryConfig{})
-		if err != nil {
-			return nil, err
-		}
-		sessionKey := session.Name
-		if session.ID != "" {
-			sessionKey = string(session.ID)
-		}
+	history, historyErr := core.OpenWorkHistory(core.WorkHistoryConfig{})
+	if historyErr != nil {
+		sources = append(sources, unavailableTimelineSource("work-history", historyErr))
+	} else {
 		page, err := history.Links(context.Background(), core.HistoryAssociationsFromState(st), core.HistoryLinkQuery{
 			Events: core.HistoryEventQuery{
-				SessionKeys: []string{sessionKey},
+				SessionKeys: []string{string(session.ID)},
 				Kinds:       []core.HistoryEventKind{core.HistoryEventOutput},
 			},
 			Distinct: true,
 			Limit:    40,
 		})
 		if err != nil {
-			return nil, err
-		}
-		for _, link := range page.Links {
-			when := ""
-			if link.OccurredAt.State == core.HistoryFactKnown {
-				when = link.OccurredAt.Value.In(time.Local).Format("02.01. 15:04")
+			sources = append(sources, unavailableTimelineSource("work-history", err))
+		} else {
+			sources = append(sources, historyCoverageSources(page.Meta.Coverage)...)
+			for _, link := range page.Links {
+				when := ""
+				if link.OccurredAt.State == core.HistoryFactKnown {
+					when = link.OccurredAt.Value.In(time.Local).Format("02.01. 15:04")
+				}
+				add(LinkInfo{URL: link.URL, Time: when})
 			}
-			add(LinkInfo{URL: link.URL, Time: when})
 		}
 	}
-	if runtimeName != "" && core.TmuxHasSession(runtimeName) {
-		for _, u := range extractURLs(core.TmuxCapturePaneJoined(runtimeName, 3000)) {
+	observed, runtimeSource := sessionRuntimeObservation(a.observationFor([]core.Session{session}, true), session.ID)
+	sources = append(sources, runtimeSource)
+	if observed.Presence == core.SessionPresencePresent && observed.ContentKnown {
+		for _, u := range extractURLs(observed.Content) {
 			add(LinkInfo{URL: u})
 		}
 	}
 	if len(out) > 40 {
 		out = out[:40]
 	}
-	return out, nil
+	return SessionLinksResult{Links: out, Sources: sources}, nil
 }
 
 type SearchHit struct {
@@ -239,6 +257,61 @@ type TimelineSource struct {
 type TimelineResult struct {
 	Entries []TimelineEntry  `json:"entries"`
 	Sources []TimelineSource `json:"sources"`
+}
+
+func unavailableTimelineSource(source string, err error) TimelineSource {
+	problem := "Quelle ist derzeit nicht lesbar"
+	if err != nil && strings.TrimSpace(err.Error()) != "" {
+		problem = err.Error()
+	}
+	return TimelineSource{
+		Source: source, State: string(core.HistorySourceUnavailable), Problems: []string{problem},
+	}
+}
+
+func sessionRuntimeObservation(snapshot core.ObservationSnapshot, sessionID core.SessionID) (core.SessionObservation, TimelineSource) {
+	source := TimelineSource{Source: sessionRuntimeSource, State: string(core.HistorySourceUnavailable)}
+	for _, problem := range snapshot.Problems {
+		if problem.SessionID != "" && problem.SessionID != sessionID {
+			continue
+		}
+		message := strings.TrimSpace(problem.Message)
+		if operation := strings.TrimSpace(problem.Operation); operation != "" {
+			if message != "" {
+				message = operation + ": " + message
+			} else {
+				message = operation
+			}
+		}
+		if message != "" {
+			source.Problems = append(source.Problems, message)
+		}
+	}
+	for _, observed := range snapshot.Sessions {
+		if observed.SessionID != sessionID {
+			continue
+		}
+		switch {
+		case observed.Availability == core.ObservationUnavailable:
+			source.State = string(core.HistorySourceUnavailable)
+		case observed.Availability == core.ObservationPartial:
+			source.State = string(core.HistorySourcePartial)
+		case observed.Presence == core.SessionPresenceAbsent:
+			source.State = string(core.HistorySourceAbsent)
+		case observed.Presence == core.SessionPresencePresent && observed.ContentKnown:
+			source.State = string(core.HistorySourceAvailable)
+		default:
+			source.State = string(core.HistorySourcePartial)
+		}
+		if (source.State == string(core.HistorySourcePartial) || source.State == string(core.HistorySourceUnavailable)) && len(source.Problems) == 0 {
+			source.Problems = append(source.Problems, "Laufzeitinhalt ist nicht vollständig bekannt")
+		}
+		return observed, source
+	}
+	if len(source.Problems) == 0 {
+		source.Problems = append(source.Problems, "Session fehlt in der Laufzeitbeobachtung")
+	}
+	return core.SessionObservation{SessionID: sessionID}, source
 }
 
 func historyCoverageSources(coverage []core.HistoryProviderCoverage) []TimelineSource {

@@ -150,8 +150,60 @@ func TestStoredLinksAndSearchUseWorkHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(links) != 1 || links[0].URL != "https://example.test/result" || links[0].Time == "" {
+	if len(links.Links) != 1 || links.Links[0].URL != "https://example.test/result" || links.Links[0].Time == "" {
 		t.Fatalf("normalized stored links = %#v", links)
+	}
+	if len(links.Sources) < 2 {
+		t.Fatalf("SessionLinks() lost source coverage: %#v", links.Sources)
+	}
+}
+
+func TestSessionLinksPreservesHistoryAndRuntimeCoverageWithNoKnownLinks(t *testing.T) {
+	home, _, projectPath, statePath := configureHistoryAppTest(t)
+	session := core.Session{
+		ID: "session-id", Name: "coverage", RuntimeName: "opaque-runtime",
+		ProjectID: "project-id", Project: "project", Dir: projectPath,
+		AgentRuns: []core.AgentRunRef{{Vendor: core.AgentVendorClaude, ExternalID: "broken-run"}},
+	}
+	writeAppState(t, statePath, core.State{
+		Projects: []core.Project{{ID: "project-id", Name: "project", Path: projectPath}},
+		Agents:   []core.Session{session},
+	})
+	writeAppFixture(t, filepath.Join(home, ".claude", "projects", "broken", "broken-run.jsonl"), "{malformed}\n")
+	writeAppFixture(t, filepath.Join(home, ".gemini", "tmp"), "not a directory")
+	app := &App{observeSessions: func(_ context.Context, sessions []core.Session) core.ObservationSnapshot {
+		return core.ObservationSnapshot{
+			Availability: core.ObservationPartial,
+			Sessions: []core.SessionObservation{{
+				SessionID: sessions[0].ID, Availability: core.ObservationPartial,
+				Presence: core.SessionPresencePresent, ContentKnown: false,
+			}},
+			Problems: []core.ObservationProblem{{
+				SessionID: sessions[0].ID, RuntimeName: sessions[0].TmuxName(),
+				Operation: "capture-pane", Message: "capture unavailable",
+			}},
+		}
+	}}
+
+	result, err := app.SessionLinks(string(session.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Links) != 0 {
+		t.Fatalf("known Links = %#v, want none", result.Links)
+	}
+	bySource := map[string]TimelineSource{}
+	for _, source := range result.Sources {
+		bySource[source.Source] = source
+	}
+	if source := bySource[string(core.HistoryProviderClaude)]; source.State != string(core.HistorySourcePartial) || len(source.Problems) == 0 {
+		t.Fatalf("partial Claude coverage was lost: %#v", source)
+	}
+	if source := bySource[string(core.HistoryProviderGemini)]; source.State != string(core.HistorySourceUnavailable) || len(source.Problems) == 0 {
+		t.Fatalf("unavailable Gemini coverage was lost: %#v", source)
+	}
+	if source := bySource[sessionRuntimeSource]; source.State != string(core.HistorySourcePartial) || len(source.Problems) == 0 {
+		t.Fatalf("partial runtime coverage was lost: %#v", source)
 	}
 }
 

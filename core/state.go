@@ -91,9 +91,6 @@ type State struct {
 	Revision uint64    `json:"revision,omitempty"`
 	Projects []Project `json:"projects"`
 	Agents   []Session `json:"agents"`
-
-	registryPath string
-	baseline     *State
 }
 
 func StatePath() string {
@@ -109,13 +106,8 @@ func LoadState() (*State, error) {
 	if err != nil {
 		return nil, err
 	}
-	return snapshot.MutableState(), nil
-}
-
-// Save is the compatibility Adapter for callers that still hold a mutable
-// State. New code should express one semantic mutation with Registry.Change.
-func (s *State) Save() error {
-	return saveMutableState(s)
+	state := snapshot.State()
+	return &state, nil
 }
 
 func (a Session) IsTerm() bool {

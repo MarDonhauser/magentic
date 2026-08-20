@@ -142,12 +142,11 @@ func (r *Repositories) RemoteURL(ctx context.Context, dir, remote string) Reposi
 }
 
 func parseRepositoryRemoteURL(out string) (string, error) {
-	normalized := strings.ReplaceAll(out, "\r\n", "\n")
-	if strings.Contains(normalized, "\r") || !strings.HasSuffix(normalized, "\n") {
-		return "", errors.New("git returned a truncated or malformed remote URL")
+	value, err := parseRepositoryTerminatedLine(out, "remote URL")
+	if err != nil {
+		return "", err
 	}
-	value := strings.TrimSuffix(normalized, "\n")
-	if value == "" || strings.Contains(value, "\n") || strings.TrimSpace(value) != value {
+	if strings.TrimSpace(value) != value {
 		return "", errors.New("git returned an empty or ambiguous remote URL")
 	}
 	for _, char := range value {
@@ -156,6 +155,37 @@ func parseRepositoryRemoteURL(out string) (string, error) {
 		}
 	}
 	return value, nil
+}
+
+func parseRepositoryTerminatedLine(out, label string) (string, error) {
+	normalized := strings.ReplaceAll(out, "\r\n", "\n")
+	if normalized == "" || strings.Contains(normalized, "\r") || !strings.HasSuffix(normalized, "\n") {
+		return "", fmt.Errorf("git returned a truncated or malformed %s", label)
+	}
+	value := strings.TrimSuffix(normalized, "\n")
+	if value == "" || strings.Contains(value, "\n") {
+		return "", fmt.Errorf("git returned an empty or ambiguous %s", label)
+	}
+	return value, nil
+}
+
+func parseRepositoryNonnegativeDecimalLine(out, label string) (int, error) {
+	value, err := parseRepositoryTerminatedLine(out, label)
+	if err != nil {
+		return 0, err
+	}
+	return parseRepositoryNonnegativeDecimal(value, label)
+}
+
+func parseRepositoryNonnegativeDecimal(value, label string) (int, error) {
+	if !repositoryDecimal(value) {
+		return 0, fmt.Errorf("invalid %s %q", label, value)
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
+		return 0, fmt.Errorf("invalid %s %q", label, value)
+	}
+	return parsed, nil
 }
 
 // WorktreeDiff reports a human-readable checkout diff without collapsing
@@ -596,9 +626,9 @@ func (r *Repositories) baselineDelta(ctx context.Context, dir string, current Re
 		delta.Commits = repositoryFactForError[int]("baseline_delta", err)
 		return delta
 	}
-	count, err := strconv.Atoi(strings.TrimSpace(out))
+	count, err := parseRepositoryNonnegativeDecimalLine(out, "commit count")
 	if err != nil {
-		delta.Commits = repositoryUnknownFact[int]("baseline_delta", fmt.Errorf("invalid commit count: %w", err))
+		delta.Commits = repositoryUnknownFact[int]("baseline_delta", err)
 		return delta
 	}
 	delta.Commits = repositoryKnownFact(count)
@@ -708,7 +738,7 @@ func parseRepositoriesTopology(out string) ([]repositoriesTopologyWorktree, erro
 				return nil, fmt.Errorf("duplicate or misplaced HEAD at topology line %d", lineNumber)
 			}
 			head := strings.TrimSpace(strings.TrimPrefix(line, "HEAD "))
-			if !validRepositoriesTopologyOID(head) {
+			if !validRepositoryObjectID(head) {
 				return nil, fmt.Errorf("invalid HEAD at topology line %d", lineNumber)
 			}
 			current.worktree.Head = head
@@ -718,7 +748,7 @@ func parseRepositoriesTopology(out string) ([]repositoriesTopologyWorktree, erro
 				return nil, fmt.Errorf("duplicate or misplaced branch at topology line %d", lineNumber)
 			}
 			branchRef := strings.TrimSpace(strings.TrimPrefix(line, "branch "))
-			if !validRepositoriesTopologyBranchRef(branchRef) {
+			if !validRepositoryBranchRef(branchRef) {
 				return nil, fmt.Errorf("invalid branch at topology line %d", lineNumber)
 			}
 			current.worktree.Branch = strings.TrimPrefix(branchRef, "refs/heads/")
@@ -803,7 +833,7 @@ func decodeRepositoriesTopologyOptionalReason(line, field string) (string, error
 	return decodeRepositoriesTopologyValue(raw)
 }
 
-func validRepositoriesTopologyOID(oid string) bool {
+func validRepositoryObjectID(oid string) bool {
 	if len(oid) != 40 && len(oid) != 64 {
 		return false
 	}
@@ -815,14 +845,19 @@ func validRepositoriesTopologyOID(oid string) bool {
 	return true
 }
 
-func validRepositoriesTopologyBranchRef(ref string) bool {
+func validRepositoryBranchRef(ref string) bool {
 	const prefix = "refs/heads/"
 	branch := strings.TrimPrefix(ref, prefix)
 	if branch == ref || branch == "" || strings.TrimSpace(branch) != branch ||
 		strings.HasPrefix(branch, "/") || strings.HasSuffix(branch, "/") ||
 		strings.HasSuffix(branch, ".") || strings.Contains(branch, "//") ||
-		strings.Contains(branch, "..") || strings.ContainsAny(branch, " ~^:?*[\\") {
+		strings.Contains(branch, "..") || strings.Contains(branch, "@{") || strings.ContainsAny(branch, " ~^:?*[\\") {
 		return false
+	}
+	for _, char := range branch {
+		if char < ' ' || char == '\x7f' {
+			return false
+		}
 	}
 	for _, component := range strings.Split(branch, "/") {
 		if component == "" || component == "." || strings.HasPrefix(component, ".") || strings.HasSuffix(component, ".lock") {
@@ -875,10 +910,23 @@ func (r *Repositories) loadStatus(ctx context.Context, dir string) (repositories
 }
 
 func parseRepositoriesStatus(out string) (repositoriesStatus, error) {
+	normalized := strings.ReplaceAll(out, "\r\n", "\n")
+	if normalized == "" || strings.Contains(normalized, "\r") || !strings.HasSuffix(normalized, "\n") {
+		return repositoriesStatus{}, errors.New("git returned a truncated or malformed status record")
+	}
+	body := strings.TrimSuffix(normalized, "\n")
+	if body == "" || strings.Contains(body, "\n\n") {
+		return repositoriesStatus{}, errors.New("git returned an empty or malformed status record")
+	}
+
 	var result repositoriesStatus
 	unborn := false
 	seenOID := false
 	seenHead := false
+	seenUpstream := false
+	seenAheadBehind := false
+	seenStash := false
+	seenChanges := false
 	seenPaths := map[string]bool{}
 	addPath := func(path string) {
 		path = strings.TrimSpace(path)
@@ -888,41 +936,64 @@ func parseRepositoriesStatus(out string) (repositoriesStatus, error) {
 		seenPaths[path] = true
 		result.Changes.Paths = append(result.Changes.Paths, path)
 	}
-	for lineNumber, line := range strings.Split(out, "\n") {
-		line = strings.TrimSuffix(line, "\r")
-		if line == "" {
-			continue
-		}
+	for lineNumber, line := range strings.Split(body, "\n") {
 		switch {
 		case strings.HasPrefix(line, "# branch.oid "):
-			oid := strings.TrimSpace(strings.TrimPrefix(line, "# branch.oid "))
-			if seenOID || oid == "" {
+			oid := strings.TrimPrefix(line, "# branch.oid ")
+			if seenOID || seenHead || seenChanges || oid == "" || strings.TrimSpace(oid) != oid {
 				return repositoriesStatus{}, fmt.Errorf("invalid branch.oid at status line %d", lineNumber+1)
 			}
 			seenOID = true
-			if oid == "(initial)" || allZeroOID(oid) {
+			if oid == "(initial)" {
 				unborn = true
-			} else {
+			} else if validRepositoryObjectID(oid) && !allZeroOID(oid) {
 				result.Head = oid
+			} else {
+				return repositoriesStatus{}, fmt.Errorf("invalid branch.oid at status line %d", lineNumber+1)
 			}
 		case strings.HasPrefix(line, "# branch.head "):
-			head := strings.TrimSpace(strings.TrimPrefix(line, "# branch.head "))
-			if seenHead || head == "" {
+			head := strings.TrimPrefix(line, "# branch.head ")
+			if !seenOID || seenHead || seenChanges || head == "" || strings.TrimSpace(head) != head {
 				return repositoriesStatus{}, fmt.Errorf("invalid branch.head at status line %d", lineNumber+1)
 			}
 			seenHead = true
 			switch head {
 			case "(detached)":
 				result.Checkout = RepositoryCheckout{Kind: RepositoryDetached}
-			case "(initial)":
-				result.Checkout = RepositoryCheckout{Kind: RepositoryUnborn}
 			default:
+				if !validRepositoryBranchRef("refs/heads/" + head) {
+					return repositoriesStatus{}, fmt.Errorf("invalid branch.head at status line %d", lineNumber+1)
+				}
 				result.Checkout = RepositoryCheckout{Kind: RepositoryBranchCheckout, Branch: head}
 			}
-		case strings.HasPrefix(line, "# branch.upstream "), strings.HasPrefix(line, "# branch.ab "), strings.HasPrefix(line, "# stash "):
-			// Optional documented porcelain-v2 headers do not change the facts
-			// returned by this Interface.
+		case strings.HasPrefix(line, "# branch.upstream "):
+			upstream := strings.TrimPrefix(line, "# branch.upstream ")
+			if !seenHead || seenUpstream || seenChanges || upstream == "" || strings.TrimSpace(upstream) != upstream || strings.ContainsAny(upstream, "\x00\r\n") {
+				return repositoriesStatus{}, fmt.Errorf("invalid branch.upstream at status line %d", lineNumber+1)
+			}
+			seenUpstream = true
+		case strings.HasPrefix(line, "# branch.ab "):
+			fields := strings.Split(strings.TrimPrefix(line, "# branch.ab "), " ")
+			if !seenUpstream || seenAheadBehind || seenChanges || len(fields) != 2 || len(fields[0]) < 2 || len(fields[1]) < 2 || fields[0][0] != '+' || fields[1][0] != '-' {
+				return repositoriesStatus{}, fmt.Errorf("invalid branch.ab at status line %d", lineNumber+1)
+			}
+			if _, err := parseRepositoryNonnegativeDecimal(fields[0][1:], "ahead count"); err != nil {
+				return repositoriesStatus{}, fmt.Errorf("invalid branch.ab at status line %d", lineNumber+1)
+			}
+			if _, err := parseRepositoryNonnegativeDecimal(fields[1][1:], "behind count"); err != nil {
+				return repositoriesStatus{}, fmt.Errorf("invalid branch.ab at status line %d", lineNumber+1)
+			}
+			seenAheadBehind = true
+		case strings.HasPrefix(line, "# stash "):
+			if !seenHead || seenStash || seenChanges {
+				return repositoriesStatus{}, fmt.Errorf("invalid stash header at status line %d", lineNumber+1)
+			}
+			if _, err := parseRepositoryNonnegativeDecimal(strings.TrimPrefix(line, "# stash "), "stash count"); err != nil {
+				return repositoriesStatus{}, fmt.Errorf("invalid stash header at status line %d", lineNumber+1)
+			}
+			seenStash = true
 		case strings.HasPrefix(line, "1 "):
+			seenChanges = true
 			fields := strings.SplitN(line, " ", 9)
 			if len(fields) != 9 || !validRepositoryXY(fields[1]) || strings.TrimSpace(fields[8]) == "" {
 				return repositoriesStatus{}, fmt.Errorf("invalid ordinary change at status line %d", lineNumber+1)
@@ -930,6 +1001,7 @@ func parseRepositoriesStatus(out string) (repositoriesStatus, error) {
 			countRepositoryXY(&result.Changes, fields[1])
 			addPath(decodeRepositoryPath(fields[8]))
 		case strings.HasPrefix(line, "2 "):
+			seenChanges = true
 			fields := strings.SplitN(line, " ", 10)
 			if len(fields) != 10 || !validRepositoryXY(fields[1]) {
 				return repositoriesStatus{}, fmt.Errorf("invalid renamed change at status line %d", lineNumber+1)
@@ -941,6 +1013,7 @@ func parseRepositoriesStatus(out string) (repositoriesStatus, error) {
 			countRepositoryXY(&result.Changes, fields[1])
 			addPath(decodeRepositoryPath(path))
 		case strings.HasPrefix(line, "u "):
+			seenChanges = true
 			fields := strings.SplitN(line, " ", 11)
 			if len(fields) != 11 || !validRepositoryXY(fields[1]) || strings.TrimSpace(fields[10]) == "" {
 				return repositoriesStatus{}, fmt.Errorf("invalid unmerged change at status line %d", lineNumber+1)
@@ -948,12 +1021,14 @@ func parseRepositoriesStatus(out string) (repositoriesStatus, error) {
 			result.Changes.Conflicted++
 			addPath(decodeRepositoryPath(fields[10]))
 		case strings.HasPrefix(line, "? "):
+			seenChanges = true
 			if strings.TrimSpace(strings.TrimPrefix(line, "? ")) == "" {
 				return repositoriesStatus{}, fmt.Errorf("invalid untracked path at status line %d", lineNumber+1)
 			}
 			result.Changes.Untracked++
 			addPath(decodeRepositoryPath(strings.TrimPrefix(line, "? ")))
 		case strings.HasPrefix(line, "! "):
+			seenChanges = true
 			if strings.TrimSpace(strings.TrimPrefix(line, "! ")) == "" {
 				return repositoriesStatus{}, fmt.Errorf("invalid ignored path at status line %d", lineNumber+1)
 			}
@@ -965,7 +1040,12 @@ func parseRepositoriesStatus(out string) (repositoriesStatus, error) {
 		return repositoriesStatus{}, errors.New("git status omitted required branch headers")
 	}
 	if unborn {
+		if result.Checkout.Kind != RepositoryBranchCheckout || result.Checkout.Branch == "" {
+			return repositoriesStatus{}, errors.New("initial branch.oid requires a named branch.head")
+		}
 		result.Checkout.Kind = RepositoryUnborn
+	} else if result.Checkout.Kind == RepositoryUnborn {
+		return repositoriesStatus{}, errors.New("branch.head and branch.oid are incoherent")
 	}
 	sort.Strings(result.Changes.Paths)
 	return result, nil
@@ -1008,20 +1088,7 @@ func (r *Repositories) divergence(ctx context.Context, wt RepositoryWorktree, ma
 	if wt.Checkout.Known() && wt.Checkout.Value.Kind == RepositoryBranchCheckout && wt.Checkout.Value.Branch == main.Value {
 		return repositoryKnownFact(RepositoryDivergence{Base: main.Value})
 	}
-	out, err := r.runner.Run(ctx, wt.Path, "rev-list", "--left-right", "--count", main.Value+"...HEAD")
-	if err != nil {
-		return repositoryFactForError[RepositoryDivergence]("divergence", err)
-	}
-	fields := strings.Fields(out)
-	if len(fields) != 2 {
-		return repositoryUnknownFact[RepositoryDivergence]("divergence", fmt.Errorf("invalid divergence output %q", strings.TrimSpace(out)))
-	}
-	behind, errBehind := strconv.Atoi(fields[0])
-	ahead, errAhead := strconv.Atoi(fields[1])
-	if errBehind != nil || errAhead != nil {
-		return repositoryUnknownFact[RepositoryDivergence]("divergence", fmt.Errorf("invalid divergence output %q", strings.TrimSpace(out)))
-	}
-	return repositoryKnownFact(RepositoryDivergence{Base: main.Value, Ahead: ahead, Behind: behind})
+	return r.compareRefs(ctx, wt.Path, main.Value, "HEAD", "divergence")
 }
 
 func sameRepositoryPath(a, b string) bool {

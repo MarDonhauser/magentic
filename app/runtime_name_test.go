@@ -93,18 +93,16 @@ func TestSessionPreviewAndLinksUseRegisteredRuntimeName(t *testing.T) {
 	handoffTestState(t, source, target)
 
 	preview := (&App{}).SessionPreview(string(source.ID))
-	if !strings.Contains(preview, "custom runtime") {
-		t.Fatalf("SessionPreview() = %q", preview)
+	if !preview.ContentKnown || !strings.Contains(preview.Content, "custom runtime") {
+		t.Fatalf("SessionPreview() = %#v", preview)
 	}
 	links, err := (&App{}).SessionLinks(string(source.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(links) != 1 || links[0].URL != "https://example.test/live" {
+	if len(links.Links) != 1 || links.Links[0].URL != "https://example.test/live" {
 		t.Fatalf("SessionLinks() = %#v", links)
 	}
-	assertTmuxTarget(t, logPath, "has-session", core.TargetSession(customSourceRuntime))
-	assertTmuxTarget(t, logPath, "capture-pane", core.TargetPane(customSourceRuntime))
 	assertNoTmuxTarget(t, logPath, core.TargetPane(core.SessionName(source.Name)))
 }
 

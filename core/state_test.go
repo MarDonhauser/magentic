@@ -2,10 +2,8 @@ package core
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 )
@@ -15,76 +13,6 @@ func useTempState(t *testing.T) string {
 	p := filepath.Join(t.TempDir(), "state.json")
 	t.Setenv("MAGENTIC_STATE", p)
 	return p
-}
-
-func TestSaveIsAtomicUnderConcurrency(t *testing.T) {
-	p := useTempState(t)
-	base := &State{
-		Projects: []Project{{Name: "req.pilot", Path: "/tmp/req.pilot"}},
-		Agents: []Agent{
-			{Name: "hera", Project: "req.pilot", Dir: "/tmp/req.pilot"},
-			{Name: "atlas", Project: "req.pilot", Dir: "/tmp/req.pilot"},
-		},
-	}
-	if err := base.Save(); err != nil {
-		t.Fatal(err)
-	}
-
-	// Zwei Zustände unterschiedlicher Länge parallel schreiben — genau die
-	// Konstellation, die state.json früher zu ungültigem JSON verschränkt hat.
-	long := &State{Projects: base.Projects}
-	for i := 0; i < 60; i++ {
-		long.Agents = append(long.Agents, Agent{
-			Name:      fmt.Sprintf("agent-mit-langem-namen-%02d", i),
-			Project:   "req.pilot",
-			Dir:       "/tmp/req.pilot",
-			CreatedAt: time.Now(),
-			SeenAt:    time.Now(),
-		})
-	}
-	short := &State{Projects: base.Projects, Agents: base.Agents[:1]}
-
-	var wg sync.WaitGroup
-	for i := 0; i < 40; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			if i%2 == 0 {
-				long.Save()
-			} else {
-				short.Save()
-			}
-		}(i)
-	}
-	wg.Wait()
-
-	data, err := os.ReadFile(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out State
-	if err := json.Unmarshal(data, &out); err != nil {
-		t.Fatalf("state.json ist nach parallelem Speichern ungültig: %v\n%s", err, data)
-	}
-	if len(out.Agents) != 1 && len(out.Agents) != 60 {
-		t.Fatalf("%d Agents — weder der kurze noch der lange Stand, also vermischt", len(out.Agents))
-	}
-}
-
-func TestSaveLeavesNoTempFile(t *testing.T) {
-	p := useTempState(t)
-	if err := (&State{}).Save(); err != nil {
-		t.Fatal(err)
-	}
-	entries, err := os.ReadDir(filepath.Dir(p))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range entries {
-		if e.Name() != "state.json" && e.Name() != "state.json.lock" {
-			t.Fatalf("unerwartete Datei übrig: %s", e.Name())
-		}
-	}
 }
 
 func TestLoadStateRescuesOverlappedWrite(t *testing.T) {

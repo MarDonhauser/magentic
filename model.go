@@ -140,7 +140,7 @@ func newModel(s *State) model {
 func reconcile(s *State) {
 	if agents := discoverNew(s); len(agents) > 0 {
 		if changed, err := OpenRegistry(StatePath()).Change(context.Background(), AddDiscoveredSessions(agents)); err == nil {
-			*s = *changed.Snapshot.MutableState()
+			*s = changed.Snapshot.State()
 		}
 	}
 }
@@ -542,7 +542,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if len(m.poll.discovered) > 0 {
 			if changed, err := OpenRegistry(StatePath()).Change(context.Background(), AddDiscoveredSessions(m.poll.discovered)); err == nil {
-				m.state = changed.Snapshot.MutableState()
+				state := changed.Snapshot.State()
+				m.state = &state
 			}
 		}
 		if selName != "" {
@@ -979,7 +980,8 @@ func (m model) addProject(path string) (tea.Model, tea.Cmd) {
 		m.setFlash(err.Error(), true)
 		return m, nil
 	}
-	m.state = changed.Snapshot.MutableState()
+	state := changed.Snapshot.State()
+	m.state = &state
 	for i, r := range m.rows() {
 		if r.kind == rowProject && r.project != nil && r.project.Name == name {
 			m.cursor = i
@@ -1011,7 +1013,8 @@ func (m model) renameAgent(newName string) (tea.Model, tea.Cmd) {
 		m.setFlash("Registry nach Umbenennen laden: "+err.Error(), true)
 		return m, nil
 	}
-	m.state = snapshot.MutableState()
+	state := snapshot.State()
+	m.state = &state
 	m.setFlash(fmt.Sprintf("%s → %s", m.renameFrom, newName), false)
 	return m, m.pollNow()
 }
@@ -1058,7 +1061,8 @@ func (m model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setFlash(err.Error(), true)
 			return m, nil
 		}
-		m.state = changed.Snapshot.MutableState()
+		state := changed.Snapshot.State()
+		m.state = &state
 		m.ensureSelectable()
 		m.setFlash(fmt.Sprintf("Projekt %q entfernt (Dateien bleiben unberührt)", p.Name), false)
 		return m, m.pollNow()

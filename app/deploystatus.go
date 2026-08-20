@@ -61,15 +61,32 @@ func projectKeywords() []string {
 }
 
 type DeployStatus struct {
-	AzOK       bool        `json:"azOk"`
-	AzErr      string      `json:"azErr"`
-	AzSub      string      `json:"azSub"`
-	AzSubID    string      `json:"azSubId"`
-	ArgoOK     bool        `json:"argoOk"`
-	ArgoServer string      `json:"argoServer"`
-	ArgoErr    string      `json:"argoErr"`
-	Builds     []BuildInfo `json:"builds"`
-	Apps       []ArgoApp   `json:"apps"`
+	AzOK             bool                 `json:"azOk"`
+	AzErr            string               `json:"azErr"`
+	AzSub            string               `json:"azSub"`
+	AzSubID          string               `json:"azSubId"`
+	AzRemoteCoverage DeployRemoteCoverage `json:"azRemoteCoverage"`
+	ArgoOK           bool                 `json:"argoOk"`
+	ArgoServer       string               `json:"argoServer"`
+	ArgoErr          string               `json:"argoErr"`
+	Builds           []BuildInfo          `json:"builds"`
+	Apps             []ArgoApp            `json:"apps"`
+}
+
+type DeployRemoteProblem struct {
+	Project   string                   `json:"project"`
+	State     core.RepositoryKnowledge `json:"state"`
+	Operation string                   `json:"operation"`
+	Message   string                   `json:"message"`
+}
+
+// DeployRemoteCoverage keeps unavailable repository discovery distinct from
+// a known project set that simply has no Azure DevOps remotes.
+type DeployRemoteCoverage struct {
+	State             core.HistorySourceState `json:"state"`
+	Projects          int                     `json:"projects"`
+	AvailableProjects int                     `json:"availableProjects"`
+	Problems          []DeployRemoteProblem   `json:"problems,omitempty"`
 }
 
 type AzAccount struct {
@@ -80,19 +97,52 @@ type AzAccount struct {
 
 var azdoRemoteRe = regexp.MustCompile(`dev\.azure\.com[:/](?:v3/)?([^/@]+)/([^/]+)(?:/_git)?/`)
 
-func azdoOrgProjects() [][2]string {
+type deploymentRemoteReader interface {
+	RemoteURL(context.Context, string, string) core.RepositoryFact[string]
+}
+
+func azdoOrgProjects(ctx context.Context) ([][2]string, DeployRemoteCoverage) {
 	st, err := core.LoadState()
 	if err != nil {
-		return nil
+		return nil, DeployRemoteCoverage{
+			State: core.HistorySourceUnavailable,
+			Problems: []DeployRemoteProblem{{
+				State: core.RepositoryUnknown, Operation: "registry", Message: err.Error(),
+			}},
+		}
+	}
+	return discoverAzdoOrgProjects(ctx, st.Projects, core.NewRepositories())
+}
+
+func discoverAzdoOrgProjects(ctx context.Context, projects []core.Project, remotes deploymentRemoteReader) ([][2]string, DeployRemoteCoverage) {
+	coverage := DeployRemoteCoverage{State: core.HistorySourceAbsent}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if remotes == nil {
+		remotes = core.NewRepositories()
 	}
 	seen := map[string]bool{}
 	var out [][2]string
-	for _, p := range st.Projects {
-		url, err := core.GitCmd(p.Path, "remote", "get-url", "origin")
-		if err != nil {
+	hasPartial := false
+	for _, p := range projects {
+		if strings.TrimSpace(p.Path) == "" {
 			continue
 		}
-		m := azdoRemoteRe.FindStringSubmatch(strings.TrimSpace(url))
+		coverage.Projects++
+		remote := remotes.RemoteURL(ctx, p.Path, "origin")
+		if remote.State != core.RepositoryKnown {
+			hasPartial = hasPartial || remote.State == core.RepositoryPartial
+			problem := DeployRemoteProblem{Project: p.Name, State: remote.State, Operation: "remote_url", Message: "remote URL unavailable"}
+			if remote.Problem != nil {
+				problem.Operation = remote.Problem.Operation
+				problem.Message = remote.Problem.Message
+			}
+			coverage.Problems = append(coverage.Problems, problem)
+			continue
+		}
+		coverage.AvailableProjects++
+		m := azdoRemoteRe.FindStringSubmatch(remote.Value)
 		if m == nil {
 			continue
 		}
@@ -107,7 +157,27 @@ func azdoOrgProjects() [][2]string {
 		seen[key] = true
 		out = append(out, [2]string{org, proj})
 	}
-	return out
+	switch {
+	case coverage.Projects == 0:
+		coverage.State = core.HistorySourceAbsent
+	case coverage.AvailableProjects == coverage.Projects:
+		coverage.State = core.HistorySourceAvailable
+	case coverage.AvailableProjects == 0 && !hasPartial:
+		coverage.State = core.HistorySourceUnavailable
+	default:
+		coverage.State = core.HistorySourcePartial
+	}
+	sort.Slice(coverage.Problems, func(i, j int) bool {
+		left, right := coverage.Problems[i], coverage.Problems[j]
+		if left.Project != right.Project {
+			return left.Project < right.Project
+		}
+		if left.Operation != right.Operation {
+			return left.Operation < right.Operation
+		}
+		return left.Message < right.Message
+	})
+	return out, coverage
 }
 
 func argoServer() string {
@@ -147,12 +217,14 @@ func (a *App) DeployStatus() DeployStatus {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		defer cancel()
+		pairs, coverage := azdoOrgProjects(ctx)
+		ds.AzRemoteCoverage = coverage
 		if _, err := exec.LookPath("az"); err != nil {
 			ds.AzErr = "az CLI nicht installiert"
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-		defer cancel()
 		if out, err := runCmd(ctx, "az", "account", "show", "-o", "json"); err == nil {
 			var acc struct {
 				ID   string `json:"id"`
@@ -163,9 +235,12 @@ func (a *App) DeployStatus() DeployStatus {
 				ds.AzSubID = acc.ID
 			}
 		}
-		pairs := azdoOrgProjects()
 		if len(pairs) == 0 {
-			ds.AzErr = "kein Azure-DevOps-Remote in den Projekten gefunden"
+			if coverage.State == core.HistorySourcePartial || coverage.State == core.HistorySourceUnavailable {
+				ds.AzErr = "Azure-DevOps-Remote-Discovery unvollständig"
+			} else {
+				ds.AzErr = "kein Azure-DevOps-Remote in den Projekten gefunden"
+			}
 			return
 		}
 		for _, pair := range pairs {

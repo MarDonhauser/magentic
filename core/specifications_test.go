@@ -290,12 +290,44 @@ func TestSpecificationResolveStartRejectsSymlinkedSourceOutsideProject(t *testin
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
-	if len(discovery.Specifications) != 1 || discovery.Specifications[0].StartToken == "" {
-		t.Fatalf("Discover() did not expose the source for resolver validation: %#v", discovery.Specifications)
+	source := specificationSourceByKind(t, discovery, SpecificationSpecKit)
+	if len(discovery.Specifications) != 0 || source.Availability != SpecificationUnavailable || len(source.Problems) == 0 {
+		t.Fatalf("Discover() exposed a source outside the Project: source=%#v Specifications=%#v", source, discovery.Specifications)
 	}
-	_, err = module.ResolveStart(context.Background(), project, discovery.Specifications[0].StartToken)
-	if err == nil || !strings.Contains(err.Error(), "source escapes Project") {
-		t.Fatalf("ResolveStart() error = %v, want physical containment rejection", err)
+	if !strings.Contains(source.Problems[0].Message, "escapes") {
+		t.Fatalf("Discover() containment problem = %#v", source.Problems)
+	}
+}
+
+func TestSpecificationDiscoveryAndResolveRejectEscapedDocumentSymlink(t *testing.T) {
+	projectRoot := t.TempDir()
+	externalRoot := t.TempDir()
+	externalDocument := writeSpecificationTestFile(t, externalRoot, []string{"tasks.md"}, "- [ ] external secret\n")
+	specificationDirectory := filepath.Join(projectRoot, "specs", "001-login")
+	if err := os.MkdirAll(specificationDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(externalDocument, filepath.Join(specificationDirectory, "tasks.md")); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	project := Project{ID: "project-1", Name: "demo", Path: projectRoot}
+	module := NewSpecifications()
+	discovery, err := module.Discover(context.Background(), project, SpecificationQuery{Sources: []SpecificationSourceKind{SpecificationSpecKit}})
+	if err != nil {
+		t.Fatalf("Discover() error = %v", err)
+	}
+	specification := specificationByID(t, discovery, "001-login")
+	if specification.Availability != SpecificationPartial || specification.StartToken != "" || len(specification.Tasks) != 0 {
+		t.Fatalf("Discover() trusted an escaped document: %#v", specification)
+	}
+	if len(specification.Problems) == 0 || !strings.Contains(specification.Problems[0].Message, "escapes") {
+		t.Fatalf("Discover() containment problems = %#v", specification.Problems)
+	}
+
+	ref := makeSpecificationRef(project, SpecificationSpecKit, "001-login", false)
+	_, err = module.ResolveStart(context.Background(), project, startTokenForSpecification(ref))
+	if err == nil || !strings.Contains(err.Error(), "escapes") {
+		t.Fatalf("ResolveStart() error = %v, want escaped document rejection", err)
 	}
 }
 
@@ -312,10 +344,14 @@ func TestSpecificationLifecycleOnlyUsesTerminalFactsForDone(t *testing.T) {
 func TestUnreadableSpecificationTasksRemainPartialAndUnknownOnBoard(t *testing.T) {
 	root := t.TempDir()
 	tasksPath := writeSpecificationTestFile(t, root, []string{"specs", "001-login", "tasks.md"}, "- [ ] Implement\n")
+	tasksPhysical, err := filepath.EvalSymlinks(tasksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	filesystem := faultSpecificationsFilesystem{
 		specificationsFilesystem: osSpecificationsFilesystem{},
 		readFileErrors: map[string]error{
-			filepath.Clean(tasksPath): errors.New("tasks unreadable"),
+			filepath.Clean(tasksPhysical): errors.New("tasks unreadable"),
 		},
 	}
 	discovery, err := newSpecifications(filesystem, builtinSpecificationSourceAdapters()...).Discover(

@@ -12,31 +12,19 @@ import (
 	"time"
 )
 
-func lifecycleForState(st *State) *SessionLifecycle {
-	registryPath := StatePath()
-	if st != nil && st.registryPath != "" {
-		registryPath = st.registryPath
-	}
-	ledgerPath := SessionLifecyclePath()
-	if os.Getenv("MAGENTIC_LIFECYCLE") == "" && registryPath != StatePath() {
-		ledgerPath = filepath.Join(filepath.Dir(registryPath), "lifecycle.json")
-	}
-	return OpenSessionLifecycle(SessionLifecycleConfig{RegistryPath: registryPath, LedgerPath: ledgerPath})
+func defaultSessionLifecycle() *SessionLifecycle {
+	return OpenSessionLifecycle(SessionLifecycleConfig{})
 }
 
 func refreshState(st *State) error {
 	if st == nil {
 		return fmt.Errorf("Session Registry is unavailable")
 	}
-	path := st.registryPath
-	if path == "" {
-		path = StatePath()
-	}
-	snapshot, err := OpenRegistry(path).Snapshot(context.Background())
+	snapshot, err := OpenRegistry(StatePath()).Snapshot(context.Background())
 	if err != nil {
 		return err
 	}
-	*st = *snapshot.MutableState()
+	*st = snapshot.State()
 	return nil
 }
 
@@ -45,15 +33,11 @@ func registerDiscovered(st *State) error {
 	if len(discovered) == 0 {
 		return nil
 	}
-	path := st.registryPath
-	if path == "" {
-		path = StatePath()
-	}
-	result, err := OpenRegistry(path).Change(context.Background(), AddDiscoveredSessions(discovered))
+	result, err := OpenRegistry(StatePath()).Change(context.Background(), AddDiscoveredSessions(discovered))
 	if err != nil {
 		return err
 	}
-	*st = *result.Snapshot.MutableState()
+	*st = result.Snapshot.State()
 	return nil
 }
 
@@ -96,7 +80,7 @@ func DiscoverNew(s *State) []Agent {
 }
 
 func RestoreSessions(st *State) int {
-	result, err := lifecycleForState(st).Reconcile(context.Background())
+	result, err := defaultSessionLifecycle().Reconcile(context.Background())
 	if err != nil {
 		Logf("Session Lifecycle reconcile: %v", err)
 		return 0
@@ -115,7 +99,7 @@ func ReopenLater(st *State, name string) error {
 	if a == nil {
 		return fmt.Errorf("unbekannte Session: %s", name)
 	}
-	if _, err := lifecycleForState(st).Resume(context.Background(), a.ID, a.Name); err != nil {
+	if _, err := defaultSessionLifecycle().Resume(context.Background(), a.ID, a.Name); err != nil {
 		return err
 	}
 	return refreshState(st)
@@ -438,7 +422,7 @@ func startSkillAgent(st *State, dir, prompt, kind, nameHint string, specificatio
 	case "deploy":
 		purpose = SessionPurposeDeploy
 	}
-	result, err := lifecycleForState(st).Provision(context.Background(), SessionProvision{
+	result, err := defaultSessionLifecycle().Provision(context.Background(), SessionProvision{
 		Project: project, Name: name, Directory: dir,
 		Worktree: project.Path != "" && filepath.Clean(dir) != filepath.Clean(project.Path),
 		Kind:     SessionKindCodingAgent, Purpose: purpose, SpecificationRef: specificationRef, InitialPrompt: prompt,
@@ -672,7 +656,7 @@ func RemoveWorktree(st *State, proj *Project, path string) error {
 	if err := validateWorktreeRemovalObservations(onPath, observations); err != nil {
 		return err
 	}
-	lifecycle := lifecycleForState(st)
+	lifecycle := defaultSessionLifecycle()
 	for _, a := range onPath {
 		if _, err := lifecycle.Remove(ctx, a.ID, a.Name); err != nil {
 			return err
@@ -788,7 +772,7 @@ func createSession(st *State, projName string, worktree bool, name, kind string)
 	if kind == KindDock {
 		presentation = SessionPresentationDock
 	}
-	result, err := lifecycleForState(st).Provision(context.Background(), SessionProvision{
+	result, err := defaultSessionLifecycle().Provision(context.Background(), SessionProvision{
 		Project: *proj, Name: name, Directory: proj.Path,
 		CreateWorktree: worktree, Worktree: worktree,
 		Kind: sessionKind, Presentation: presentation, Purpose: SessionPurposeWork,
@@ -815,7 +799,7 @@ func startSession(st *State, name, dir, project string, worktree bool, kind stri
 	if kind == KindDock {
 		presentation = SessionPresentationDock
 	}
-	result, err := lifecycleForState(st).Provision(context.Background(), SessionProvision{
+	result, err := defaultSessionLifecycle().Provision(context.Background(), SessionProvision{
 		Project: proj, Name: name, Directory: dir, Worktree: worktree,
 		Kind: sessionKind, Presentation: presentation,
 	})
@@ -833,7 +817,7 @@ func ParkSession(st *State, name string) error {
 	if session == nil {
 		return fmt.Errorf("unbekannte Session: %s", name)
 	}
-	if _, err := lifecycleForState(st).Park(context.Background(), session.ID, session.Name); err != nil {
+	if _, err := defaultSessionLifecycle().Park(context.Background(), session.ID, session.Name); err != nil {
 		return err
 	}
 	return refreshState(st)
@@ -844,7 +828,7 @@ func RemoveRegisteredSession(st *State, name string) error {
 	if session == nil {
 		return nil
 	}
-	if _, err := lifecycleForState(st).Remove(context.Background(), session.ID, session.Name); err != nil {
+	if _, err := defaultSessionLifecycle().Remove(context.Background(), session.ID, session.Name); err != nil {
 		return err
 	}
 	return refreshState(st)

@@ -310,6 +310,21 @@ func TestHistoryLocationFallbackTreatsMultiProviderRunsAsOneSession(t *testing.T
 	}
 }
 
+func TestHistoryLocationFallbackRanksOnlyProviderCompatibleSessions(t *testing.T) {
+	resolver := newHistoryAssociationResolver(HistoryAssociations{
+		Projects: []HistoryProjectAssociation{{Key: "project-id", Name: "Project", Path: "/work/project"}},
+		Sessions: []HistorySessionAssociation{
+			{Key: "claude-child", Name: "Claude child", ProjectKey: "project-id", Dir: "/work/project/sub", Provider: HistoryProviderClaude, ConversationID: "claude-run"},
+			{Key: "codex-parent", Name: "Codex parent", ProjectKey: "project-id", Dir: "/work/project", Provider: HistoryProviderCodex, ConversationID: "codex-run"},
+		},
+	})
+
+	got := resolver.resolve(historyRecord{Provider: HistoryProviderCodex, CWD: "/work/project/sub/deeper"})
+	if got.SessionKey.State != HistoryFactKnown || got.SessionKey.Value != "codex-parent" {
+		t.Fatalf("nested incompatible Session won provider-qualified path ranking: %#v", got)
+	}
+}
+
 func openTestWorkHistory(t *testing.T) (*WorkHistory, string, string, string) {
 	t.Helper()
 	root := t.TempDir()

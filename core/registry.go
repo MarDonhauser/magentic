@@ -39,14 +39,6 @@ func (s RegistrySnapshot) State() State {
 	return cloneState(&s.state)
 }
 
-func (s RegistrySnapshot) MutableState() *State {
-	state := cloneState(&s.state)
-	state.registryPath = s.state.registryPath
-	baseline := cloneState(&state)
-	state.baseline = &baseline
-	return &state
-}
-
 type registryChangeKind uint8
 
 const (
@@ -55,7 +47,6 @@ const (
 	registryReorderProjects
 	registrySetMainBranch
 	registryRegisterSession
-	registryReplaceSession
 	registryRemoveSession
 	registryMarkSeen
 	registryMarkLater
@@ -78,8 +69,10 @@ type RegistryChange struct {
 	newName     string
 	newRuntime  string
 	mainBranch  string
-	order       []string
+	order       []ProjectID
 	sessions    []Session
+	baseCommit  string
+	baseDirty   []string
 	at          time.Time
 }
 
@@ -91,8 +84,8 @@ func RemoveProject(projectID ProjectID, name string) RegistryChange {
 	return RegistryChange{kind: registryRemoveProject, projectID: projectID, projectName: name}
 }
 
-func ReorderProjects(order []string) RegistryChange {
-	return RegistryChange{kind: registryReorderProjects, order: append([]string(nil), order...)}
+func ReorderProjects(order []ProjectID) RegistryChange {
+	return RegistryChange{kind: registryReorderProjects, order: append([]ProjectID(nil), order...)}
 }
 
 func SetProjectMainBranch(projectID ProjectID, name, branch string) RegistryChange {
@@ -101,10 +94,6 @@ func SetProjectMainBranch(projectID ProjectID, name, branch string) RegistryChan
 
 func RegisterSession(session Session) RegistryChange {
 	return RegistryChange{kind: registryRegisterSession, session: session}
-}
-
-func ReplaceSession(session Session) RegistryChange {
-	return RegistryChange{kind: registryReplaceSession, session: session}
 }
 
 func RemoveSession(sessionID SessionID, name string) RegistryChange {
@@ -121,6 +110,17 @@ func MarkSessionLater(sessionID SessionID, name string, at time.Time) RegistryCh
 
 func ReopenRegisteredSession(sessionID SessionID, name string) RegistryChange {
 	return RegistryChange{kind: registryReopenSession, sessionID: sessionID, sessionName: name}
+}
+
+// ReopenRegisteredSessionWithBaseline atomically records a newly-observed
+// repository baseline and clears the durable Later intent. Existing baseline
+// truth is validated rather than overwritten, so retries cannot clobber a
+// concurrent Registry change.
+func ReopenRegisteredSessionWithBaseline(sessionID SessionID, name, baseCommit string, baseDirty []string) RegistryChange {
+	return RegistryChange{
+		kind: registryReopenSession, sessionID: sessionID, sessionName: name,
+		baseCommit: strings.TrimSpace(baseCommit), baseDirty: append([]string(nil), baseDirty...),
+	}
 }
 
 func MarkSessionDeploy(sessionID SessionID, name string, at time.Time) RegistryChange {
@@ -164,7 +164,6 @@ func (r *Registry) Snapshot(ctx context.Context) (RegistrySnapshot, error) {
 			return err
 		}
 		changed := normalizeRegistryState(&state)
-		state.registryPath = r.path
 		if exists && (changed || rescued) {
 			if err := backupLegacyRegistry(r.path, raw); err != nil {
 				return err
@@ -202,7 +201,6 @@ func (r *Registry) commit(ctx context.Context, apply func(*State) (bool, error),
 			return err
 		}
 		migrated := normalizeRegistryState(&state)
-		state.registryPath = r.path
 		changed, err := apply(&state)
 		if err != nil {
 			return err
@@ -221,7 +219,6 @@ func (r *Registry) commit(ctx context.Context, apply func(*State) (bool, error),
 				return err
 			}
 		}
-		state.registryPath = r.path
 		if result != nil {
 			result.Revision = state.Revision
 			result.Snapshot = RegistrySnapshot{state: cloneState(&state)}
@@ -257,18 +254,28 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 		return true, id, "", nil
 	case registryReorderProjects:
 		before := projectOrder(state.Projects)
-		rank := make(map[string]int, len(change.order))
-		for i, name := range change.order {
-			rank[name] = i
+		known := make(map[ProjectID]bool, len(state.Projects))
+		for _, project := range state.Projects {
+			known[project.ID] = true
+		}
+		rank := make(map[ProjectID]int, len(change.order))
+		for i, id := range change.order {
+			if id == "" || rank[id] != 0 {
+				return false, "", "", fmt.Errorf("ungültige ProjectID in Sortierung: %q", id)
+			}
+			if !known[id] {
+				return false, "", "", fmt.Errorf("unbekannte ProjectID in Sortierung: %s", id)
+			}
+			rank[id] = i + 1
 		}
 		sort.SliceStable(state.Projects, func(i, j int) bool {
-			ri, iok := rank[state.Projects[i].Name]
-			rj, jok := rank[state.Projects[j].Name]
+			ri, iok := rank[state.Projects[i].ID]
+			rj, jok := rank[state.Projects[j].ID]
 			if !iok {
-				ri = len(rank)
+				ri = len(rank) + 1
 			}
 			if !jok {
-				rj = len(rank)
+				rj = len(rank) + 1
 			}
 			return ri < rj
 		})
@@ -291,22 +298,6 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 			return false, "", "", fmt.Errorf("Session %q existiert schon", session.Name)
 		}
 		state.Agents = append(state.Agents, session)
-		return true, "", session.ID, nil
-	case registryReplaceSession:
-		session := change.session
-		normalizeSession(&session)
-		associateSessionProject(state, &session)
-		idx := sessionIndex(state, session.ID, session.Name)
-		if idx < 0 {
-			return false, "", "", fmt.Errorf("Session %q nicht gefunden", session.Name)
-		}
-		if state.Agents[idx].ID != session.ID {
-			return false, "", "", fmt.Errorf("Session-ID darf nicht geändert werden")
-		}
-		if reflect.DeepEqual(state.Agents[idx], session) {
-			return false, "", session.ID, nil
-		}
-		state.Agents[idx] = session
 		return true, "", session.ID, nil
 	case registryRemoveSession:
 		idx := sessionIndex(state, change.sessionID, change.sessionName)
@@ -335,10 +326,22 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 		case registryMarkLater:
 			session.LaterAt = at
 		case registryReopenSession:
-			if session.LaterAt.IsZero() {
-				return false, "", session.ID, nil
+			changed := false
+			if change.baseCommit != "" {
+				switch {
+				case session.BaseCommit == "":
+					session.BaseCommit = change.baseCommit
+					session.BaseDirty = append([]string(nil), change.baseDirty...)
+					changed = true
+				case session.BaseCommit != change.baseCommit || !equalStringSlice(session.BaseDirty, change.baseDirty):
+					return false, "", "", fmt.Errorf("%w: Session %q hat bereits eine andere Repository-Baseline", ErrRegistryConflict, session.Name)
+				}
 			}
-			session.LaterAt = time.Time{}
+			if !session.LaterAt.IsZero() {
+				session.LaterAt = time.Time{}
+				changed = true
+			}
+			return changed, "", session.ID, nil
 		case registryMarkDeploy:
 			session.DeployAt = at
 		case registryRenameSession:
@@ -374,6 +377,18 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 	default:
 		return false, "", "", fmt.Errorf("unbekannte Registry-Änderung")
 	}
+}
+
+func equalStringSlice(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeRegistryState(state *State) bool {
@@ -596,7 +611,6 @@ func cloneState(state *State) State {
 		clone.Agents[i].BaseDirty = append([]string(nil), clone.Agents[i].BaseDirty...)
 		clone.Agents[i].AgentRuns = append([]AgentRunRef(nil), clone.Agents[i].AgentRuns...)
 	}
-	clone.baseline = nil
 	return clone
 }
 

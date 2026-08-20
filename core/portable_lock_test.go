@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -87,5 +88,54 @@ func TestPortableDirectoryLockRecoversCrashBeforeOwnerWrite(t *testing.T) {
 	})
 	if err != nil || !called {
 		t.Fatalf("ownerless abandoned lock was not recovered: called=%v err=%v", called, err)
+	}
+}
+
+func TestPortableDirectoryLockRecoversMalformedOwnerWrite(t *testing.T) {
+	for _, contents := range []string{"", "short-write"} {
+		contents := contents
+		t.Run(fmt.Sprintf("bytes_%d", len(contents)), func(t *testing.T) {
+			lockDir := filepath.Join(t.TempDir(), "malformed-owner.lockdir")
+			if err := os.Mkdir(lockDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			owner := filepath.Join(lockDir, "owner")
+			if err := os.WriteFile(owner, []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			old := time.Now().Add(-time.Hour)
+			if err := os.Chtimes(owner, old, old); err != nil {
+				t.Fatal(err)
+			}
+			called := false
+			err := withPortableDirectoryLockConfig(context.Background(), lockDir, portableDirectoryLockConfig{
+				staleAfter: 20 * time.Millisecond, heartbeat: 5 * time.Millisecond, retry: time.Millisecond,
+			}, func() error {
+				called = true
+				return nil
+			})
+			if err != nil || !called {
+				t.Fatalf("malformed abandoned lock was not recovered: called=%v err=%v", called, err)
+			}
+		})
+	}
+}
+
+func TestPortableDirectoryLockPublishesOwnerAtomically(t *testing.T) {
+	lockDir := t.TempDir()
+	owner := filepath.Join(lockDir, "owner")
+	nonce := NewUUID()
+	if err := writePortableDirectoryLockOwner(owner, nonce); err != nil {
+		t.Fatalf("writePortableDirectoryLockOwner() error = %v", err)
+	}
+	if !portableLockOwnedBy(owner, nonce) {
+		t.Fatal("published owner is not valid")
+	}
+	entries, err := os.ReadDir(lockDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "owner" {
+		t.Fatalf("owner publication left temporary files: %#v", entries)
 	}
 }

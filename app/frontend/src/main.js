@@ -219,12 +219,17 @@ async function blobToB64(blob) {
 
 const terms = new Map();
 
+function termConnectionKey(sessionID, name) {
+  return sessionID ? `session:${sessionID}` : `dock:${name}`;
+}
+
 onThemeChange(theme => {
   const nextTheme = terminalTheme(theme);
   for (const entry of terms.values()) entry.term.options.theme = nextTheme;
 });
 
 function makeTerm(sessionID, name) {
+  const connectionKey = termConnectionKey(sessionID, name);
   const wrap = document.createElement('div');
   wrap.className = 'term-wrap';
   const inner = document.createElement('div');
@@ -245,8 +250,8 @@ function makeTerm(sessionID, name) {
   term.loadAddon(fit);
   term.loadAddon(new WebLinksAddon((e, uri) => BrowserOpenURL(uri)));
   term.open(inner);
-  term.onData(d => WriteTerm(name, toB64(d)));
-  term.onResize(({ cols, rows }) => ResizeTerm(name, cols, rows));
+  term.onData(d => WriteTerm(connectionKey, toB64(d)));
+  term.onResize(({ cols, rows }) => ResizeTerm(connectionKey, cols, rows));
 
   let lastSel = '';
   let lastSelAt = 0;
@@ -256,7 +261,7 @@ function makeTerm(sessionID, name) {
   });
   term.attachCustomKeyEventHandler(e => {
     if (e.type === 'keydown' && e.key === 'Enter' && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
-      WriteTerm(name, toB64('\x1b\r'));
+      WriteTerm(connectionKey, toB64('\x1b\r'));
       e.preventDefault();
       return false;
     }
@@ -282,7 +287,7 @@ function makeTerm(sessionID, name) {
         if (!blob) return;
         try {
           const path = await SaveImage(await blobToB64(blob));
-          WriteTerm(name, toB64(path + ' '));
+          WriteTerm(connectionKey, toB64(path + ' '));
         } catch (err) {
           toast('Bild konnte nicht eingefügt werden: ' + err, true);
         }
@@ -290,8 +295,8 @@ function makeTerm(sessionID, name) {
       }
     }
   }, true);
-  EventsOn('term:data:' + name, b64 => term.write(fromB64(b64)));
-  EventsOn('term:closed:' + name, () => term.write('\r\n\x1b[31m— Verbindung beendet —\x1b[0m\r\n'));
+  EventsOn('term:data:' + connectionKey, b64 => term.write(fromB64(b64)));
+  EventsOn('term:closed:' + connectionKey, () => term.write('\r\n\x1b[31m— Verbindung beendet —\x1b[0m\r\n'));
 
   const sb = document.createElement('button');
   sb.className = 'scroll-bottom';
@@ -306,7 +311,7 @@ function makeTerm(sessionID, name) {
   term.onScroll(updateSb);
   term.onWriteParsed(updateSb);
 
-  const t = { term, fit, wrap, name, sessionID };
+  const t = { term, fit, wrap, name, sessionID, connectionKey };
   terms.set(name, t);
   return t;
 }
@@ -462,7 +467,7 @@ async function sendComposerMessage() {
     const pasted = t.term.modes.bracketedPasteMode
       ? `\x1b[200~${normalized}\x1b[201~`
       : normalized;
-    await WriteTerm(sessionName, toB64(pasted + '\r'));
+    await WriteTerm(t.connectionKey, toB64(pasted + '\r'));
     termPromptEl.value = '';
     t.term.scrollToBottom();
     setComposerHint(`An ${sessionName} gesendet`);
@@ -551,9 +556,10 @@ async function openSession(sessionID, name) {
   SetActiveTerm(sessionID);
   showPanel('terms');
   let t = terms.get(name);
-  if (t && t.sessionID && t.sessionID !== sessionID) {
-    EventsOff('term:data:' + name);
-    EventsOff('term:closed:' + name);
+  if (t && t.sessionID !== sessionID) {
+    EventsOff('term:data:' + t.connectionKey);
+    EventsOff('term:closed:' + t.connectionKey);
+    CloseTerm(t.connectionKey);
     try { t.term.dispose(); } catch { /* bereits beendet */ }
     t.wrap.remove();
     terms.delete(name);
@@ -571,7 +577,7 @@ async function openSession(sessionID, name) {
     try { await OpenTerm(sessionID, name, t.term.cols, t.term.rows); }
     catch (err) { t.term.write('\x1b[31m' + err + '\x1b[0m\r\n'); }
   } else {
-    ResizeTerm(name, t.term.cols, t.term.rows);
+    ResizeTerm(t.connectionKey, t.term.cols, t.term.rows);
   }
   t.term.focus();
   renderSidebar();
@@ -931,9 +937,10 @@ async function syncHydra() {
   const fresh = [];
   for (const a of agents) {
     let t = terms.get(a.name);
-    if (t && t.sessionID && t.sessionID !== a.id) {
-      EventsOff('term:data:' + a.name);
-      EventsOff('term:closed:' + a.name);
+    if (t && t.sessionID !== a.id) {
+      EventsOff('term:data:' + t.connectionKey);
+      EventsOff('term:closed:' + t.connectionKey);
+      CloseTerm(t.connectionKey);
       try { t.term.dispose(); } catch { /* bereits beendet */ }
       t.wrap.remove();
       terms.delete(a.name);
@@ -963,7 +970,7 @@ async function syncHydra() {
       try { await OpenTerm(a.id, a.name, t.term.cols, t.term.rows); }
       catch (err) { t.term.write('\x1b[31m' + err + '\x1b[0m\r\n'); }
     } else {
-      ResizeTerm(a.name, t.term.cols, t.term.rows);
+      ResizeTerm(t.connectionKey, t.term.cols, t.term.rows);
     }
   }
 }
@@ -1865,10 +1872,10 @@ async function refresh(force = false) {
 
 window.addEventListener('resize', () => {
   if (view === 'hydra') {
-    for (const [n, t] of terms) {
+    for (const t of terms.values()) {
       if (t.wrap.parentElement === hydraGridEl) {
         t.fit.fit();
-        ResizeTerm(n, t.term.cols, t.term.rows);
+        ResizeTerm(t.connectionKey, t.term.cols, t.term.rows);
       }
     }
     return;
@@ -1913,17 +1920,29 @@ function attachHover(div, sessionID) {
   div.addEventListener('mouseenter', () => {
     clearTimeout(hoverTimer);
     hoverTimer = setTimeout(async () => {
+      let text = '';
+      let detail = '';
       try {
-        const txt = await SessionPreview(sessionID);
-        if (!txt || !div.isConnected) return;
-        const r = div.getBoundingClientRect();
-        hoverEl.textContent = txt;
-        hoverEl.style.display = 'block';
-        hoverEl.style.left = (r.right + 10) + 'px';
-        hoverEl.style.top = '0px';
-        const top = Math.max(4, Math.min(r.top, window.innerHeight - hoverEl.offsetHeight - 10));
-        hoverEl.style.top = top + 'px';
-      } catch { /* Session weg */ }
+        const preview = (await SessionPreview(sessionID)) || {};
+        if (preview.contentKnown) {
+          text = preview.content || '';
+        } else if (['partial', 'unavailable'].includes(preview.source?.state)) {
+          text = 'Vorschau derzeit nicht verfügbar';
+          detail = Array.isArray(preview.source?.problems) ? preview.source.problems.join(' · ') : '';
+        }
+      } catch (err) {
+        text = 'Vorschau konnte nicht geladen werden';
+        detail = String(err || 'unbekannter Fehler');
+      }
+      if (!text || !div.isConnected) return;
+      const r = div.getBoundingClientRect();
+      hoverEl.textContent = text;
+      hoverEl.title = detail;
+      hoverEl.style.display = 'block';
+      hoverEl.style.left = (r.right + 10) + 'px';
+      hoverEl.style.top = '0px';
+      const top = Math.max(4, Math.min(r.top, window.innerHeight - hoverEl.offsetHeight - 10));
+      hoverEl.style.top = top + 'px';
     }, 350);
   });
   div.addEventListener('mouseleave', () => {
@@ -2002,12 +2021,12 @@ let tlLoading = false;
 
 function refitTerms() {
   if (view === 'hydra') {
-    for (const [n, t] of terms) {
-      if (t.wrap.parentElement === hydraGridEl) { t.fit.fit(); ResizeTerm(n, t.term.cols, t.term.rows); }
+    for (const t of terms.values()) {
+      if (t.wrap.parentElement === hydraGridEl) { t.fit.fit(); ResizeTerm(t.connectionKey, t.term.cols, t.term.rows); }
     }
   } else if (view === 'term') {
     const t = activeTerm && terms.get(activeTerm);
-    if (t) { t.fit.fit(); ResizeTerm(activeTerm, t.term.cols, t.term.rows); }
+    if (t) { t.fit.fit(); ResizeTerm(t.connectionKey, t.term.cols, t.term.rows); }
   }
 }
 
@@ -2128,8 +2147,8 @@ async function afterSessionGone(sessionID, name) {
   if (dockTabs().includes(name)) closeDockTab(name);
   const t = terms.get(name);
   if (t && (!t.sessionID || t.sessionID === sessionID)) {
-    EventsOff('term:data:' + name);
-    EventsOff('term:closed:' + name);
+    EventsOff('term:data:' + t.connectionKey);
+    EventsOff('term:closed:' + t.connectionKey);
     try { t.term.dispose(); } catch { /* schon weg */ }
     t.wrap.remove();
     terms.delete(name);
@@ -2207,14 +2226,23 @@ async function openLinksMenu(anchor) {
   subMenuEl.style.display = 'block';
   subMenuEl.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 380)) + 'px';
   subMenuEl.style.top = (r.bottom + 6) + 'px';
-  let links = [];
-  try { links = (await SessionLinks(sessionID)) || []; } catch { links = []; }
-  if (subMenuEl.style.display === 'none' || activeSessionID !== sessionID) return;
-  if (!links.length) {
-    subMenuEl.innerHTML = `<div class="mi-head">Links</div><div class="mi muted">keine Links in dieser Session gefunden</div>`;
+  let result;
+  try {
+    result = (await SessionLinks(sessionID)) || {};
+  } catch (err) {
+    if (subMenuEl.style.display === 'none' || activeSessionID !== sessionID) return;
+    subMenuEl.innerHTML = `<div class="mi-head">Links</div><div class="mi muted">Fehler: ${esc(err)}</div>`;
     return;
   }
-  subMenuEl.innerHTML = `<div class="mi-head">Links — Klick öffnet · ⌥-Klick kopiert</div>` +
+  if (subMenuEl.style.display === 'none' || activeSessionID !== sessionID) return;
+  const links = Array.isArray(result.links) ? result.links : [];
+  const coverage = historyCoverageNotice(result.sources, 'Links umfassen nur lesbare Quellen.');
+  if (!links.length) {
+    subMenuEl.innerHTML = `<div class="mi-head">Links</div>` + coverage.html +
+      `<div class="mi muted">${coverage.degraded.length ? 'keine Links in den lesbaren Quellen' : 'keine Links in dieser Session gefunden'}</div>`;
+    return;
+  }
+  subMenuEl.innerHTML = `<div class="mi-head">Links — Klick öffnet · ⌥-Klick kopiert</div>` + coverage.html +
     links.map(l =>
       `<div class="mi" data-url="${esc(l.url)}" title="${esc(l.url)}">` +
       `<span class="linkurl">${esc(shortUrl(l.url))}</span>` +
@@ -2323,21 +2351,21 @@ mountDock({
   // Persisted Dock tabs from releases before SessionID use are the sole
   // explicit legacy-name path in the backend. Listed Sessions always carry ID.
   attach: (name, cols, rows) => OpenTerm('', name, cols, rows),
-  write: (name, b64) => WriteTerm(name, b64),
-  resize: (name, cols, rows) => ResizeTerm(name, cols, rows),
+  write: (name, b64) => WriteTerm(termConnectionKey('', name), b64),
+  resize: (name, cols, rows) => ResizeTerm(termConnectionKey('', name), cols, rows),
   close: name => {
     // Dock-Terminals stehen in keiner Liste — bliebe die tmux-Session offen,
     // liefe sie unsichtbar weiter und wäre nur noch über tmux erreichbar.
-    CloseTerm(name);
+    CloseTerm(termConnectionKey('', name));
     KillSession('', name).catch(() => {});
   },
   onData: (name, cb) => {
-    const ev = 'term:data:' + name;
+    const ev = 'term:data:' + termConnectionKey('', name);
     EventsOn(ev, cb);
     return () => EventsOff(ev);
   },
   onClosed: (name, cb) => {
-    const ev = 'term:closed:' + name;
+    const ev = 'term:closed:' + termConnectionKey('', name);
     EventsOn(ev, cb);
     return () => EventsOff(ev);
   },

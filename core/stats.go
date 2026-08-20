@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -376,106 +375,38 @@ type statsCommitRepositoryResult struct {
 	Problems []StatsCommitProblem
 }
 
-// gitIdentity returns the effective identity used by this repository. At
-// least one field must be known: an absent identity is an unavailable source,
-// never permission to count every author in a shared repository.
-func gitIdentity(dir string) (email, name string, err error) {
-	return gitIdentityWithGit(dir, GitCmd)
+type statsRepositories interface {
+	OwnCommitsSince(context.Context, string, string) RepositoryFact[RepositoryOwnCommitSeries]
 }
 
-func gitIdentityWithGit(dir string, run gitRunner) (email, name string, err error) {
-	emailOut, emailErr := run(dir, "config", "user.email")
-	if emailErr == nil {
-		email = strings.ToLower(strings.TrimSpace(emailOut))
-	}
-	nameOut, nameErr := run(dir, "config", "user.name")
-	if nameErr == nil {
-		name = strings.ToLower(strings.TrimSpace(nameOut))
-	}
-	if email != "" || name != "" {
-		return email, name, nil
-	}
-
-	switch {
-	case emailErr != nil && nameErr != nil:
-		return "", "", fmt.Errorf("Git-Identität nicht lesbar (user.email: %v; user.name: %v)", emailErr, nameErr)
-	case emailErr != nil:
-		return "", "", fmt.Errorf("keine Git-Identität konfiguriert (user.email nicht lesbar: %v)", emailErr)
-	case nameErr != nil:
-		return "", "", fmt.Errorf("keine Git-Identität konfiguriert (user.name nicht lesbar: %v)", nameErr)
-	default:
-		return "", "", fmt.Errorf("keine Git-Identität konfiguriert")
-	}
-}
-
-func commitsPerDay(dir, since string) statsCommitRepositoryResult {
-	return commitsPerDayWithGit("", dir, since, GitCmd)
-}
-
-func commitsPerDayWithGit(project, dir, since string, run gitRunner) statsCommitRepositoryResult {
-	result := statsCommitRepositoryResult{Project: project, State: HistorySourceUnavailable}
-	email, name, err := gitIdentityWithGit(dir, run)
-	if err != nil {
-		result.Problems = []StatsCommitProblem{{
-			Project: project,
-			Kind:    statsCommitProblemIdentity,
-			Message: err.Error(),
-		}}
-		return result
-	}
-
-	out, err := run(dir, "log", "--all", "--since="+since, "--format=%ct%x1f%ae%x1f%an")
-	if err != nil {
-		result.Problems = []StatsCommitProblem{{
-			Project: project,
-			Kind:    statsCommitProblemLog,
-			Message: "Git-Verlauf nicht lesbar: " + err.Error(),
-		}}
-		return result
-	}
-
-	days := map[string]int{}
-	malformed := 0
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		fields := strings.Split(line, "\x1f")
-		if len(fields) != 3 {
-			malformed++
-			continue
-		}
-		seconds, err := strconv.ParseInt(fields[0], 10, 64)
-		if err != nil {
-			malformed++
-			continue
-		}
-		if ownCommit(fields[1], fields[2], email, name) {
-			days[time.Unix(seconds, 0).In(time.Local).Format(statsDateLayout)]++
-		}
-	}
-	result.Days = days
-	result.State = HistorySourceAvailable
-	if malformed > 0 {
+func statsCommitResult(project string, fact RepositoryFact[RepositoryOwnCommitSeries]) statsCommitRepositoryResult {
+	result := statsCommitRepositoryResult{Project: project, Days: map[string]int{}}
+	switch fact.State {
+	case RepositoryKnown:
+		result.State = HistorySourceAvailable
+	case RepositoryPartial:
 		result.State = HistorySourcePartial
+	default:
+		result.State = HistorySourceUnavailable
+	}
+	if fact.State == RepositoryKnown || fact.State == RepositoryPartial {
+		for _, seconds := range fact.Value.Timestamps {
+			result.Days[time.Unix(seconds, 0).In(time.Local).Format(statsDateLayout)]++
+		}
+	}
+	if fact.Problem != nil {
+		kind := statsCommitProblemLog
+		switch fact.Problem.Operation {
+		case repositoryProblemOwnCommitIdentity:
+			kind = statsCommitProblemIdentity
+		case repositoryProblemOwnCommitMalformed:
+			kind = statsCommitProblemMalformed
+		}
 		result.Problems = []StatsCommitProblem{{
-			Project: project,
-			Kind:    statsCommitProblemMalformed,
-			Message: fmt.Sprintf("Git-Verlauf enthält %d unlesbare Datensätze", malformed),
+			Project: project, Kind: kind, Message: fact.Problem.Message,
 		}}
 	}
 	return result
-}
-
-func ownCommit(commitEmail, commitName, email, name string) bool {
-	if email == "" && name == "" {
-		return false
-	}
-	if email != "" && strings.EqualFold(strings.TrimSpace(commitEmail), email) {
-		return true
-	}
-	return name != "" && strings.EqualFold(strings.TrimSpace(commitName), name)
 }
 
 // BuildStats is the compatibility Interface used by the TUI and desktop.
@@ -488,10 +419,10 @@ func BuildStats(state *State, days int) Stats {
 }
 
 func buildStats(ctx context.Context, state *State, days int, history *WorkHistory, now time.Time, historyErr error) Stats {
-	return buildStatsWithGit(ctx, state, days, history, now, historyErr, GitCmd)
+	return buildStatsWithRepositories(ctx, state, days, history, now, historyErr, NewRepositories())
 }
 
-func buildStatsWithGit(ctx context.Context, state *State, days int, history *WorkHistory, now time.Time, historyErr error, run gitRunner) Stats {
+func buildStatsWithRepositories(ctx context.Context, state *State, days int, history *WorkHistory, now time.Time, historyErr error, repositories statsRepositories) Stats {
 	if days <= 0 || days > 365 {
 		days = 30
 	}
@@ -510,7 +441,7 @@ func buildStatsWithGit(ctx context.Context, state *State, days int, history *Wor
 	before := last.AddDate(0, 0, 1)
 	fromKey, toKey := first.Format(statsDateLayout), last.Format(statsDateLayout)
 
-	commits := collectStatsCommitsWithGit(state, fromKey, run)
+	commits := collectStatsCommitsWithRepositories(ctx, state, fromKey, repositories)
 	commitsByDay, commitsByProject := selectStatsCommits(commits.ByProject, fromKey, toKey)
 	result.CommitCoverage = commits.Coverage
 
@@ -688,11 +619,7 @@ type statsCommitCollection struct {
 	Coverage      StatsCommitCoverage
 }
 
-func collectStatsCommits(state *State, since string) statsCommitCollection {
-	return collectStatsCommitsWithGit(state, since, GitCmd)
-}
-
-func collectStatsCommitsWithGit(state *State, since string, run gitRunner) statsCommitCollection {
+func collectStatsCommitsWithRepositories(ctx context.Context, state *State, since string, source statsRepositories) statsCommitCollection {
 	collection := statsCommitCollection{
 		ByProject:     map[string]map[string]int{},
 		ProjectStates: map[string]HistorySourceState{},
@@ -712,11 +639,15 @@ func collectStatsCommitsWithGit(state *State, since string, run gitRunner) stats
 	if len(repositories) == 0 {
 		return collection
 	}
+	if source == nil {
+		source = NewRepositories()
+	}
 
 	results := make(chan statsCommitRepositoryResult, len(repositories))
 	for _, project := range repositories {
 		go func(project Project) {
-			results <- commitsPerDayWithGit(project.Name, project.Path, since, run)
+			fact := source.OwnCommitsSince(ctx, project.Path, since)
+			results <- statsCommitResult(project.Name, fact)
 		}(project)
 	}
 

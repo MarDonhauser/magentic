@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -146,8 +147,9 @@ func registerLifecycleSession(t *testing.T, registry *Registry, runtime *fakeLif
 }
 
 type responseLostLifecycleRegistry struct {
-	registry       *Registry
-	loseRenameOnce bool
+	registry               *Registry
+	loseRenameOnce         bool
+	loseBaselineReopenOnce bool
 }
 
 func (r *responseLostLifecycleRegistry) Snapshot(ctx context.Context) (RegistrySnapshot, error) {
@@ -159,6 +161,10 @@ func (r *responseLostLifecycleRegistry) Change(ctx context.Context, change Regis
 	if err == nil && r.loseRenameOnce && change.kind == registryRenameSession {
 		r.loseRenameOnce = false
 		return result, errors.New("Registry response lost")
+	}
+	if err == nil && r.loseBaselineReopenOnce && change.kind == registryReopenSession && change.baseCommit != "" {
+		r.loseBaselineReopenOnce = false
+		return result, errors.New("Registry baseline-reopen response lost")
 	}
 	return result, err
 }
@@ -405,6 +411,58 @@ func TestLifecycleResumePersistsCapturedBaselineForLegacySession(t *testing.T) {
 	finalSession := finalState.SessionByID(legacy.ID)
 	if finalSession == nil || finalSession.BaseCommit != "abc123" || !finalSession.LaterAt.IsZero() {
 		t.Fatalf("Reconcile changed persisted Registry truth: %+v", finalSession)
+	}
+}
+
+func TestLifecycleResumeRetriesLostAtomicBaselineReopenResponse(t *testing.T) {
+	_, runtime, registry, ledgerPath := lifecycleHarness(t)
+	project := registerLifecycleProject(t, registry)
+	laterAt := time.Date(2026, 8, 20, 9, 30, 0, 0, time.UTC)
+	legacy := registerLifecycleSession(t, registry, runtime, Session{
+		ID: "legacy-response-lost", Name: "legacy", RuntimeName: "opaque-legacy-runtime",
+		ProjectID: project.ID, Project: project.Name, Dir: project.Path, LaterAt: laterAt,
+	}, false)
+	responseLost := &responseLostLifecycleRegistry{registry: registry, loseBaselineReopenOnce: true}
+	lifecycle := newSessionLifecycle(
+		responseLost,
+		runtime,
+		fakeLifecycleRepositories{worktreePath: filepath.Join(filepath.Dir(ledgerPath), "project-agents", "legacy")},
+		ledgerPath,
+	)
+
+	if _, err := lifecycle.Resume(context.Background(), legacy.ID, legacy.Name); err == nil ||
+		!strings.Contains(err.Error(), "baseline-reopen response lost") {
+		t.Fatalf("ambiguous Resume error = %v", err)
+	}
+	committed, err := registry.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	committedState := committed.State()
+	committedSession := committedState.SessionByID(legacy.ID)
+	if committedSession == nil || committedSession.BaseCommit != "abc123" || !committedSession.LaterAt.IsZero() {
+		t.Fatalf("lost response did not leave the atomic postcondition committed: %+v", committedSession)
+	}
+
+	deployAt := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	marked, err := registry.Change(context.Background(), MarkSessionDeploy(legacy.ID, legacy.Name, deployAt))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := lifecycle.Resume(context.Background(), legacy.ID, legacy.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Session.BaseCommit != "abc123" || !resumed.Session.LaterAt.IsZero() || !resumed.Session.DeployAt.Equal(deployAt) ||
+		resumed.Session.RuntimeName != legacy.RuntimeName {
+		t.Fatalf("Resume retry lost current Registry fields: %+v", resumed.Session)
+	}
+	afterRetry, err := registry.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterRetry.Revision() != marked.Revision {
+		t.Fatalf("idempotent Resume retry rewrote Registry revision %d -> %d", marked.Revision, afterRetry.Revision())
 	}
 }
 

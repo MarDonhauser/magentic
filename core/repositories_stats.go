@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	repositoryOwnCommitFormat          = "%ct%x1f%ae%x1f%an%x1e"
-	repositoryProblemOwnCommitIdentity = "own_commit_identity"
-	repositoryProblemOwnCommitLog      = "own_commit_log"
+	repositoryOwnCommitFormat           = "%ct%x1f%ae%x1f%an%x1e"
+	repositoryProblemOwnCommitIdentity  = "own_commit_identity"
+	repositoryProblemOwnCommitLog       = "own_commit_log"
 	repositoryProblemOwnCommitMalformed = "own_commit_log_malformed"
 )
 
@@ -71,11 +71,17 @@ func repositoryFactForOwnCommitError(operation string, err error) RepositoryFact
 func (r *Repositories) effectiveIdentity(ctx context.Context, dir string) (email, name string, err error) {
 	emailOut, emailErr := r.runner.Run(ctx, dir, "config", "user.email")
 	if emailErr == nil {
-		email = strings.ToLower(strings.TrimSpace(emailOut))
+		email, emailErr = parseRepositoryIdentityValue(emailOut, "user.email")
 	}
 	nameOut, nameErr := r.runner.Run(ctx, dir, "config", "user.name")
 	if nameErr == nil {
-		name = strings.ToLower(strings.TrimSpace(nameOut))
+		name, nameErr = parseRepositoryIdentityValue(nameOut, "user.name")
+	}
+	if emailErr != nil && emailOut != "" {
+		return "", "", fmt.Errorf("Git identity user.email is malformed: %w", emailErr)
+	}
+	if nameErr != nil && nameOut != "" {
+		return "", "", fmt.Errorf("Git identity user.name is malformed: %w", nameErr)
 	}
 	if email != "" || name != "" {
 		return email, name, nil
@@ -93,10 +99,37 @@ func (r *Repositories) effectiveIdentity(ctx context.Context, dir string) (email
 	}
 }
 
+func parseRepositoryIdentityValue(out, field string) (string, error) {
+	value, err := parseRepositoryTerminatedLine(out, field)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(value) != value {
+		return "", fmt.Errorf("%s has surrounding whitespace", field)
+	}
+	for _, char := range value {
+		if char == '\x00' || char < ' ' || char == '\x7f' {
+			return "", fmt.Errorf("%s contains control characters", field)
+		}
+	}
+	return strings.ToLower(value), nil
+}
+
 func parseRepositoryOwnCommitSeries(out, email, name string) (RepositoryOwnCommitSeries, int) {
 	series := RepositoryOwnCommitSeries{}
 	malformed := 0
-	for _, raw := range strings.Split(out, "\x1e") {
+	normalized := strings.ReplaceAll(out, "\r\n", "\n")
+	if strings.Contains(normalized, "\r") {
+		malformed++
+	}
+	normalized = strings.TrimRight(normalized, "\n")
+	if normalized == "" {
+		return series, malformed
+	}
+	if !strings.HasSuffix(normalized, "\x1e") {
+		malformed++
+	}
+	for _, raw := range strings.Split(normalized, "\x1e") {
 		record := strings.Trim(raw, "\r\n")
 		if record == "" {
 			continue
@@ -106,7 +139,7 @@ func parseRepositoryOwnCommitSeries(out, email, name string) (RepositoryOwnCommi
 			malformed++
 			continue
 		}
-		seconds, err := strconv.ParseInt(strings.TrimSpace(fields[0]), 10, 64)
+		seconds, err := strconv.ParseInt(fields[0], 10, 64)
 		if err != nil || seconds < 0 {
 			malformed++
 			continue

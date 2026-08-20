@@ -1077,6 +1077,9 @@ func longestHistorySessionMatches(sessions []HistorySessionAssociation, path str
 	best := -1
 	var out []HistorySessionAssociation
 	for _, session := range sessions {
+		if session.Provider != "" && session.Provider != provider {
+			continue
+		}
 		if session.Dir == "" {
 			continue
 		}
@@ -1091,19 +1094,9 @@ func longestHistorySessionMatches(sessions []HistorySessionAssociation, path str
 		}
 	}
 	// A Registry Session may have several provider-qualified AgentRuns and thus
-	// several associations for the same directory. Prefer associations that can
-	// represent this provider, then collapse them by durable Session key. This
-	// keeps a multi-provider Session singular while preserving real ambiguity
-	// between different Sessions sharing a directory.
-	var compatible []HistorySessionAssociation
-	for _, session := range out {
-		if session.Provider == "" || session.Provider == provider {
-			compatible = append(compatible, session)
-		}
-	}
-	if len(compatible) > 0 {
-		out = compatible
-	}
+	// several associations for the same directory. Provider compatibility is
+	// applied before path ranking so an incompatible nested Session cannot hide
+	// a compatible parent. Collapse remaining aliases by durable Session key.
 	return uniqueHistorySessionMatches(out)
 }
 

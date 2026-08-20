@@ -106,14 +106,50 @@ func TestSessionReadsRejectStaleIDWhenNameIsReused(t *testing.T) {
 	registerFacadeIdentityFixture(t, project, &replacement)
 	app := NewApp()
 
-	if preview := app.SessionPreview("session-stale"); preview != "" {
-		t.Fatalf("stale SessionPreview exposed replacement content: %q", preview)
+	if preview := app.SessionPreview("session-stale"); preview.ContentKnown || preview.Content != "" || preview.Source.State != string(core.HistorySourceUnavailable) {
+		t.Fatalf("stale SessionPreview exposed replacement content: %#v", preview)
 	}
-	if links, err := app.SessionLinks("session-stale"); err == nil || !strings.Contains(err.Error(), "SessionID") || len(links) != 0 {
+	if links, err := app.SessionLinks("session-stale"); err == nil || !strings.Contains(err.Error(), "SessionID") || len(links.Links) != 0 {
 		t.Fatalf("stale SessionLinks = %#v, %v", links, err)
 	}
 	if calls := parseFakeTmuxCalls(t, logPath); len(calls) != 0 {
 		t.Fatalf("stale Session read crossed tmux Seam: %#v", calls)
+	}
+}
+
+func TestOpenTermDoesNotReuseConnectionAfterNameReuse(t *testing.T) {
+	installHandoffFakeTmux(t, "Ready\nshift+tab to cycle", "claude", "claude")
+	project := core.Project{ID: "project-current", Name: "project", Path: t.TempDir(), MainBranch: "main"}
+	replacement := core.Session{
+		ID: "session-current", Name: "reused", RuntimeName: "opaque-current-runtime",
+		ProjectID: project.ID, Project: project.Name, Dir: project.Path,
+	}
+	registerFacadeIdentityFixture(t, project, &replacement)
+
+	oldConnection := &ptyTerm{}
+	app := NewApp()
+	app.ctx = context.Background()
+	app.terms[sessionTermKey("session-old")] = oldConnection
+	starts := 0
+	var attachedRuntime string
+	app.startTerm = func(command *exec.Cmd, _ *pty.Winsize) (*os.File, error) {
+		starts++
+		attachedRuntime = strings.Join(command.Args, " ")
+		return nil, errors.New("injected PTY stop")
+	}
+
+	err := app.OpenTerm(string(replacement.ID), replacement.Name, 120, 40)
+	if err == nil || !strings.Contains(err.Error(), "injected PTY stop") {
+		t.Fatalf("OpenTerm() error = %v, want injected PTY stop", err)
+	}
+	if starts != 1 {
+		t.Fatalf("PTY starts = %d, want a fresh connection for replacement SessionID", starts)
+	}
+	if !strings.Contains(attachedRuntime, core.TargetSession(replacement.RuntimeName)) {
+		t.Fatalf("attach command = %q, want replacement RuntimeName %q", attachedRuntime, replacement.RuntimeName)
+	}
+	if app.terms[sessionTermKey("session-old")] != oldConnection {
+		t.Fatal("opening replacement Session changed the old SessionID connection")
 	}
 }
 

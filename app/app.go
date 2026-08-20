@@ -75,12 +75,12 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) onFileDrop(x, y int, paths []string) {
-	name := a.getActiveTerm()
-	if name == "" || len(paths) == 0 {
+	sessionID := core.SessionID(a.getActiveTerm())
+	if sessionID == "" || len(paths) == 0 {
 		return
 	}
 	a.mu.Lock()
-	t := a.terms[name]
+	t := a.terms[sessionTermKey(sessionID)]
 	a.mu.Unlock()
 	if t == nil {
 		return
@@ -230,25 +230,17 @@ func (a *App) RemoveProject(projectID string) error {
 }
 
 func (a *App) ReorderProjects(order []string) error {
-	st, err := core.LoadState()
-	if err != nil {
-		return err
-	}
-	names := make([]string, 0, len(order))
+	ids := make([]core.ProjectID, 0, len(order))
 	seen := make(map[core.ProjectID]bool, len(order))
 	for _, rawID := range order {
 		id := core.ProjectID(strings.TrimSpace(rawID))
 		if id == "" || seen[id] {
 			return fmt.Errorf("ungültige ProjectID in Sortierung: %q", rawID)
 		}
-		project := st.ProjectByID(id)
-		if project == nil {
-			return fmt.Errorf("unbekannte ProjectID in Sortierung: %s", id)
-		}
 		seen[id] = true
-		names = append(names, project.Name)
+		ids = append(ids, id)
 	}
-	_, err = core.OpenRegistry(core.StatePath()).Change(a.ctx, core.ReorderProjects(names))
+	_, err := core.OpenRegistry(core.StatePath()).Change(a.ctx, core.ReorderProjects(ids))
 	return err
 }
 
@@ -560,7 +552,7 @@ func (a *App) KillSession(sessionID, legacyDockName string) error {
 	if err != nil {
 		return err
 	}
-	a.CloseTerm(session.Name)
+	a.CloseTerm(termKeyForTarget(sessionID, session))
 	return core.RemoveRegisteredSession(st, session.Name)
 }
 
@@ -569,7 +561,7 @@ func (a *App) LaterSession(sessionID string) error {
 	if err != nil {
 		return err
 	}
-	a.CloseTerm(session.Name)
+	a.CloseTerm(sessionTermKey(session.ID))
 	return core.ParkSession(st, session.Name)
 }
 
@@ -586,13 +578,14 @@ func (a *App) OpenTerm(sessionID, legacyDockName string, cols, rows int) error {
 	if err != nil {
 		return err
 	}
+	connectionKey := termKeyForTarget(sessionID, registered)
 	name := registered.Name
 	session := registered.TmuxName()
 	if !core.TmuxHasSession(session) {
 		return fmt.Errorf("Session %q existiert nicht mehr", name)
 	}
 	a.mu.Lock()
-	if _, ok := a.terms[name]; ok {
+	if _, ok := a.terms[connectionKey]; ok {
 		a.mu.Unlock()
 		return nil
 	}
@@ -618,7 +611,7 @@ func (a *App) OpenTerm(sessionID, legacyDockName string, cols, rows int) error {
 	}
 	t := &ptyTerm{ptmx: ptmx, cmd: cmd}
 	a.mu.Lock()
-	a.terms[name] = t
+	a.terms[connectionKey] = t
 	a.mu.Unlock()
 
 	go func() {
@@ -626,52 +619,67 @@ func (a *App) OpenTerm(sessionID, legacyDockName string, cols, rows int) error {
 		for {
 			n, err := ptmx.Read(buf)
 			if n > 0 {
-				runtime.EventsEmit(a.ctx, "term:data:"+name, base64.StdEncoding.EncodeToString(buf[:n]))
+				runtime.EventsEmit(a.ctx, "term:data:"+connectionKey, base64.StdEncoding.EncodeToString(buf[:n]))
 			}
 			if err != nil {
 				break
 			}
 		}
 		a.mu.Lock()
-		if a.terms[name] == t {
-			delete(a.terms, name)
+		if a.terms[connectionKey] == t {
+			delete(a.terms, connectionKey)
 		}
 		a.mu.Unlock()
 		t.close()
-		runtime.EventsEmit(a.ctx, "term:closed:"+name)
+		runtime.EventsEmit(a.ctx, "term:closed:"+connectionKey)
 	}()
 	return nil
 }
 
-func (a *App) WriteTerm(name, dataB64 string) {
+func sessionTermKey(id core.SessionID) string {
+	return "session:" + string(id)
+}
+
+func dockTermKey(name string) string {
+	return "dock:" + name
+}
+
+func termKeyForTarget(rawSessionID string, session core.Session) string {
+	if strings.TrimSpace(rawSessionID) != "" {
+		return sessionTermKey(session.ID)
+	}
+	return dockTermKey(session.Name)
+}
+
+func (a *App) WriteTerm(connectionKey, dataB64 string) {
 	data, err := base64.StdEncoding.DecodeString(dataB64)
 	if err != nil || len(data) == 0 {
 		return
 	}
 	a.mu.Lock()
-	t := a.terms[name]
+	t := a.terms[connectionKey]
 	a.mu.Unlock()
 	if t != nil {
 		t.ptmx.Write(data)
 	}
 }
 
-func (a *App) ResizeTerm(name string, cols, rows int) {
+func (a *App) ResizeTerm(connectionKey string, cols, rows int) {
 	if cols < 1 || rows < 1 || cols > 999 || rows > 999 {
 		return
 	}
 	a.mu.Lock()
-	t := a.terms[name]
+	t := a.terms[connectionKey]
 	a.mu.Unlock()
 	if t != nil {
 		pty.Setsize(t.ptmx, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
 	}
 }
 
-func (a *App) CloseTerm(name string) {
+func (a *App) CloseTerm(connectionKey string) {
 	a.mu.Lock()
-	t := a.terms[name]
-	delete(a.terms, name)
+	t := a.terms[connectionKey]
+	delete(a.terms, connectionKey)
 	a.mu.Unlock()
 	if t != nil {
 		t.close()

@@ -82,6 +82,9 @@ func repositoriesTopologyFixture(worktrees ...repositoriesTopologyWorktree) stri
 }
 
 func repositoriesStatusFixture(head, branch string, records ...string) string {
+	if len(head) == 4 {
+		head = strings.Repeat(head, 10)
+	}
 	out := "# branch.oid " + head + "\n# branch.head " + branch + "\n"
 	for _, record := range records {
 		out += record + "\n"
@@ -320,6 +323,41 @@ func TestRepositoriesSurveyKeepsKnownTopologyWhenDivergenceIsUnknown(t *testing.
 	}
 }
 
+func TestRepositoriesSurveyRejectsMalformedSuccessfulDivergence(t *testing.T) {
+	projectPath := filepath.Join(t.TempDir(), "project")
+	worktreePath := filepath.Join(filepath.Dir(projectPath), "project-agents", "topic")
+	tests := []struct {
+		name string
+		out  string
+	}{
+		{name: "negative", out: "-1\t2\n"},
+		{name: "explicit plus", out: "+1\t2\n"},
+		{name: "wrong separator", out: "1 2\n"},
+		{name: "missing terminator", out: "1\t2"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runner := &repositoriesRecordingRunner{t: t, steps: []repositoriesRunnerStep{
+				{dir: projectPath, args: []string{"worktree", "list", "--porcelain"}, output: repositoriesTopologyFixture(
+					repositoriesTopologyWorktree{Path: projectPath, Head: "aaaa", Branch: "main"},
+					repositoriesTopologyWorktree{Path: worktreePath, Head: "bbbb", Branch: "agent/topic"},
+				)},
+				{dir: projectPath, args: []string{"status", "--porcelain=v2", "--branch"}, output: repositoriesStatusFixture("aaaa", "main")},
+				{dir: worktreePath, args: []string{"status", "--porcelain=v2", "--branch"}, output: repositoriesStatusFixture("bbbb", "agent/topic")},
+				{dir: worktreePath, args: []string{"rev-list", "--left-right", "--count", "main...HEAD"}, output: test.out},
+			}}
+			survey, err := newRepositories(runner).Survey(context.Background(), []Project{{Name: "demo", Path: projectPath}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			runner.assertDone()
+			if !survey.Projects[0].Worktrees.Known() || survey.Projects[0].Worktrees.Value[1].Divergence.State != RepositoryUnknown || survey.Projects[0].Worktrees.Value[1].Divergence.Problem == nil {
+				t.Fatalf("malformed divergence became known: %#v", survey.Projects[0])
+			}
+		})
+	}
+}
+
 func TestRepositoriesTopologyPreservesCheckoutAndMaintenanceFacts(t *testing.T) {
 	projectPath := filepath.Join(t.TempDir(), "project")
 	detachedPath := filepath.Join(filepath.Dir(projectPath), "project-agents", "detached")
@@ -447,12 +485,17 @@ func TestRepositoriesSurveyDoesNotTreatMalformedTopologyAsKnown(t *testing.T) {
 }
 
 func TestRepositoriesStatusRejectsMalformedSuccessfulOutput(t *testing.T) {
+	head := strings.Repeat("a", 40)
 	for _, malformed := range []string{
 		"",
 		"nonsense that is not porcelain\n",
 		"# branch.oid aaaa\n",
 		"# branch.oid aaaa\n# branch.head main\n1 malformed\n",
 		"# branch.oid aaaa\n# branch.head main\n? \n",
+		"# branch.oid " + head + "\n# branch.head topic..broken\n",
+		"# branch.oid " + head + "\n# branch.head main",
+		"# branch.oid (initial)\n# branch.head (detached)\n",
+		"# branch.oid " + strings.Repeat("0", 40) + "\n# branch.head main\n",
 	} {
 		if got, err := parseRepositoriesStatus(malformed); err == nil {
 			t.Fatalf("malformed successful output became known clean: input=%q result=%#v", malformed, got)
@@ -479,22 +522,54 @@ func TestRepositoriesSurveyDoesNotTreatMalformedStatusAsClean(t *testing.T) {
 	}
 }
 
+func TestRepositoriesChangeDoesNotRemoveOnMalformedSuccessfulStatus(t *testing.T) {
+	projectPath := filepath.Join(t.TempDir(), "project")
+	target := filepath.Join(filepath.Dir(projectPath), "project-agents", "topic")
+	project := Project{Name: "demo", Path: projectPath}
+	root := repositoriesTopologyWorktree{Path: projectPath, Head: "aaaa", Branch: "main"}
+	topic := repositoriesTopologyWorktree{Path: target, Head: "bbbb", Branch: "agent/topic"}
+	head := strings.Repeat("b", 40)
+	tests := []struct {
+		name   string
+		status string
+	}{
+		{name: "invalid object ID", status: "# branch.oid garbage\n# branch.head agent/topic\n"},
+		{name: "invalid branch", status: "# branch.oid " + head + "\n# branch.head topic..broken\n"},
+		{name: "missing terminator", status: "# branch.oid " + head + "\n# branch.head agent/topic"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runner := &repositoriesRecordingRunner{t: t, steps: []repositoriesRunnerStep{
+				{dir: projectPath, args: []string{"worktree", "list", "--porcelain"}, output: repositoriesTopologyFixture(root, topic)},
+				{dir: target, args: []string{"status", "--porcelain=v2", "--branch"}, output: test.status},
+			}}
+			result, err := newRepositories(runner).Change(context.Background(), RemoveManagedWorktreeChange(project, target))
+			runner.assertDone()
+			if err == nil || result.State != RepositoryUnknown || result.Changed || result.MayHaveApplied || result.Problem == nil {
+				t.Fatalf("malformed status authorized removal: result=%#v error=%v", result, err)
+			}
+		})
+	}
+}
+
 func TestRepositoriesInspectCapturesAndComparesBaselineOnDemand(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "project-agents", "topic")
+	headA := strings.Repeat("a", 40)
+	headB := strings.Repeat("b", 40)
 	runner := &repositoriesRecordingRunner{t: t, steps: []repositoriesRunnerStep{
-		{dir: dir, args: []string{"status", "--porcelain=v2", "--branch"}, output: repositoriesStatusFixture("aaaa", "agent/topic",
+		{dir: dir, args: []string{"status", "--porcelain=v2", "--branch"}, output: repositoriesStatusFixture(headA, "agent/topic",
 			"1 .M N... 100644 100644 100644 aaaa aaaa old file.go")},
-		{dir: dir, args: []string{"status", "--porcelain=v2", "--branch"}, output: repositoriesStatusFixture("bbbb", "agent/topic",
+		{dir: dir, args: []string{"status", "--porcelain=v2", "--branch"}, output: repositoriesStatusFixture(headB, "agent/topic",
 			"1 .M N... 100644 100644 100644 aaaa aaaa old file.go",
 			"? new file.go")},
-		{dir: dir, args: []string{"rev-list", "--count", "aaaa..HEAD"}, output: "2\n"},
+		{dir: dir, args: []string{"rev-list", "--count", headA + "..HEAD"}, output: "2\n"},
 	}}
 	repositories := newRepositories(runner)
 	initial, err := repositories.Inspect(context.Background(), RepositoryInspectRequest{Directory: dir})
 	if err != nil {
 		t.Fatalf("initial Inspect() error = %v", err)
 	}
-	if !initial.Baseline.Known() || initial.Baseline.Value.Head != "aaaa" || !reflect.DeepEqual(initial.Baseline.Value.DirtyPaths, []string{"old file.go"}) {
+	if !initial.Baseline.Known() || initial.Baseline.Value.Head != headA || !reflect.DeepEqual(initial.Baseline.Value.DirtyPaths, []string{"old file.go"}) {
 		t.Fatalf("initial baseline = %#v", initial.Baseline)
 	}
 	if initial.Divergence.State != RepositoryUnknown {
@@ -511,6 +586,31 @@ func TestRepositoriesInspectCapturesAndComparesBaselineOnDemand(t *testing.T) {
 	}
 	if !current.Delta.Commits.Known() || current.Delta.Commits.Value != 2 {
 		t.Fatalf("baseline commit delta = %#v", current.Delta.Commits)
+	}
+}
+
+func TestRepositoriesBaselineDeltaRejectsMalformedSuccessfulCount(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "project")
+	headA := strings.Repeat("a", 40)
+	headB := strings.Repeat("b", 40)
+	for _, malformed := range []string{"-1\n", "+1\n", "1", "1\n2\n"} {
+		t.Run(fmt.Sprintf("%q", malformed), func(t *testing.T) {
+			runner := &repositoriesRecordingRunner{t: t, steps: []repositoriesRunnerStep{
+				{dir: dir, args: []string{"status", "--porcelain=v2", "--branch"}, output: repositoriesStatusFixture(headB, "main")},
+				{dir: dir, args: []string{"rev-list", "--count", headA + "..HEAD"}, output: malformed},
+			}}
+			inspection, err := newRepositories(runner).Inspect(context.Background(), RepositoryInspectRequest{
+				Directory: dir,
+				Against:   &RepositoryBaseline{Directory: dir, Head: headA},
+			})
+			runner.assertDone()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if inspection.Delta == nil || inspection.Delta.Commits.State != RepositoryUnknown || inspection.Delta.Commits.Problem == nil {
+				t.Fatalf("malformed count became known: %#v", inspection.Delta)
+			}
+		})
 	}
 }
 

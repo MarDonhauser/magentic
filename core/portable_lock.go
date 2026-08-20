@@ -2,8 +2,10 @@ package core
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,8 +64,11 @@ func withPortableDirectoryLockConfig(ctx context.Context, lockDir string, config
 	for {
 		err := os.Mkdir(lockDir, 0o700)
 		if err == nil {
-			if writeErr := os.WriteFile(owner, []byte(nonce+"\n"), 0o600); writeErr != nil {
-				_ = os.Remove(lockDir)
+			if writeErr := writePortableDirectoryLockOwner(owner, nonce); writeErr != nil {
+				// This process created the unpublished lock directory. Removing the
+				// exact directory also clears a temporary owner file left by a short
+				// write; no successor can own it yet.
+				_ = os.RemoveAll(lockDir)
 				return fmt.Errorf("write lock owner: %w", writeErr)
 			}
 			stop := make(chan struct{})
@@ -95,6 +100,32 @@ func withPortableDirectoryLockConfig(ctx context.Context, lockDir string, config
 	}
 }
 
+func writePortableDirectoryLockOwner(owner, nonce string) error {
+	temporary := filepath.Join(filepath.Dir(owner), ".owner-"+nonce+".tmp")
+	file, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	data := []byte(nonce + "\n")
+	written, writeErr := file.Write(data)
+	if writeErr == nil && written != len(data) {
+		writeErr = io.ErrShortWrite
+	}
+	if writeErr == nil {
+		writeErr = file.Sync()
+	}
+	if closeErr := file.Close(); writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr == nil {
+		writeErr = os.Rename(temporary, owner)
+	}
+	if writeErr != nil {
+		_ = os.Remove(temporary)
+	}
+	return writeErr
+}
+
 func heartbeatPortableDirectoryLock(owner, nonce string, interval time.Duration, stop <-chan struct{}, done chan<- struct{}) {
 	defer close(done)
 	ticker := time.NewTicker(interval)
@@ -121,12 +152,15 @@ func portableDirectoryLockOwnerIfStale(lockDir, owner string, staleAfter time.Du
 		info, statErr := os.Stat(lockDir)
 		return "", statErr == nil && time.Since(info.ModTime()) > staleAfter
 	}
-	nonce := strings.TrimSpace(string(data))
-	if nonce == "" {
+	nonce, valid := parsePortableDirectoryLockOwner(data)
+	info, err := os.Stat(owner)
+	if err != nil || time.Since(info.ModTime()) <= staleAfter {
 		return "", false
 	}
-	info, err := os.Stat(owner)
-	return nonce, err == nil && time.Since(info.ModTime()) > staleAfter
+	if !valid {
+		return "", true
+	}
+	return nonce, true
 }
 
 func recoverPortableDirectoryLock(lockDir, owner, expectedNonce string, staleAfter time.Duration) error {
@@ -140,13 +174,17 @@ func recoverPortableDirectoryLock(lockDir, owner, expectedNonce string, staleAft
 			return errors.New("ownerless lock is not stale")
 		}
 	} else {
-		nonce := strings.TrimSpace(string(data))
-		if nonce == "" || nonce != expectedNonce || !portableLockOwnedBy(owner, nonce) {
-			return errors.New("lock owner changed")
-		}
+		nonce, valid := parsePortableDirectoryLockOwner(data)
 		info, statErr := os.Stat(owner)
 		if statErr != nil || time.Since(info.ModTime()) <= staleAfter {
 			return errors.New("lock owner heartbeat resumed")
+		}
+		if valid {
+			if expectedNonce == "" || nonce != expectedNonce || !portableLockOwnedBy(owner, nonce) {
+				return errors.New("lock owner changed")
+			}
+		} else if expectedNonce != "" {
+			return errors.New("lock owner changed")
 		}
 	}
 	tombstone := lockDir + ".abandoned-" + NewUUID()
@@ -166,5 +204,24 @@ func releasePortableDirectoryLock(lockDir, owner, nonce string) {
 
 func portableLockOwnedBy(owner, nonce string) bool {
 	data, err := os.ReadFile(owner)
-	return err == nil && strings.TrimSpace(string(data)) == nonce
+	actual, valid := parsePortableDirectoryLockOwner(data)
+	return err == nil && valid && actual == nonce
+}
+
+func parsePortableDirectoryLockOwner(data []byte) (string, bool) {
+	if len(data) != 37 || data[36] != '\n' {
+		return "", false
+	}
+	nonce := string(data[:36])
+	if nonce[8] != '-' || nonce[13] != '-' || nonce[18] != '-' || nonce[23] != '-' {
+		return "", false
+	}
+	hexNonce := strings.ReplaceAll(nonce, "-", "")
+	if len(hexNonce) != 32 {
+		return "", false
+	}
+	if _, err := hex.DecodeString(hexNonce); err != nil {
+		return "", false
+	}
+	return nonce, true
 }
