@@ -125,25 +125,44 @@ var modelPrices = []struct {
 	{"claude-opus-5", 5.00, 25.00},
 }
 
-const (
-	defaultPriceIn  = 5.00
-	defaultPriceOut = 25.00
-)
-
-func modelPrice(model string) (float64, float64) {
+func modelPrice(model string) (float64, float64, bool) {
 	for _, price := range modelPrices {
-		if strings.HasPrefix(model, price.prefix) {
-			return price.in, price.out
+		if pricedModelName(model, price.prefix) {
+			return price.in, price.out, true
 		}
 	}
-	return defaultPriceIn, defaultPriceOut
+	return 0, 0, false
+}
+
+func pricedModelName(model, listed string) bool {
+	if model == listed {
+		return true
+	}
+	// Anthropic snapshot IDs append an eight-digit release date to the listed
+	// family name. Other suffixes are different models and stay unpriced.
+	if len(model) != len(listed)+9 || !strings.HasPrefix(model, listed+"-") {
+		return false
+	}
+	snapshot := model[len(listed)+1:]
+	if !strings.HasPrefix(snapshot, "20") {
+		return false
+	}
+	for i := range len(snapshot) {
+		if snapshot[i] < '0' || snapshot[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func modelCost(provider HistoryProvider, model string, input, output, cacheRead, cacheWrite int64) (float64, bool) {
 	if provider != HistoryProviderClaude {
 		return 0, false
 	}
-	in, out := modelPrice(model)
+	in, out, known := modelPrice(model)
+	if !known {
+		return 0, false
+	}
 	const million = 1_000_000.0
 	return float64(input)*in/million +
 		float64(output)*out/million +
@@ -258,7 +277,10 @@ func (a *statsAcc) addEvent(event HistoryEvent) {
 		// An assistant output represents potentially billable work even when its
 		// adapter cannot expose token facts. Non-Claude activity is deliberately
 		// unpriced: applying Claude's fallback here would manufacture precision.
-		activity.costUnknown = event.Provider != HistoryProviderClaude || unknownUsage || event.Kind == HistoryEventOutput && !knownUsage
+		activity.costUnknown = event.Provider != HistoryProviderClaude ||
+			unknownUsage ||
+			(knownUsage && !activity.costPriced) ||
+			(event.Kind == HistoryEventOutput && !knownUsage)
 	default:
 		return
 	}
@@ -398,7 +420,13 @@ func buildStats(ctx context.Context, state *State, days int, history *WorkHistor
 	var summary HistorySummary
 	var events []HistoryEvent
 	if historyErr == nil && history != nil {
-		query := HistoryEventQuery{Since: first, Before: before}
+		// Prompts, Turns, tokens, and costs use the same primary-lineage
+		// population. Delegated work needs a separate aggregate before it can be
+		// shown without turning subagent prompts into developer prompts.
+		query := HistoryEventQuery{
+			Since: first, Before: before,
+			Lineages: []HistoryLineage{HistoryLineagePrimary},
+		}
 		summary, events, historyErr = coherentStatsHistory(ctx, history, HistoryAssociationsFromState(state), query)
 	}
 	if historyErr != nil {

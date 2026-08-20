@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -70,8 +71,15 @@ type RepositoryDivergence struct {
 	Behind int    `json:"behind"`
 }
 
+// WorktreeRef is an opaque, stable handle for a checkout. Desktop callers
+// retain this value and pass it back to ResolveWorktree; filesystem paths stay
+// private to the Repositories Module.
+type WorktreeRef string
+
 type RepositoryWorktree struct {
-	Path       string                                   `json:"path"`
+	Reference  WorktreeRef                              `json:"reference"`
+	Location   string                                   `json:"location"`
+	Path       string                                   `json:"-"`
 	Main       bool                                     `json:"main"`
 	Checkout   RepositoryFact[RepositoryCheckout]       `json:"checkout"`
 	Head       RepositoryFact[string]                   `json:"head"`
@@ -95,6 +103,14 @@ type RepositoryProjectSurvey struct {
 type RepositoriesSurvey struct {
 	ObservedAt time.Time                 `json:"observedAt"`
 	Projects   []RepositoryProjectSurvey `json:"projects"`
+}
+
+// RepositoryWorktreeTarget is the fresh, server-side result of resolving an
+// opaque WorktreeRef. It is intentionally not part of a desktop projection.
+type RepositoryWorktreeTarget struct {
+	Project    Project
+	Worktree   RepositoryWorktree
+	MainBranch RepositoryFact[string]
 }
 
 // RepositoryBaseline is portable Registry data. The Repositories Module owns
@@ -271,6 +287,8 @@ func (r *Repositories) surveyProject(ctx context.Context, project Project) (Repo
 	worktrees := make([]RepositoryWorktree, 0, len(topology))
 	for _, raw := range topology {
 		wt := repositoryWorktreeFromTopology(project.Path, raw)
+		wt.Reference = repositoryWorktreeReference(project, wt.Path)
+		wt.Location = repositoryWorktreeLocation(project.Path, wt.Path)
 		status, statusErr := r.loadStatus(ctx, raw.Path)
 		if statusErr != nil {
 			if ctxErr := repositoryContextError(ctx, statusErr); ctxErr != nil {
@@ -300,6 +318,56 @@ func (r *Repositories) surveyProject(ctx context.Context, project Project) (Repo
 	}
 	result.Worktrees = repositoryKnownFact(worktrees)
 	return result, nil
+}
+
+// ResolveWorktree turns an opaque browser-safe reference into fresh repository
+// knowledge. Resolution always performs a new Survey, so stale projections can
+// never authorize an action after the checkout topology has changed.
+func (r *Repositories) ResolveWorktree(ctx context.Context, project Project, reference WorktreeRef) (RepositoryWorktreeTarget, error) {
+	if strings.TrimSpace(string(reference)) == "" {
+		return RepositoryWorktreeTarget{}, errors.New("Worktree reference is required")
+	}
+	survey, err := r.Survey(ctx, []Project{project})
+	if err != nil {
+		return RepositoryWorktreeTarget{}, err
+	}
+	if len(survey.Projects) != 1 {
+		return RepositoryWorktreeTarget{}, errors.New("Project is missing from repository Survey")
+	}
+	repository := survey.Projects[0]
+	if repository.Presence != RepositoryKnown || !repository.Worktrees.Known() {
+		message := "Worktree topology is unavailable"
+		if repository.Worktrees.Problem != nil && strings.TrimSpace(repository.Worktrees.Problem.Message) != "" {
+			message = repository.Worktrees.Problem.Message
+		} else if repository.Problem != nil && strings.TrimSpace(repository.Problem.Message) != "" {
+			message = repository.Problem.Message
+		}
+		return RepositoryWorktreeTarget{}, errors.New(message)
+	}
+	for _, worktree := range repository.Worktrees.Value {
+		if worktree.Reference == reference {
+			return RepositoryWorktreeTarget{Project: project, Worktree: worktree, MainBranch: repository.MainBranch}, nil
+		}
+	}
+	return RepositoryWorktreeTarget{}, errors.New("Worktree reference is stale or unknown")
+}
+
+func repositoryWorktreeReference(project Project, path string) WorktreeRef {
+	identity := strings.TrimSpace(string(project.ID))
+	if identity == "" {
+		identity = strings.TrimSpace(project.Name)
+	}
+	sum := sha256.Sum256([]byte(identity + "\x00" + repositoryComparablePath(path)))
+	return WorktreeRef(fmt.Sprintf("wt_%x", sum[:16]))
+}
+
+func repositoryWorktreeLocation(projectPath, worktreePath string) string {
+	projectPath = filepath.Clean(projectPath)
+	worktreePath = filepath.Clean(worktreePath)
+	if sameRepositoryPath(projectPath, worktreePath) {
+		return filepath.Base(projectPath)
+	}
+	return ShortPath(worktreePath)
 }
 
 func resolveRepositoryMainBranch(project Project, worktrees []RepositoryWorktree) RepositoryFact[string] {

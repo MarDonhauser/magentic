@@ -1256,6 +1256,7 @@ function attentionState() {
     waiting: sessions.filter(a => a.status === 'blocked'),
     active: sessions.filter(a => ['running', 'agents', 'shell', 'term'].includes(a.status)),
     unread: sessions.filter(a => a.unread && a.status !== 'blocked'),
+    unknown: sessions.filter(a => !a.status || a.status === 'unknown'),
   };
 }
 
@@ -1516,7 +1517,14 @@ function agentPill(a, project) {
 }
 
 function attentionOverview() {
-  const { waiting, active, unread } = attentionState();
+  const { waiting, active, unread, unknown } = attentionState();
+  if (!waiting.length && unknown.length) {
+    const label = unknown.length === 1 ? '1 Session ist nicht beobachtbar.' : `${unknown.length} Sessions sind nicht beobachtbar.`;
+    return `<section class="attention-summary is-unknown" role="status" aria-label="Session-Status teilweise unbekannt">` +
+      `<div class="attention-summary-lead"><span class="attention-summary-icon">${icon('warn')}</span>` +
+      `<div><h1>Session-Status teilweise unbekannt</h1><p>${label} Das ist nicht dasselbe wie beendet oder ohne offene Entscheidung.</p></div></div>` +
+      `<div class="attention-totals"><span><strong>${active.length}</strong> sicher aktiv</span></div></section>`;
+  }
   if (!waiting.length) {
     const activity = active.length === 1
       ? '1 Session arbeitet weiter.'
@@ -1552,6 +1560,10 @@ function attentionOverview() {
 
 function gitState(wt) {
   if (wt.branch === '(kein git)') return '';
+  if (!wt.changesKnown) {
+    const detail = (wt.problems || []).map(problem => problem?.message).filter(Boolean).join('; ');
+    return `<span class="git-state unknown" title="${esc(detail || 'Git-Änderungen konnten nicht ermittelt werden')}">${icon('warn')} Status unbekannt</span>`;
+  }
   if (wt.clean) return `<span class="git-state clean">${icon('check')} sauber</span>`;
   const parts = [];
   if (wt.staged) parts.push(`${wt.staged} staged`);
@@ -1566,15 +1578,17 @@ function worktreeActions(p, wt) {
   const busy = (wt.agents || []).some(a => !a.dock && ['running', 'agents', 'blocked'].includes(a.status));
   const anySession = (wt.agents || []).some(a => !a.dock && ['running', 'agents', 'blocked', 'idle'].includes(a.status));
   let btns = '';
-  if (!busy && wt.ahead > 0 && wt.branch !== p.mainBranch) {
+  if (!busy && wt.checkoutKnown && wt.divergenceKnown && p.mainBranchKnown && wt.ahead > 0 && wt.branch !== p.mainBranch) {
     btns += `<button class="btn" data-act="merge" data-project="${esc(p.name)}" data-source="${esc(wt.branch)}" data-target="${esc(p.mainBranch)}" ` +
       `title="Claude-Session, die diesen Branch merged">${icon('merge')} ${esc(wt.branch)} → ${esc(p.mainBranch)}</button>`;
   }
   if (!wt.isMain && !anySession) {
-    if (!wt.clean || wt.ahead > 0) {
+    if (wt.changesKnown && wt.divergenceKnown && (!wt.clean || wt.ahead > 0)) {
       btns += `<button class="btn" data-act="cleanup" data-path="${esc(wt.path)}" data-main="${esc(p.mainBranch)}" title="Claude-Session zum Committen und Mergen">${icon('broom')} Cleanup</button>`;
     }
-    if (wt.clean) {
+    if (!wt.changesKnown) {
+      btns += `<button class="btn danger" disabled title="Git-Änderungen sind unbekannt — Entfernen wäre nicht sicher">${icon('trash')} entfernen</button>`;
+    } else if (wt.clean) {
       const key = p.name + '|' + wt.path;
       btns += confirmRemove === key
         ? `<button class="btn danger confirm" data-act="remove2" data-project="${esc(p.name)}" data-path="${esc(wt.path)}">wirklich entfernen?</button>`
@@ -1589,18 +1603,25 @@ function worktreeActions(p, wt) {
 function worktreeRow(p, wt, idx, total) {
   const cls = ['row', wt.isMain ? 'main-row' : 'wt-row'];
   const ab = [];
-  if (wt.ahead) ab.push(`↑${wt.ahead}`);
-  if (wt.behind) ab.push(`↓${wt.behind}`);
+  if (wt.divergenceKnown && wt.ahead) ab.push(`↑${wt.ahead}`);
+  if (wt.divergenceKnown && wt.behind) ab.push(`↓${wt.behind}`);
   let abHtml = ab.length ? `<span class="ab" title="gegenüber ${esc(p.mainBranch)}">${ab.join(' ')}</span>` : '';
-  if (!wt.ahead && wt.branch !== p.mainBranch && wt.branch !== '(kein git)' && wt.branch !== '—' && p.path) {
+  if (!wt.divergenceKnown && wt.branch !== '(kein git)') {
+    abHtml = `<span class="ab unknown" title="Abstand zum Hauptbranch konnte nicht ermittelt werden">?</span>`;
+  } else if (p.mainBranchKnown && !wt.ahead && wt.branch !== p.mainBranch && wt.branch !== '(kein git)' && wt.branch !== '—' && p.path) {
     abHtml += `<span class="git-state" style="color:var(--good)" title="alle Commits sind in ${esc(p.mainBranch)}">${icon('check')} in ${esc(p.mainBranch)}</span>`;
   }
   const agents = (wt.agents || []).filter(a => !a.dock).map(a => agentPill(a, p.name)).join('');
   const warns = (wt.warnings || []).map(w => `<span class="warn"><span class="ic">${icon('warn')}</span>${esc(w)}</span>`).join('');
+  const problemText = (wt.problems || []).map(problem => problem?.message).filter(Boolean).join('; ');
+  const problem = problemText
+    ? `<span class="warn repo-unknown" title="${esc(problemText)}"><span class="ic">${icon('warn')}</span>Git-Fakten unvollständig</span>`
+    : '';
   const pathHtml = wt.isMain ? '' : `<span class="wt-path" title="${esc(wt.path)}">${esc(wt.shortPath)}</span>`;
   const last = wt.lastMsg ? `<span class="lastmsg" title="letzter Commit">„${esc(wt.lastMsg)}“</span>` : '';
+  const branch = wt.checkoutKnown ? wt.branch : 'Branch unbekannt';
   return `<div class="${cls.join(' ')}">` +
-    `<span class="branch">${esc(wt.branch)}</span>${abHtml}${gitState(wt)}${agents}${warns}${pathHtml}${last}${worktreeActions(p, wt)}</div>`;
+    `<span class="branch${wt.checkoutKnown ? '' : ' unknown'}">${esc(branch)}</span>${abHtml}${gitState(wt)}${agents}${warns}${problem}${pathHtml}${last}${worktreeActions(p, wt)}</div>`;
 }
 
 function projectCard(p) {
@@ -1613,7 +1634,7 @@ function projectCard(p) {
         `<button class="btn tiny" data-act="mainsave" data-project="${esc(p.name)}" title="Hauptbranch speichern">${icon('check')}</button>` +
         `<button class="btn tiny" data-act="maincancel" title="Änderung verwerfen">${icon('x')}</button></span></div>`
       : `<button class="project-menu-item" data-act="mainedit" data-project="${esc(p.name)}" title="Hauptbranch ändern">` +
-        `<span>${icon('gitbranch')} Hauptbranch</span><b>${esc(p.mainBranch)}</b></button>`;
+        `<span>${icon('gitbranch')} Hauptbranch</span><b>${esc(p.mainBranchKnown ? p.mainBranch : 'unbekannt')}</b></button>`;
     const rmProj = confirmRemoveProject === p.name
       ? `<button class="project-menu-item danger confirm" data-act="rmproj2" data-project="${esc(p.name)}">${icon('x')} Repository wirklich entfernen?</button>`
       : `<button class="project-menu-item danger" data-act="rmproj1" data-project="${esc(p.name)}" title="Repository aus magentic entfernen — löscht keine Dateien">${icon('x')} Repository entfernen</button>`;
@@ -1625,14 +1646,14 @@ function projectCard(p) {
       `<button class="project-lens" data-act="showstats" data-project="${esc(p.name)}" title="Statistik mit Fokus auf dieses Projekt">${icon('chart')} Statistik</button></div>` +
       `<div class="project-primary-actions">` +
       `<button class="btn primary" data-act="newsession" data-project="${esc(p.name)}" title="Neue Session im Projekt">${icon('play')} Session</button>` +
-      `<button class="btn" data-act="newworktree" data-project="${esc(p.name)}" title="Neue Session in eigenem Worktree">${developerIcon('git')} Worktree</button>` +
+      `<button class="btn" data-act="newworktree" data-project="${esc(p.name)}" title="${p.repositoryKnowledge === 'known' ? 'Neue Session in eigenem Worktree' : 'Repository-Status ist unbekannt'}"${p.repositoryKnowledge === 'known' ? '' : ' disabled'}>${developerIcon('git')} Worktree</button>` +
       `<details class="project-more"${menuOpen}><summary>Mehr</summary><div class="project-more-menu">` +
       `<button class="project-menu-item" data-act="newterm" data-project="${esc(p.name)}" title="Reines Terminal im Projekt — Shell statt Agent">${developerIcon('bash')} Terminal öffnen</button>` +
       `<button class="project-menu-item" data-act="deploy" data-project="${esc(p.name)}" title="Neue Session, die /deploy ausführt">${icon('rocket')} Deploy starten</button>` +
       `<div class="project-menu-separator"></div>${mainCfg}${rmProj}</div></details></div></div>`;
   }
   const mainBranch = p.path
-    ? `<span class="project-main-branch" title="Hauptbranch">${icon('gitbranch')} ${esc(p.mainBranch)}</span>`
+    ? `<span class="project-main-branch${p.mainBranchKnown ? '' : ' unknown'}" title="${p.mainBranchKnown ? 'Hauptbranch' : 'Hauptbranch konnte nicht ermittelt werden'}">${icon(p.mainBranchKnown ? 'gitbranch' : 'warn')} ${esc(p.mainBranchKnown ? p.mainBranch : 'unbekannt')}</span>`
     : '';
   return `<div class="card project-card"><div class="card-head"><h2>${esc(p.name)}</h2>${mainBranch}` +
     `<span class="path">${esc(p.path || '')}</span></div><div class="rows">${rows}</div>${projectTools}</div>`;

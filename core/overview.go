@@ -31,8 +31,10 @@ type OvAgent struct {
 }
 
 type OvWorktree struct {
-	Path            string              `json:"path"`
-	ShortPath       string              `json:"ShortPath"`
+	Reference       WorktreeRef         `json:"reference,omitempty"`
+	Location        string              `json:"location,omitempty"`
+	Path            string              `json:"-"`
+	ShortPath       string              `json:"-"`
 	Branch          string              `json:"branch"`
 	IsMain          bool                `json:"isMain"`
 	Ahead           int                 `json:"ahead"`
@@ -52,18 +54,18 @@ type OvWorktree struct {
 }
 
 type OvProject struct {
-	ID                  ProjectID            `json:"id"`
-	Name                string               `json:"name"`
-	Path                string               `json:"path"`
-	MainBranch          string               `json:"mainBranch"`
-	HeadBranch          string               `json:"headBranch"`
-	MainConfigured      bool                 `json:"mainConfigured"`
-	RepositoryKnowledge RepositoryKnowledge  `json:"repositoryKnowledge"`
-	MainBranchKnown     bool                 `json:"mainBranchKnown"`
-	HeadBranchKnown     bool                 `json:"headBranchKnown"`
-	WorktreesKnown      bool                 `json:"worktreesKnown"`
-	Problems            []RepositoryProblem  `json:"problems,omitempty"`
-	Worktrees           []OvWorktree         `json:"worktrees"`
+	ID                  ProjectID           `json:"id"`
+	Name                string              `json:"name"`
+	Path                string              `json:"path"`
+	MainBranch          string              `json:"mainBranch"`
+	HeadBranch          string              `json:"headBranch"`
+	MainConfigured      bool                `json:"mainConfigured"`
+	RepositoryKnowledge RepositoryKnowledge `json:"repositoryKnowledge"`
+	MainBranchKnown     bool                `json:"mainBranchKnown"`
+	HeadBranchKnown     bool                `json:"headBranchKnown"`
+	WorktreesKnown      bool                `json:"worktreesKnown"`
+	Problems            []RepositoryProblem `json:"problems,omitempty"`
+	Worktrees           []OvWorktree        `json:"worktrees"`
 }
 
 type OvUsage struct {
@@ -115,14 +117,18 @@ func agentAlive(s AgentStatus) bool {
 	return s == StatusRunning || s == StatusAgents || s == StatusShell || s == StatusBlocked || s == StatusIdle || s == StatusTerm
 }
 
+type overviewRepositories interface {
+	Survey(context.Context, []Project) (RepositoriesSurvey, error)
+}
+
 func BuildOverview(s *State) Overview {
 	if s == nil {
-		return buildOverviewFromObservation(&State{}, ObservationSnapshot{})
+		s = &State{}
 	}
 	sessions := observationSessions(s.Agents)
 	copyOfState := *s
 	copyOfState.Agents = sessions
-	return buildOverviewFromObservation(&copyOfState, Observe(context.Background(), sessions))
+	return BuildOverviewFromObservation(&copyOfState, Observe(context.Background(), sessions))
 }
 
 func BuildOverviewFrom(s *State, statuses map[string]AgentStatus, contents map[string]string, activity map[string]time.Time) Overview {
@@ -131,18 +137,23 @@ func BuildOverviewFrom(s *State, statuses map[string]AgentStatus, contents map[s
 
 func BuildOverviewWithToolsFrom(s *State, statuses map[string]AgentStatus, contents map[string]string, activity map[string]time.Time, tools map[string]string) Overview {
 	if s == nil {
-		return buildOverviewFromObservation(&State{}, ObservationSnapshot{})
+		s = &State{}
 	}
 	sessions, snapshot := legacyObservationSnapshot(s.Agents, statuses, contents, activity, tools)
 	copyOfState := *s
 	copyOfState.Agents = sessions
-	return buildOverviewFromObservation(&copyOfState, snapshot)
+	return BuildOverviewFromObservation(&copyOfState, snapshot)
 }
 
 // BuildOverviewFromObservation projects one coherent runtime snapshot into the
-// Overview. It is read-only: Session discovery and Registry cleanup belong to
-// Lifecycle, not to an Overview read.
+// Overview and obtains one coherent repository Survey for all Projects. It is
+// read-only: Session discovery and Registry cleanup belong to Lifecycle, not
+// to an Overview read.
 func BuildOverviewFromObservation(s *State, snapshot ObservationSnapshot) Overview {
+	return buildOverviewFromObservationUsing(s, snapshot, NewRepositories())
+}
+
+func buildOverviewFromObservationUsing(s *State, snapshot ObservationSnapshot, repositories overviewRepositories) Overview {
 	if s == nil {
 		s = &State{}
 	}
@@ -155,11 +166,11 @@ func BuildOverviewFromObservation(s *State, snapshot ObservationSnapshot) Overvi
 			copyOfSnapshot.Sessions[i].SessionID = copyOfState.Agents[i].ID
 		}
 	}
-	return buildOverviewFromObservation(&copyOfState, copyOfSnapshot)
+	survey, surveyErr := repositories.Survey(context.Background(), append([]Project(nil), copyOfState.Projects...))
+	return buildOverviewFromSurvey(&copyOfState, copyOfSnapshot, survey, surveyErr)
 }
 
-func buildOverviewFromObservation(s *State, snapshot ObservationSnapshot) Overview {
-	gitCache := map[string]GitInfo{}
+func buildOverviewFromSurvey(s *State, snapshot ObservationSnapshot, survey RepositoriesSurvey, surveyErr error) Overview {
 	observations := make(map[SessionID]SessionObservation, len(snapshot.Sessions))
 	for _, observed := range snapshot.Sessions {
 		if observed.SessionID != "" {
@@ -211,27 +222,38 @@ func buildOverviewFromObservation(s *State, snapshot ObservationSnapshot) Overvi
 	}
 
 	for _, p := range s.Projects {
-		proj := OvProject{ID: p.ID, Name: p.Name, Path: p.Path}
-		wts := CollectWorktreesCached(p.Path)
-		if len(wts) == 0 {
-			wts = []WorktreeInfo{{Path: p.Path, Branch: ""}}
+		repository, found := overviewRepositoryProject(p, survey.Projects)
+		if !found {
+			repository = unavailableOverviewRepositoryProject(p, surveyErr)
 		}
-		proj.HeadBranch = wts[0].Branch
-		proj.MainBranch = proj.HeadBranch
-		if p.MainBranch != "" {
-			proj.MainBranch = p.MainBranch
-			proj.MainConfigured = true
+		proj, repositoryWorktrees := projectOverviewFromRepository(p, repository)
+		for i, worktree := range repositoryWorktrees {
+			for _, a := range s.Agents {
+				if assigned[a.ID] || !overviewSessionMayBelongToProject(a, p) {
+					continue
+				}
+				matched, matchedWorktree := repositoryWorktreeForDirectory(repositoryWorktrees, a.Dir)
+				if !matchedWorktree || !sameRepositoryPath(matched.Path, worktree.Path) {
+					continue
+				}
+				assigned[a.ID] = true
+				branch := ""
+				if proj.Worktrees[i].CheckoutKnown {
+					branch = proj.Worktrees[i].Branch
+				}
+				proj.Worktrees[i].Agents = append(proj.Worktrees[i].Agents, toOvAgent(a, observationForSession(a, observations), branch))
+			}
 		}
-		for i, wt := range wts {
-			owt := buildWorktree(s, observations, assigned, wt, i == 0, proj.MainBranch, gitCache)
-			proj.Worktrees = append(proj.Worktrees, owt)
-		}
-		for _, a := range s.AgentsFor(p.Name) {
+		for _, a := range overviewSessionsForProject(s, p) {
 			if assigned[a.ID] {
 				continue
 			}
 			assigned[a.ID] = true
-			proj.Worktrees[0].Agents = append(proj.Worktrees[0].Agents, toOvAgent(a, observationForSession(a, observations), proj.MainBranch, gitCache))
+			branch := ""
+			if proj.Worktrees[0].CheckoutKnown {
+				branch = proj.Worktrees[0].Branch
+			}
+			proj.Worktrees[0].Agents = append(proj.Worktrees[0].Agents, toOvAgent(a, observationForSession(a, observations), branch))
 		}
 		finishWarnings(&proj)
 		ov.Projects = append(ov.Projects, proj)
@@ -243,22 +265,27 @@ func buildOverviewFromObservation(s *State, snapshot ObservationSnapshot) Overvi
 		if assigned[a.ID] {
 			continue
 		}
+		if a.ProjectID != "" && s.ProjectByID(a.ProjectID) != nil {
+			continue
+		}
 		if a.Project != "" && s.ProjectByName(a.Project) != nil {
 			continue
 		}
 		hasOrphans = true
-		orphanWt.Agents = append(orphanWt.Agents, toOvAgent(a, observationForSession(a, observations), "", gitCache))
+		orphanWt.Agents = append(orphanWt.Agents, toOvAgent(a, observationForSession(a, observations), ""))
 	}
 	if hasOrphans {
 		orphanWt.Branch = "—"
 		orphanWt.IsMain = true
-		orphanWt.Clean = true
-		ov.Projects = append(ov.Projects, OvProject{Name: "(ohne Projekt)", Worktrees: []OvWorktree{orphanWt}})
+		ov.Projects = append(ov.Projects, OvProject{
+			Name: "(ohne Projekt)", RepositoryKnowledge: RepositoryUnknown,
+			Worktrees: []OvWorktree{orphanWt},
+		})
 	}
 
 	for _, p := range ov.Projects {
 		for _, wt := range p.Worktrees {
-			if !wt.Clean {
+			if wt.ChangesKnown && !wt.Clean {
 				ov.Counts["dirty"]++
 			}
 			if len(wt.Warnings) > 0 {
@@ -290,63 +317,207 @@ func observationForSession(session Session, observations map[SessionID]SessionOb
 	}
 }
 
-func cachedGit(cache map[string]GitInfo, dir string) GitInfo {
-	if gi, ok := cache[dir]; ok {
-		return gi
+func overviewRepositoryProject(project Project, surveyed []RepositoryProjectSurvey) (RepositoryProjectSurvey, bool) {
+	if project.ID != "" {
+		for _, repository := range surveyed {
+			if repository.ID == project.ID {
+				return repository, true
+			}
+		}
 	}
-	gi := CollectGitInfoCached(dir)
-	cache[dir] = gi
-	return gi
+	for _, repository := range surveyed {
+		if repository.Name == project.Name && sameRepositoryPath(repository.Path, project.Path) {
+			return repository, true
+		}
+	}
+	return RepositoryProjectSurvey{}, false
 }
 
-func buildWorktree(s *State, observations map[SessionID]SessionObservation, assigned map[SessionID]bool, wt WorktreeInfo, isMain bool, mainBranch string, gitCache map[string]GitInfo) OvWorktree {
-	git := cachedGit(gitCache, wt.Path)
-	owt := OvWorktree{
-		Path:      wt.Path,
-		ShortPath: ShortPath(wt.Path),
-		Branch:    wt.Branch,
-		IsMain:    isMain,
-		Staged:    git.Staged,
-		Modified:  git.Modified,
-		Untracked: git.Untracked,
-		Clean:     git.Clean(),
-		LastMsg:   git.LastMsg,
+func unavailableOverviewRepositoryProject(project Project, surveyErr error) RepositoryProjectSurvey {
+	message := "Project is missing from repository Survey"
+	if surveyErr != nil {
+		message = surveyErr.Error()
 	}
-	if owt.Branch == "" {
-		if git.IsRepo {
-			owt.Branch = git.Branch
+	problem := &RepositoryProblem{Operation: "survey", Message: message}
+	return RepositoryProjectSurvey{
+		ID: project.ID, Name: project.Name, Path: project.Path,
+		Presence:   RepositoryUnknown,
+		Problem:    problem,
+		MainBranch: RepositoryFact[string]{State: RepositoryUnknown, Problem: problem},
+		Worktrees:  RepositoryFact[[]RepositoryWorktree]{State: RepositoryUnknown, Problem: problem},
+	}
+}
+
+func projectOverviewFromRepository(project Project, repository RepositoryProjectSurvey) (OvProject, []RepositoryWorktree) {
+	knowledge := repository.Presence
+	if knowledge == "" {
+		knowledge = RepositoryUnknown
+	}
+	overview := OvProject{
+		ID: project.ID, Name: project.Name, Path: project.Path,
+		MainConfigured:      strings.TrimSpace(project.MainBranch) != "",
+		RepositoryKnowledge: knowledge,
+	}
+	overview.Problems = appendOverviewProblem(overview.Problems, repository.Problem)
+	if repository.MainBranch.Known() {
+		overview.MainBranch = repository.MainBranch.Value
+		overview.MainBranchKnown = true
+	} else {
+		overview.Problems = appendOverviewProblem(overview.Problems, repository.MainBranch.Problem)
+	}
+
+	var worktrees []RepositoryWorktree
+	if repository.Worktrees.Known() {
+		overview.WorktreesKnown = true
+		worktrees = append([]RepositoryWorktree(nil), repository.Worktrees.Value...)
+		for _, worktree := range worktrees {
+			overview.Worktrees = append(overview.Worktrees, overviewWorktreeFromRepository(worktree))
+		}
+	} else {
+		overview.Problems = appendOverviewProblem(overview.Problems, repository.Worktrees.Problem)
+	}
+
+	if len(worktrees) > 0 {
+		head := worktrees[0]
+		for _, worktree := range worktrees {
+			if worktree.Main {
+				head = worktree
+				break
+			}
+		}
+		if branch, known := overviewCheckoutLabel(head.Checkout); known {
+			overview.HeadBranch = branch
+			overview.HeadBranchKnown = true
 		} else {
-			owt.Branch = "(kein git)"
-			owt.Clean = true
+			overview.Problems = appendOverviewProblem(overview.Problems, head.Checkout.Problem)
 		}
 	}
-	if owt.Branch != mainBranch && mainBranch != "" && mainBranch != "(detached)" && git.IsRepo {
-		owt.Ahead, owt.Behind = AheadBehindCached(wt.Path, mainBranch)
-	}
-	for _, a := range s.Agents {
-		if a.Dir == wt.Path && !assigned[a.ID] {
-			assigned[a.ID] = true
-			owt.Agents = append(owt.Agents, toOvAgent(a, observationForSession(a, observations), mainBranch, gitCache))
+	if len(overview.Worktrees) == 0 {
+		problem := repository.Worktrees.Problem
+		if repository.Worktrees.Known() {
+			problem = &RepositoryProblem{Operation: "worktree_topology", Message: "repository Survey returned no Worktrees"}
+			overview.Problems = appendOverviewProblem(overview.Problems, problem)
 		}
+		overview.Worktrees = append(overview.Worktrees, fallbackOverviewWorktree(project, repository, problem))
 	}
-	return owt
+	return overview, worktrees
 }
 
-func toOvAgent(a Agent, observed SessionObservation, mainBranch string, gitCache map[string]GitInfo) OvAgent {
+func overviewWorktreeFromRepository(worktree RepositoryWorktree) OvWorktree {
+	overview := OvWorktree{
+		Reference: worktree.Reference, Location: worktree.Location,
+		Path: worktree.Path, ShortPath: worktree.Location, IsMain: worktree.Main,
+	}
+	if branch, known := overviewCheckoutLabel(worktree.Checkout); known {
+		overview.Branch = branch
+		overview.CheckoutKnown = true
+	} else {
+		overview.Problems = appendOverviewProblem(overview.Problems, worktree.Checkout.Problem)
+	}
+	overview.Problems = appendOverviewProblem(overview.Problems, worktree.Head.Problem)
+	if worktree.Changes.Known() {
+		changes := worktree.Changes.Value
+		overview.ChangesKnown = true
+		overview.Staged = changes.Staged
+		overview.Modified = changes.Modified
+		overview.Untracked = changes.Untracked
+		overview.Conflicted = changes.Conflicted
+		overview.Clean = changes.Clean()
+	} else {
+		overview.Problems = appendOverviewProblem(overview.Problems, worktree.Changes.Problem)
+	}
+	if worktree.Divergence.Known() {
+		overview.DivergenceKnown = true
+		overview.Ahead = worktree.Divergence.Value.Ahead
+		overview.Behind = worktree.Divergence.Value.Behind
+	} else {
+		overview.Problems = appendOverviewProblem(overview.Problems, worktree.Divergence.Problem)
+	}
+	return overview
+}
+
+func fallbackOverviewWorktree(project Project, repository RepositoryProjectSurvey, problem *RepositoryProblem) OvWorktree {
+	branch := ""
+	if repository.Presence == RepositoryNotRepository {
+		branch = "(kein git)"
+	}
+	worktree := OvWorktree{
+		Reference: repositoryWorktreeReference(project, project.Path),
+		Location: repositoryWorktreeLocation(project.Path, project.Path),
+		Path: project.Path, ShortPath: repositoryWorktreeLocation(project.Path, project.Path), Branch: branch, IsMain: true,
+	}
+	worktree.Problems = appendOverviewProblem(worktree.Problems, repository.Problem)
+	worktree.Problems = appendOverviewProblem(worktree.Problems, problem)
+	return worktree
+}
+
+func overviewCheckoutLabel(checkout RepositoryFact[RepositoryCheckout]) (string, bool) {
+	if !checkout.Known() {
+		return "", false
+	}
+	switch checkout.Value.Kind {
+	case RepositoryBranchCheckout:
+		return checkout.Value.Branch, checkout.Value.Branch != ""
+	case RepositoryDetached:
+		return "(detached)", true
+	case RepositoryUnborn:
+		return "(unborn)", true
+	case RepositoryBare:
+		return "(bare)", true
+	default:
+		return "", false
+	}
+}
+
+func appendOverviewProblem(problems []RepositoryProblem, problem *RepositoryProblem) []RepositoryProblem {
+	if problem == nil {
+		return problems
+	}
+	for _, existing := range problems {
+		if existing.Operation == problem.Operation && existing.Message == problem.Message {
+			return problems
+		}
+	}
+	return append(problems, *problem)
+}
+
+func overviewSessionMayBelongToProject(session Session, project Project) bool {
+	if session.ProjectID != "" && project.ID != "" {
+		return session.ProjectID == project.ID
+	}
+	if session.Project != "" {
+		return session.Project == project.Name
+	}
+	return true
+}
+
+func overviewSessionsForProject(state *State, project Project) []Session {
+	var sessions []Session
+	for _, session := range state.Agents {
+		if session.ProjectID != "" && project.ID != "" {
+			if session.ProjectID == project.ID {
+				sessions = append(sessions, session)
+			}
+			continue
+		}
+		if session.Project == project.Name {
+			sessions = append(sessions, session)
+		}
+	}
+	return sessions
+}
+
+func toOvAgent(a Agent, observed SessionObservation, branch string) OvAgent {
 	st := observed.Status
 	lastActive := a.CreatedAt
 	if observed.ActivityKnown {
 		lastActive = observed.Activity
 	}
-	phase, phaseLabel := agentPhase(a, mainBranch, agentAlive(st))
-	var sc SessionChanges
-	branch := ""
-	if gi := cachedGit(gitCache, a.Dir); gi.IsRepo {
-		sc = CollectSessionChangesCached(a, gi)
-		branch = gi.Branch
-	}
+	phase, phaseLabel := agentPhase(a, agentAlive(st))
 	tool := observed.Tool
 	handoffCapable := len(a.AgentRuns) > 0 || strings.TrimSpace(a.SessionID) != "" || (tool != "" && tool != AgentToolBash)
+	// Survey deliberately omits per-Session baseline deltas. Keep the legacy
+	// fields explicitly unknown instead of rebuilding that Git meaning here.
 	return OvAgent{
 		ID:            a.ID,
 		Name:          a.Name,
@@ -360,9 +531,9 @@ func toOvAgent(a Agent, observed SessionObservation, mainBranch string, gitCache
 		Phase:         phase,
 		PhaseLabel:    phaseLabel,
 		Deployed:      agentAlive(st) && !a.DeployAt.IsZero() && time.Since(a.DeployAt) < 45*time.Minute,
-		Known:         sc.Known,
-		OwnDirty:      len(sc.Files),
-		OwnCommits:    sc.Commits,
+		Known:         false,
+		OwnDirty:      0,
+		OwnCommits:    0,
 		Branch:        branch,
 		Unread:        observed.Unread,
 		Dock:          a.IsDock(),
@@ -377,7 +548,7 @@ func unread(st AgentStatus, seenAt, lastActive time.Time) bool {
 
 var integrationBranches = map[string]bool{"dev": true, "main": true, "master": true, "develop": true}
 
-func agentPhase(a Agent, mainBranch string, alive bool) (string, string) {
+func agentPhase(a Agent, alive bool) (string, string) {
 	if !alive {
 		return "", ""
 	}
@@ -399,33 +570,10 @@ func agentPhase(a Agent, mainBranch string, alive bool) (string, string) {
 	case "cleanup":
 		return "cleanup", ""
 	}
-	if a.BaseCommit == "" {
-		return "", ""
-	}
-	branch, err := GitCmdCached(a.Dir, "rev-parse", "--abbrev-ref", "HEAD")
-	if err != nil {
-		return "", ""
-	}
-	branch = strings.TrimSpace(branch)
-	if branch == "" || (branch != mainBranch && !integrationBranches[branch]) {
-		return "", ""
-	}
-	cnt, err := GitCmdCached(a.Dir, "rev-list", "--count", a.BaseCommit+"..HEAD")
-	if err != nil {
-		return "", ""
-	}
-	if n := strings.TrimSpace(cnt); n == "" || n == "0" {
-		return "", ""
-	}
-	tsRaw, err := GitCmdCached(a.Dir, "log", "-1", "--format=%ct")
-	if err != nil {
-		return "", ""
-	}
-	ts, _ := strconv.ParseInt(strings.TrimSpace(tsRaw), 10, 64)
-	if ts == 0 || time.Since(time.Unix(ts, 0)) > 15*time.Minute {
-		return "", ""
-	}
-	return "committed", branch
+	// The old "committed" presentation required per-Session Git probes. Survey
+	// intentionally omits history, so Overview leaves that phase unknown rather
+	// than bypassing the Repositories Module.
+	return "", ""
 }
 
 func finishWarnings(proj *OvProject) {
@@ -441,10 +589,10 @@ func finishWarnings(proj *OvProject) {
 				alive = true
 			}
 		}
-		if !wt.Clean && !alive && !unknown {
+		if wt.ChangesKnown && !wt.Clean && !alive && !unknown {
 			wt.Warnings = append(wt.Warnings, "uncommitted Änderungen, keine aktive Session")
 		}
-		if wt.Ahead > 0 && !alive && !unknown && wt.Branch != proj.MainBranch {
+		if wt.DivergenceKnown && wt.Ahead > 0 && !alive && !unknown && wt.Branch != proj.MainBranch {
 			word := "Commits"
 			if wt.Ahead == 1 {
 				word = "Commit"

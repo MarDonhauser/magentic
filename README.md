@@ -117,19 +117,19 @@ es keins — das zeigt der Punkt an der Session selbst schon deutlich genug.
   Geplant / In Arbeit / Zur Abnahme / Erledigt. Karten, an denen gerade eine
   Session arbeitet, sind hervorgehoben; „hieran arbeiten" startet eine
   Claude-Session mit dem passenden Auftrag.
-- **Statistik** (`⌘⇧S`) — Aktivität, Tokens, geschätzte Kosten, Cache-Quote,
-  Commits, Projekte, Modelle und eine Heatmap Wochentag × Stunde. Speist sich
-  aus den Claude-Transkripten (`~/.claude/projects`), aus git und aus dem
-  State. Der erste Lauf parst alle Transkripte, danach greift ein Cache
-  (`~/.config/magentic/stats-cache.json`).
+- **Statistik** (`⌘⇧S`) — Aktivität, Tokens, bekannte Kosten, Cache-Quote,
+  Commits, Projekte, Modelle und eine Heatmap Wochentag × Stunde. Sie nutzt
+  denselben normalisierten WorkHistory-Index wie der Verlauf und zeigt für
+  Claude Code, Codex, Gemini CLI und GitHub Copilot, ob die jeweilige Quelle
+  vollständig, teilweise oder gar nicht lesbar war. Der Index liegt privat
+  neben dem State unter `work-history/index.json` und wird inkrementell
+  aktualisiert.
 
   Alle Zahlen beziehen sich ausschließlich auf die eigene Arbeit:
-  - **Prompts, Turns, Sessions, Tokens, Kosten** stammen aus den lokalen
-    Transkripten unter `~/.claude/projects` — dort landen nur eigene Sessions.
-    Nicht gezählt werden Tool-Ergebnisse (`toolUseResult`), Subagent-Eingaben
-    (`isSidechain`), Meta-Zeilen und die user-Zeilen, mit denen Claude Code
-    ausgeführte Slash-Kommandos und deren Ausgabe protokolliert
-    (`<command-name>`, `<local-command-stdout>`, …).
+  - **Prompts, Turns, Sessions und Tokens** stammen aus den lokalen Verläufen
+    der unterstützten Coding-Agent-Anbieter. Provider-Adapter normalisieren
+    Rollen, Lineage und Usage-Fakten; fehlende Token-Fakten bleiben unbekannt
+    und werden nicht als Null erfunden.
   - **Commits** zählt nur, was unter der git-Identität des jeweiligen
     Repositories (`user.email` / `user.name`) steht. In geteilten Repos stammt
     sonst der Großteil der Commits von Kolleginnen und Kollegen.
@@ -140,9 +140,10 @@ es keins — das zeigt der Punkt an der Session selbst schon deutlich genug.
     bisherige Kontext erneut gelesen. Deshalb stehen dort schnell Milliarden;
     das ist kein zusätzlicher Verbrauch. Die Unterzeile „ohne Cache" zeigt die
     tatsächlich neu verarbeiteten Tokens.
-  - **Kosten** sind auf API-Listenpreise hochgerechnet. Mit einem Max-Abo
-    zahlst du diesen Betrag nicht — die Zahl zeigt, was die Arbeit über die
-    API gekostet hätte.
+  - **Kosten** werden nur für erkannte Claude-Modelle aus den hinterlegten
+    API-Listenpreisen hochgerechnet. Nutzung anderer oder unbekannter Modelle
+    bleibt ausdrücklich unbepreist; bei gemischter Nutzung zeigt die App nur
+    den bekannten Teilbetrag. Mit einem Max-Abo zahlst du diesen Betrag nicht.
 - **Terminal-Dock** (`⌃\``) — Panel über die volle Fensterbreite unterhalb von
   Sidebar und Hauptbereich, mit mehreren Tabs, per Drag in der Höhe
   verstellbar. Offene Tabs und Höhe überleben den Neustart.

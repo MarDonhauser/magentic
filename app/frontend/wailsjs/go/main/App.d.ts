@@ -103,7 +103,7 @@ export function Stats(arg1:number):Promise<core.Stats>;
 
 export function TakeBreak():Promise<void>;
 
-export function Timeline():Promise<Array<main.TimelineEntry>>;
+export function Timeline():Promise<main.TimelineResult>;
 
 export function WorktreeDiff(arg1:string):Promise<string>;
 

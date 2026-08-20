@@ -1,12 +1,48 @@
 package core
 
 import (
-	"os"
+	"context"
+	"encoding/json"
+	"errors"
 	"os/exec"
-	"path/filepath"
 	"testing"
 	"time"
 )
+
+type recordingOverviewRepositories struct {
+	survey   RepositoriesSurvey
+	err      error
+	calls    int
+	projects []Project
+}
+
+func (r *recordingOverviewRepositories) Survey(_ context.Context, projects []Project) (RepositoriesSurvey, error) {
+	r.calls++
+	r.projects = append([]Project(nil), projects...)
+	return r.survey, r.err
+}
+
+func TestOvWorktreeJSONExposesOnlyOpaqueReferenceAndLocation(t *testing.T) {
+	data, err := json.Marshal(OvWorktree{
+		Reference: "wt_opaque", Location: "project-agents/one",
+		Path: "/Users/example/project-agents/one", ShortPath: "legacy",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["reference"] != "wt_opaque" || decoded["location"] != "project-agents/one" {
+		t.Fatalf("opaque Worktree projection missing from JSON: %s", data)
+	}
+	for _, forbidden := range []string{"path", "shortPath", "Path", "ShortPath"} {
+		if _, leaked := decoded[forbidden]; leaked {
+			t.Fatalf("private Worktree path %q leaked into JSON: %s", forbidden, data)
+		}
+	}
+}
 
 func TestUnread(t *testing.T) {
 	seen := time.Now().Add(-1 * time.Hour)
@@ -121,10 +157,37 @@ func TestOverviewProjectsCoherentObservationFactsAndStableIDs(t *testing.T) {
 			Occupancy: OccupancyOccupied,
 		}},
 	}
+	repositories := &recordingOverviewRepositories{survey: RepositoriesSurvey{
+		ObservedAt: activeAt,
+		Projects: []RepositoryProjectSurvey{{
+			ID: "project-1", Name: "NAVI", Path: dir, Presence: RepositoryKnown,
+			MainBranch: repositoryKnownFact("main"),
+			Worktrees: repositoryKnownFact([]RepositoryWorktree{{
+				Path: dir, Main: true,
+				Checkout:   repositoryKnownFact(RepositoryCheckout{Kind: RepositoryBranchCheckout, Branch: "main"}),
+				Head:       repositoryKnownFact("head-1"),
+				Changes:    repositoryKnownFact(RepositoryWorkingChanges{Modified: 2, Conflicted: 1}),
+				Divergence: repositoryKnownFact(RepositoryDivergence{Base: "main"}),
+			}}),
+		}},
+	}}
 
-	got := BuildOverviewFromObservation(state, snapshot)
+	got := buildOverviewFromObservationUsing(state, snapshot, repositories)
+	if repositories.calls != 1 || len(repositories.projects) != 1 || repositories.projects[0].ID != "project-1" {
+		t.Fatalf("Overview must obtain exactly one Survey for all Projects: calls=%d projects=%#v", repositories.calls, repositories.projects)
+	}
 	if len(got.Projects) != 1 || got.Projects[0].ID != "project-1" {
 		t.Fatalf("stable Project identity missing: %#v", got.Projects)
+	}
+	project := got.Projects[0]
+	if project.RepositoryKnowledge != RepositoryKnown || !project.MainBranchKnown ||
+		!project.HeadBranchKnown || !project.WorktreesKnown || project.MainBranch != "main" || project.HeadBranch != "main" {
+		t.Fatalf("Project repository facts were not projected: %#v", project)
+	}
+	worktree := project.Worktrees[0]
+	if !worktree.CheckoutKnown || !worktree.ChangesKnown || !worktree.DivergenceKnown ||
+		worktree.Branch != "main" || worktree.Modified != 2 || worktree.Conflicted != 1 || worktree.Clean {
+		t.Fatalf("Worktree repository facts were not projected: %#v", worktree)
 	}
 	agent := got.Projects[0].Worktrees[0].Agents[0]
 	if agent.ID != "session-1" || agent.Name != "one" {
@@ -136,26 +199,19 @@ func TestOverviewProjectsCoherentObservationFactsAndStableIDs(t *testing.T) {
 	if agent.Phase != "cleanup" {
 		t.Fatalf("Session purpose was lost during projection: %#v", agent)
 	}
-	if got.Counts["blocked"] != 1 || got.Counts["unread"] != 1 {
+	if agent.Branch != "main" || agent.Known || agent.OwnDirty != 0 || agent.OwnCommits != 0 {
+		t.Fatalf("Session repository projection bypassed Survey semantics: %#v", agent)
+	}
+	if got.Counts["blocked"] != 1 || got.Counts["unread"] != 1 || got.Counts["dirty"] != 1 {
 		t.Fatalf("Overview counts do not match Observation: %#v", got.Counts)
 	}
 }
 
 func TestOverviewUnavailableObservationIsReadOnlyAndDoesNotWarnAsDead(t *testing.T) {
 	dir := t.TempDir()
-	gitInit(t, dir,
-		[]string{"init", "-q", "-b", "main"},
-		[]string{"config", "user.email", "t@example.com"},
-		[]string{"config", "user.name", "Test"},
-		[]string{"commit", "-q", "--allow-empty", "-m", "init"},
-	)
-	if err := os.WriteFile(filepath.Join(dir, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	FlushGitMemo()
 	state := &State{
 		Projects: []Project{{ID: "project-1", Name: "NAVI", Path: dir, MainBranch: "main"}},
-		Agents:   []Session{{ID: "session-1", Name: "one", Project: "NAVI", Dir: dir}},
+		Agents:   []Session{{ID: "session-1", Name: "one", ProjectID: "project-1", Project: "NAVI", Dir: dir}},
 	}
 	snapshot := ObservationSnapshot{
 		Availability: ObservationUnavailable,
@@ -165,19 +221,65 @@ func TestOverviewUnavailableObservationIsReadOnlyAndDoesNotWarnAsDead(t *testing
 			Attention: AttentionUnknown, Occupancy: OccupancyUnknown,
 		}},
 	}
+	repositories := &recordingOverviewRepositories{err: errors.New("repository process unavailable")}
 
-	got := BuildOverviewFromObservation(state, snapshot)
+	got := buildOverviewFromObservationUsing(state, snapshot, repositories)
+	if repositories.calls != 1 {
+		t.Fatalf("Survey calls = %d, want 1", repositories.calls)
+	}
 	if len(state.Agents) != 1 || state.Agents[0].ID != "session-1" {
 		t.Fatalf("Overview mutated the Registry-shaped input: %#v", state.Agents)
 	}
 	if got.Counts["unknown"] != 1 {
 		t.Fatalf("unavailable tmux was not preserved as unknown: %#v", got.Counts)
 	}
-	wt := got.Projects[0].Worktrees[0]
-	if wt.Clean {
-		t.Fatal("dirty Worktree fixture was not observed")
+	project := got.Projects[0]
+	if project.RepositoryKnowledge != RepositoryUnknown || project.MainBranchKnown ||
+		project.HeadBranchKnown || project.WorktreesKnown || len(project.Problems) == 0 {
+		t.Fatalf("repository failure was collapsed into values: %#v", project)
+	}
+	wt := project.Worktrees[0]
+	if wt.CheckoutKnown || wt.ChangesKnown || wt.DivergenceKnown || wt.Clean {
+		t.Fatalf("unknown Worktree facts were collapsed into clean/zero claims: %#v", wt)
+	}
+	if got.Counts["dirty"] != 0 {
+		t.Fatalf("unknown changes were counted as dirty: %#v", got.Counts)
 	}
 	if len(wt.Warnings) != 0 {
 		t.Fatalf("unknown Session was treated as dead: %#v", wt.Warnings)
+	}
+}
+
+func TestOverviewPreservesPartialWorktreeKnowledge(t *testing.T) {
+	dir := t.TempDir()
+	statusProblem := &RepositoryProblem{Operation: "status", Message: "status failed"}
+	divergenceProblem := &RepositoryProblem{Operation: "divergence", Message: "main branch unavailable"}
+	state := &State{Projects: []Project{{ID: "project-1", Name: "NAVI", Path: dir}}}
+	repositories := &recordingOverviewRepositories{survey: RepositoriesSurvey{Projects: []RepositoryProjectSurvey{{
+		ID: "project-1", Name: "NAVI", Path: dir, Presence: RepositoryKnown,
+		MainBranch: repositoryKnownFact("main"),
+		Worktrees: repositoryKnownFact([]RepositoryWorktree{{
+			Path: dir, Main: true,
+			Checkout:   repositoryKnownFact(RepositoryCheckout{Kind: RepositoryBranchCheckout, Branch: "feature"}),
+			Head:       repositoryKnownFact("head-1"),
+			Changes:    RepositoryFact[RepositoryWorkingChanges]{State: RepositoryUnknown, Problem: statusProblem},
+			Divergence: RepositoryFact[RepositoryDivergence]{State: RepositoryUnknown, Problem: divergenceProblem},
+		}}),
+	}}}}
+
+	got := buildOverviewFromObservationUsing(state, ObservationSnapshot{}, repositories)
+	project := got.Projects[0]
+	if project.RepositoryKnowledge != RepositoryKnown || !project.MainBranchKnown || !project.HeadBranchKnown || !project.WorktreesKnown {
+		t.Fatalf("known Project facts were lost: %#v", project)
+	}
+	worktree := project.Worktrees[0]
+	if !worktree.CheckoutKnown || worktree.Branch != "feature" || worktree.ChangesKnown || worktree.DivergenceKnown {
+		t.Fatalf("partial Worktree knowledge was collapsed: %#v", worktree)
+	}
+	if worktree.Clean || got.Counts["dirty"] != 0 || len(worktree.Warnings) != 0 {
+		t.Fatalf("unknown changes/divergence produced clean, dirty, or warning claims: worktree=%#v counts=%#v", worktree, got.Counts)
+	}
+	if len(worktree.Problems) != 2 {
+		t.Fatalf("partial Worktree problems missing: %#v", worktree.Problems)
 	}
 }

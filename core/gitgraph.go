@@ -10,10 +10,12 @@ import (
 )
 
 type GraphRef struct {
-	Name     string `json:"name"`
-	Kind     string `json:"kind"`
-	Worktree string `json:"worktree,omitempty"`
-	Current  bool   `json:"current,omitempty"`
+	Name             string      `json:"name"`
+	Kind             string      `json:"kind"`
+	Worktree         string      `json:"-"`
+	WorktreeRef      WorktreeRef `json:"worktreeRef,omitempty"`
+	WorktreeLocation string      `json:"worktreeLocation,omitempty"`
+	Current          bool        `json:"current,omitempty"`
 }
 
 type GraphCommit struct {
@@ -31,15 +33,17 @@ type GraphCommit struct {
 }
 
 type GraphBranch struct {
-	Name            string   `json:"name"`
-	Lane            int      `json:"lane"`
-	IsMain          bool     `json:"isMain"`
-	Worktree        string   `json:"worktree,omitempty"`
-	Ahead           int      `json:"ahead"`
-	Behind          int      `json:"behind"`
-	DivergenceKnown bool     `json:"divergenceKnown"`
-	Merged          bool     `json:"merged"`
-	Agents          []string `json:"agents,omitempty"`
+	Name             string      `json:"name"`
+	Lane             int         `json:"lane"`
+	IsMain           bool        `json:"isMain"`
+	Worktree         string      `json:"-"`
+	WorktreeRef      WorktreeRef `json:"worktreeRef,omitempty"`
+	WorktreeLocation string      `json:"worktreeLocation,omitempty"`
+	Ahead            int         `json:"ahead"`
+	Behind           int         `json:"behind"`
+	DivergenceKnown  bool        `json:"divergenceKnown"`
+	Merged           bool        `json:"merged"`
+	Agents           []string    `json:"agents,omitempty"`
 }
 
 type GitGraph struct {
@@ -99,11 +103,13 @@ func BuildGitGraph(s *State, projName string, limit int) GitGraph {
 	g.Main = main
 
 	wtByBranch := map[string]string{}
+	worktreeByBranch := map[string]RepositoryWorktree{}
 	divergenceByBranch := map[string]RepositoryFact[RepositoryDivergence]{}
 	for _, wt := range repository.Worktrees.Value {
 		if wt.Checkout.Known() && wt.Checkout.Value.Kind == RepositoryBranchCheckout && wt.Checkout.Value.Branch != "" {
 			branch := wt.Checkout.Value.Branch
 			wtByBranch[branch] = wt.Path
+			worktreeByBranch[branch] = wt
 			divergenceByBranch[branch] = wt.Divergence
 		}
 	}
@@ -122,6 +128,16 @@ func BuildGitGraph(s *State, projName string, limit int) GitGraph {
 		return g
 	}
 	commits := parseGraphCommits(out, wtByBranch, agentsByDir)
+	for i := range commits {
+		for j := range commits[i].Refs {
+			worktree, known := worktreeByBranch[commits[i].Refs[j].Name]
+			if !known {
+				continue
+			}
+			commits[i].Refs[j].WorktreeRef = worktree.Reference
+			commits[i].Refs[j].WorktreeLocation = worktree.Location
+		}
+	}
 	if len(commits) > limit {
 		commits = commits[:limit]
 		g.Truncate = true
@@ -134,6 +150,12 @@ func BuildGitGraph(s *State, projName string, limit int) GitGraph {
 		}
 	}
 	g.Branches = collectGraphBranches(proj.Path, main, commits, wtByBranch, agentsByDir, divergenceByBranch)
+	for i := range g.Branches {
+		if worktree, known := worktreeByBranch[g.Branches[i].Name]; known {
+			g.Branches[i].WorktreeRef = worktree.Reference
+			g.Branches[i].WorktreeLocation = worktree.Location
+		}
+	}
 	g.Availability = RepositoryKnown
 	return g
 }

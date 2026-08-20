@@ -57,6 +57,8 @@ func TestBuildStatsConsumesNormalizedWorkHistory(t *testing.T) {
 	now := time.Now()
 	claudePromptAt := now.Add(-2 * time.Hour).UTC().Format(time.RFC3339Nano)
 	claudeOutputAt := now.Add(-2*time.Hour + time.Minute).UTC().Format(time.RFC3339Nano)
+	delegatedPromptAt := now.Add(-90 * time.Minute).UTC().Format(time.RFC3339Nano)
+	delegatedOutputAt := now.Add(-89 * time.Minute).UTC().Format(time.RFC3339Nano)
 	codexPromptAt := now.Add(-time.Hour).UTC().Format(time.RFC3339Nano)
 	codexOutputAt := now.Add(-time.Hour + time.Minute).UTC().Format(time.RFC3339Nano)
 	codexUsageAt := now.Add(-time.Hour + 2*time.Minute).UTC().Format(time.RFC3339Nano)
@@ -65,6 +67,8 @@ func TestBuildStatsConsumesNormalizedWorkHistory(t *testing.T) {
 		"{malformed}",
 		`{"type":"user","timestamp":"` + claudePromptAt + `","cwd":"` + projectPath + `","sessionId":"claude-run","message":{"content":"Claude statistics prompt"}}`,
 		`{"type":"assistant","timestamp":"` + claudeOutputAt + `","cwd":"` + projectPath + `","sessionId":"claude-run","message":{"model":"claude-opus-4-8","content":"Claude statistics output","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":2,"cache_creation_input_tokens":1}}}`,
+		`{"type":"user","timestamp":"` + delegatedPromptAt + `","cwd":"` + projectPath + `","sessionId":"claude-run","isSidechain":true,"message":{"content":"Delegated prompt must not enter primary statistics"}}`,
+		`{"type":"assistant","timestamp":"` + delegatedOutputAt + `","cwd":"` + projectPath + `","sessionId":"claude-run","isSidechain":true,"message":{"model":"claude-opus-4-8","content":"Delegated output must not enter primary statistics","usage":{"input_tokens":1000,"output_tokens":500,"cache_read_input_tokens":200,"cache_creation_input_tokens":100}}}`,
 	}, "\n")+"\n")
 	writeStatsFixture(t, filepath.Join(codexHome, "sessions", "recent", "codex-run.jsonl"), strings.Join([]string{
 		`{"type":"session_meta","timestamp":"` + codexPromptAt + `","payload":{"id":"codex-run","cwd":"` + projectPath + `","model":"gpt-5"}}`,
@@ -136,10 +140,52 @@ func TestModelCostOnlyPricesClaude(t *testing.T) {
 	if !priced || math.Abs(cost-(3+15+0.3+3.75)) > 1e-12 {
 		t.Fatalf("Claude pricing = (%f, %v)", cost, priced)
 	}
+	if _, priced := modelCost(HistoryProviderClaude, "claude-sonnet-4-6-20260219", input, output, cacheRead, cacheWrite); !priced {
+		t.Fatal("dated snapshot of a listed Claude model was not priced")
+	}
+	if cost, priced := modelCost(HistoryProviderClaude, "claude-unlisted", input, output, cacheRead, cacheWrite); priced || cost != 0 {
+		t.Fatalf("unlisted Claude model inherited a fallback price: (%f, %v)", cost, priced)
+	}
+	if cost, priced := modelCost(HistoryProviderClaude, "claude-sonnet-4-6-experimental", input, output, cacheRead, cacheWrite); priced || cost != 0 {
+		t.Fatalf("Claude model with an unknown suffix inherited a prefix price: (%f, %v)", cost, priced)
+	}
 	for _, provider := range []HistoryProvider{HistoryProviderCodex, HistoryProviderGemini, HistoryProviderCopilot} {
 		if cost, priced := modelCost(provider, "claude-sonnet-4-6", input, output, cacheRead, cacheWrite); priced || cost != 0 {
 			t.Errorf("%s inherited Claude pricing: (%f, %v)", provider, cost, priced)
 		}
+	}
+}
+
+func TestStatsCostStateMarksUnlistedClaudeModelsUnpriced(t *testing.T) {
+	now := time.Now()
+	usage := HistoryUsage{
+		InputTokens:      historyKnown[int64](100),
+		OutputTokens:     historyKnown[int64](50),
+		CacheReadTokens:  historyKnown[int64](0),
+		CacheWriteTokens: historyKnown[int64](0),
+	}
+	acc := newStatsAcc()
+	acc.addEvent(HistoryEvent{
+		Provider:   HistoryProviderClaude,
+		Kind:       HistoryEventOutput,
+		OccurredAt: historyKnown(now),
+		Model:      historyKnown("claude-unlisted"),
+		Usage:      usage,
+	})
+	day := acc.days[now.In(time.Local).Format(statsDateLayout)]
+	if day == nil || day.Cost != 0 || day.costState() != StatsCostUnpriced {
+		t.Fatalf("unlisted Claude model cost state = %#v", day)
+	}
+
+	acc.addEvent(HistoryEvent{
+		Provider:   HistoryProviderClaude,
+		Kind:       HistoryEventOutput,
+		OccurredAt: historyKnown(now),
+		Model:      historyKnown("claude-sonnet-4-6"),
+		Usage:      usage,
+	})
+	if day.Cost <= 0 || day.costState() != StatsCostPartial {
+		t.Fatalf("mixed listed and unlisted Claude cost state = %#v", day)
 	}
 }
 

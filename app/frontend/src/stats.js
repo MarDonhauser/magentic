@@ -56,6 +56,19 @@ function costValue(value, state) {
   return `${state === 'partial' ? 'ab ' : ''}${money(value)}`;
 }
 
+function mergeCostStates(states) {
+  let known = false;
+  let unknown = false;
+  for (const state of states) {
+    known = known || state === 'priced' || state === 'partial';
+    unknown = unknown || state === 'unpriced' || state === 'partial';
+  }
+  if (known && unknown) return 'partial';
+  if (known) return 'priced';
+  if (unknown) return 'unpriced';
+  return 'none';
+}
+
 function pct(v, digits) {
   return (digits ? nf1 : nf0).format(num(v)) + ' %';
 }
@@ -416,8 +429,15 @@ function drawCost(host, days) {
   const max = Math.max(0.0001, ...days.map((d) => d.cost));
   const { top, ticks } = axisScale(max, 3);
   const cum = [];
+  const cumStates = [];
   let run = 0;
-  for (const d of days) { run += d.cost; cum.push(run); }
+  let cumulativeState = 'none';
+  for (let i = 0; i < days.length; i++) {
+    run += days[i].cost;
+    cum.push(run);
+    cumulativeState = mergeCostStates([cumulativeState, days[i].costState]);
+    cumStates.push(cumulativeState);
+  }
   const cumTop = Math.max(0.0001, run);
 
   const band = plotW / n;
@@ -428,7 +448,11 @@ function drawCost(host, days) {
   const cyc = (v) => cumY0 + cumH - (v / cumTop) * cumH;
   const cxc = (i) => padL + band * (i + 0.5);
 
-  let s = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img">`;
+  const chartState = mergeCostStates(days.map((day) => day.costState));
+  const chartLabel = chartState === 'partial'
+    ? 'Bekannte Claude-Kosten pro Tag; weitere Nutzung ist nicht bepreist'
+    : 'Claude-Kosten pro Tag und kumulierter Verlauf';
+  let s = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(chartLabel)}">`;
   for (const v of ticks) {
     const y = cy(v).toFixed(1);
     s += `<line class="st-gl" x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}"/>`;
@@ -449,7 +473,7 @@ function drawCost(host, days) {
   }
   area += `L${cxc(n - 1).toFixed(1)} ${(cumY0 + cumH).toFixed(1)}Z`;
   s += `<text class="st-ax-s" x="${padL}" y="${cumY0 - 8}">kumuliert</text>`;
-  s += `<text class="st-ax" x="${W - padR}" y="${cumY0 - 8}" text-anchor="end">${esc(money(run))}</text>`;
+  s += `<text class="st-ax" x="${W - padR}" y="${cumY0 - 8}" text-anchor="end">${esc(costValue(run, chartState))}</text>`;
   s += `<line class="st-gl" x1="${padL}" y1="${cumY0 + cumH}" x2="${W - padR}" y2="${cumY0 + cumH}"/>`;
   s += `<path d="${area}" fill="${SERIES[0]}" fill-opacity="0.12"/>`;
   s += `<path d="${line}" fill="none" stroke="${SERIES[0]}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
@@ -467,8 +491,8 @@ function drawCost(host, days) {
     const d = days[i];
     tips.push({
       html: `<div class="st-tip-t">${esc(d.weekday)}, ${esc(longDate(d.date))}</div>` +
-        tipRow('Kosten', esc(money(d.cost)), SERIES[0]) +
-        tipRow('kumuliert', esc(money(cum[i]))) +
+        tipRow('bekannte Kosten', esc(costValue(d.cost, d.costState)), SERIES[0]) +
+        tipRow('kumuliert', esc(costValue(cum[i], cumStates[i]))) +
         `<div class="st-tip-sep"></div>` +
         tipRow('Turns', esc(nf0.format(d.turns))),
       band: { x: padL + band * i, y: padT, w: band, h: mainH + gapH + cumH },
@@ -583,13 +607,13 @@ function drawProjects(host, projects, focusName = '') {
     if (active) s += `<circle cx="${nameW + 4}" cy="${y + rowH / 2}" r="3" fill="var(--accent)"/>`;
     s += `<path d="${rightRound(barX, y + rowH / 2 - 7, w, 14, 4)}" fill="${active ? SERIES[0] : FADED}"/>`;
     s += `<text class="st-ax" x="${barX + w + 7}" y="${y + rowH / 2}" dominant-baseline="middle">${esc(compact(p.tokens))}</text>`;
-    s += `<text class="st-ax" x="${costX}" y="${y + rowH / 2}" text-anchor="end" dominant-baseline="middle" fill="var(--ink-2)">${esc(money(p.cost))}</text>`;
+    s += `<text class="st-ax" x="${costX}" y="${y + rowH / 2}" text-anchor="end" dominant-baseline="middle" fill="var(--ink-2)">${esc(costValue(p.cost, p.costState))}</text>`;
     if (!narrow) s += `<text class="st-ax" x="${promptsX}" y="${y + rowH / 2}" text-anchor="end" dominant-baseline="middle">${esc(compact(p.prompts))}</text>`;
     s += `<text class="st-ax" x="${commitsX}" y="${y + rowH / 2}" text-anchor="end" dominant-baseline="middle">${esc(nf0.format(p.commits))}</text>`;
     tips.push({
       html: `<div class="st-tip-t">${esc(label)}${focused ? ' · Projektfokus' : ''}${active ? ' · aktive Session' : ''}</div>` +
         tipRow('Tokens', esc(compact(p.tokens)), active ? SERIES[0] : FADED) +
-        tipRow('Kosten', esc(money(p.cost))) +
+        tipRow('bekannte Kosten', esc(costValue(p.cost, p.costState))) +
         tipRow('Prompts', esc(nf0.format(p.prompts))) +
         tipRow('Sessions', esc(nf0.format(p.sessions))) +
         tipRow('Commits', esc(nf0.format(p.commits))),
@@ -605,11 +629,12 @@ function drawProjects(host, projects, focusName = '') {
 function drawModelBar(host, allModels, slotOf) {
   const W = measure(host, 220);
   const H = 26;
-  const total = allModels.reduce((a, m) => a + m.cost, 0);
-  if (!allModels.length || total <= 0) return bindPlot(host, emptyPlot(W, H), []);
+  const pricedModels = allModels.filter((model) => model.costState === 'priced' || model.costState === 'partial');
+  const total = pricedModels.reduce((sum, model) => sum + model.cost, 0);
+  if (!pricedModels.length || total <= 0) return bindPlot(host, emptyPlot(W, H, 'keine bepreisten Modelldaten'), []);
 
-  const models = allModels.slice().sort((a, b) => slotOf(a.model) - slotOf(b.model));
-  let s = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img">`;
+  const models = pricedModels.slice().sort((a, b) => slotOf(a) - slotOf(b));
+  let s = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Anteile der bekannten Claude-Kosten nach Modell">`;
   const tips = [];
   let x = 0;
   models.forEach((m) => {
@@ -617,10 +642,10 @@ function drawModelBar(host, allModels, slotOf) {
     if (w <= 0) return;
     const gap = w > 6 && x > 0 ? 2 : 0;
     const ww = Math.max(1, w - gap);
-    s += `<rect data-t="${tips.length}" x="${(x + gap).toFixed(1)}" y="4" width="${ww.toFixed(1)}" height="18" rx="3" fill="${SERIES[slotOf(m.model)]}"/>`;
+    s += `<rect data-t="${tips.length}" x="${(x + gap).toFixed(1)}" y="4" width="${ww.toFixed(1)}" height="18" rx="3" fill="${SERIES[slotOf(m)]}"/>`;
     tips.push({
-      html: `<div class="st-tip-t">${esc(modelLabel(m.model))}</div>` +
-        tipRow('Kosten', esc(money(m.cost)), SERIES[slotOf(m.model)]) +
+      html: `<div class="st-tip-t">${esc(modelLabel(m.model))} · ${esc(m.source)}</div>` +
+        tipRow('bekannte Kosten', esc(costValue(m.cost, m.costState)), SERIES[slotOf(m)]) +
         tipRow('Anteil', esc(pct((m.cost / total) * 100, true))) +
         tipRow('Turns', esc(nf0.format(m.turns))),
     });
@@ -653,9 +678,9 @@ function drawSpark(host, days, key, color) {
   bindPlot(host, s + '</svg>', tips);
 }
 
-function emptyPlot(W, H) {
+function emptyPlot(W, H, label = 'keine Daten im Zeitraum') {
   return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img">` +
-    `<text class="st-ax" x="${W / 2}" y="${H / 2}" text-anchor="middle" dominant-baseline="middle">keine Daten im Zeitraum</text></svg>`;
+    `<text class="st-ax" x="${W / 2}" y="${H / 2}" text-anchor="middle" dominant-baseline="middle">${esc(label)}</text></svg>`;
 }
 
 function legend(items, shape) {
@@ -665,8 +690,8 @@ function legend(items, shape) {
 
 const TILE_HINT = {
   Kosten: 'Nur Claude-Nutzung wird zu bekannten API-Listenpreisen hochgerechnet. Andere Anbieter bleiben ausdrücklich unbepreist. Ein Abo-Preis ist damit nicht gemeint.',
-  Tokens: 'Inklusive Cache-Read: bei jedem Turn wird der gesamte bisherige Kontext erneut gelesen. Das summiert sich schnell in die Milliarden und ist kein zusätzlicher Verbrauch. „ohne Cache" zeigt die tatsächlich neu verarbeiteten Tokens.',
-  Turns: 'Antworten der Agents, inklusive aller Subagents — deshalb ein Vielfaches deiner Prompts.',
+  Tokens: 'Inklusive Cache-Read: bei jedem Turn wird der gesamte bisherige Kontext erneut gelesen. Das summiert sich schnell in die Milliarden und ist kein zusätzlicher Verbrauch. „ohne Cache“ zeigt die tatsächlich neu verarbeiteten Tokens.',
+  Turns: 'Antworten in primären Agent-Verläufen. Delegierte Subagent-Arbeit bleibt außen vor, damit Prompts, Turns, Tokens und Kosten dieselbe Grundgesamtheit haben.',
 };
 
 function tileHtml(label, value, note, unit) {
@@ -685,8 +710,8 @@ function projectFocusHtml(name, project, range) {
       `<span><b>${esc(nf0.format(project.prompts))}</b> Prompts</span>` +
       `<span><b>${esc(nf0.format(project.sessions))}</b> Sessions</span>` +
       `<span><b>${esc(nf0.format(project.commits))}</b> Commits</span></div>`
-    : `<div class="st-project-empty"><strong>Keine Aktivität für dieses Projekt</strong>` +
-      `<span>Im gewählten Zeitraum wurden keine zuordenbaren Sessions oder Commits gefunden.</span></div>`;
+    : `<div class="st-project-empty"><strong>Keine bekannte Aktivität für dieses Projekt</strong>` +
+      `<span>Im gewählten Zeitraum sind keine zuordenbaren Sessions oder Commits bekannt.</span></div>`;
   return `<section class="st-project-focus" aria-label="Projektfokus ${esc(name)}">` +
     `<div class="st-project-focus-head"><div><h2>${esc(name)}</h2>` +
     `<p>Projektwerte für ${esc(nf0.format(range))} Tage. Alle Kennzahlen und Diagramme darunter zeigen weiterhin alle Projekte.</p></div>` +
@@ -695,7 +720,7 @@ function projectFocusHtml(name, project, range) {
 
 const SOURCE_STATE_LABELS = {
   available: 'verfügbar',
-  absent: 'nicht gefunden',
+  absent: 'kein Verlauf',
   partial: 'teilweise',
   unavailable: 'nicht verfügbar',
 };
@@ -706,8 +731,10 @@ function coverageHtml(providers) {
     const messages = provider.problems.map((problem) => problem.message || problem.kind).filter(Boolean);
     const firstProblem = messages[0] || '';
     const more = messages.length > 1 ? ` (+${nf0.format(messages.length - 1)})` : '';
-    const title = messages.length ? ` title="${esc(messages.join(' · '))}"` : '';
-    return `<li class="st-source st-source-${esc(provider.state)}"${title}>` +
+    const detail = messages.join(' · ');
+    const title = messages.length ? ` title="${esc(detail)}"` : '';
+    const aria = ` aria-label="${esc(`${provider.source}: ${SOURCE_STATE_LABELS[provider.state]}${detail ? `. ${detail}` : ''}`)}"`;
+    return `<li class="st-source st-source-${esc(provider.state)}"${title}${aria}>` +
       `<i aria-hidden="true"></i><span class="st-source-name">${esc(provider.source)}</span>` +
       `<span class="st-source-state">${esc(SOURCE_STATE_LABELS[provider.state])}</span>` +
       (firstProblem ? `<span class="st-source-problem">${esc(firstProblem + more)}</span>` : '') +
@@ -754,22 +781,27 @@ export function renderStats(el, stats, opts = {}) {
   el.classList.add('st-root');
 
   const rangeBtns = typeof opts.onRange === 'function'
-    ? `<div class="st-range">${[7, 30, 90].map((r) =>
-        `<button type="button" data-range="${r}" class="${r === data.range ? 'on' : ''}">${r} T</button>`).join('')}</div>`
+    ? `<div class="st-range" role="group" aria-label="Zeitraum">${[7, 30, 90].map((r) =>
+        `<button type="button" data-range="${r}" class="${r === data.range ? 'on' : ''}" aria-pressed="${r === data.range}">${r} T</button>`).join('')}</div>`
     : '';
 
   const first = d.length ? longDate(d[0].date) : '';
   const last = d.length ? longDate(d[d.length - 1].date) : '';
   const busiest = d.find((x) => x.date === t.busiestDay);
+  const busiestActivity = busiest
+    ? busiest.prompts > 0
+      ? `${nf0.format(busiest.prompts)} Prompts`
+      : `${nf0.format(busiest.turns)} Turns`
+    : '';
   const head =
     `<div class="st-head"><div><h1>Statistik</h1>` +
     `<div class="st-sub">${d.length ? `${esc(first)} – ${esc(last)} · <b>${esc(nf0.format(t.days))}</b> ${t.days === 1 ? 'Tag' : 'Tage'}` : 'kein Zeitraum'}` +
-    `${busiest ? ` · aktivster Tag <b>${esc(busiest.weekday)}, ${esc(longDate(busiest.date))}</b> (${esc(nf0.format(busiest.prompts))} Prompts)` : ''}</div></div>` +
+    `${busiest ? ` · aktivster Tag <b>${esc(busiest.weekday)}, ${esc(longDate(busiest.date))}</b> (${esc(busiestActivity)})` : ''}</div></div>` +
     `<div class="st-head-r">${rangeBtns}</div></div>` +
     (data.err ? `<div class="st-err" role="alert">${esc(data.err)}</div>` : '') +
     coverageHtml(data.providers);
 
-  if (t.prompts <= 0 && t.turns <= 0) {
+  if (t.prompts <= 0 && t.turns <= 0 && t.tokens <= 0) {
     el.innerHTML = head + projectFocus + emptyStatsHtml(data);
     wireRange(el, opts);
     wireProject(el, opts);
@@ -801,7 +833,7 @@ export function renderStats(el, stats, opts = {}) {
   const perPrompt = t.prompts > 0 ? t.cost / t.prompts : 0;
   const knownCost = t.costState === 'priced' || t.costState === 'partial';
   const costTileNote = t.costState === 'priced'
-    ? `Claude-Listenpreise · ${money(perPrompt)} pro Prompt`
+    ? `Claude-Listenpreise${t.prompts > 0 ? ` · ${money(perPrompt)} pro Prompt` : ''}`
     : t.costState === 'partial'
       ? 'bekannter Claude-Teilbetrag; weitere Nutzung fehlt'
       : t.costState === 'unpriced'
@@ -837,10 +869,10 @@ export function renderStats(el, stats, opts = {}) {
     `<div class="st-card"><div class="st-card-head"><h2>Token-Verlauf</h2>` +
       `<span class="st-note" data-note="tokens"></span>` +
       `<div class="r">${legend(TOKEN_SERIES.map((s) => ({ label: s.label, color: s.color })))}` +
-      `<div class="st-seg" data-seg="tokens">` +
-        `<button type="button" data-mode="abs" class="on">absolut</button>` +
-        `<button type="button" data-mode="share">Anteil</button>` +
-        `<button type="button" data-mode="nocache">ohne Cache-Read</button>` +
+      `<div class="st-seg" data-seg="tokens" role="group" aria-label="Token-Darstellung">` +
+        `<button type="button" data-mode="abs" class="on" aria-pressed="true">absolut</button>` +
+        `<button type="button" data-mode="share" aria-pressed="false">Anteil</button>` +
+        `<button type="button" data-mode="nocache" aria-pressed="false">ohne Cache-Read</button>` +
       `</div></div></div>` +
       `<div class="st-plot" data-plot="tokens"></div></div>` +
 
@@ -896,7 +928,10 @@ export function renderStats(el, stats, opts = {}) {
       const b = e.target.closest('button[data-mode]');
       if (!b) return;
       state.tokenMode = b.getAttribute('data-mode');
-      seg.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+      seg.querySelectorAll('button').forEach((x) => {
+        x.classList.toggle('on', x === b);
+        x.setAttribute('aria-pressed', String(x === b));
+      });
       drawTokens(plots.tokens, d, state.tokenMode);
       if (note) note.textContent = noteText[state.tokenMode] || '';
     });
@@ -981,12 +1016,14 @@ function modelTable(models, total, slotOf) {
   if (!models.length) return '<div class="st-note" style="padding:10px 0;color:var(--muted)">keine Modelldaten</div>';
   const rows = models.map((m) => {
     const tokens = m.input + m.output + m.cacheRead + m.cacheWrite;
-    return `<tr><td><span class="st-mn"><i class="st-sw" style="background:${SERIES[slotOf(m.model)]}"></i>${esc(modelLabel(m.model))}</span></td>` +
+    const priced = m.costState === 'priced' || m.costState === 'partial';
+    return `<tr><td><span class="st-mn"><i class="st-sw" style="background:${SERIES[slotOf(m)]}"></i>` +
+      `<span><span>${esc(modelLabel(m.model))}</span><small>${esc(m.source)}</small></span></span></td>` +
       `<td>${esc(nf0.format(m.turns))}</td><td>${esc(compact(tokens))}</td>` +
-      `<td class="num-strong">${esc(money(m.cost))}</td>` +
-      `<td>${esc(total > 0 ? pct((m.cost / total) * 100, true) : '–')}</td></tr>`;
+      `<td class="num-strong">${esc(costValue(m.cost, m.costState))}</td>` +
+      `<td>${esc(priced && total > 0 ? pct((m.cost / total) * 100, true) : '–')}</td></tr>`;
   }).join('');
-  return `<table class="st-table"><thead><tr><th>Modell</th><th>Turns</th><th>Tokens</th><th>Kosten</th><th>Anteil</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table class="st-table"><thead><tr><th>Modell</th><th>Turns</th><th>Tokens</th><th>Kosten</th><th>bek. Anteil</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function wireRange(el, opts) {
@@ -996,7 +1033,10 @@ function wireRange(el, opts) {
   box.addEventListener('click', (e) => {
     const b = e.target.closest('button[data-range]');
     if (!b) return;
-    box.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+    box.querySelectorAll('button').forEach((x) => {
+      x.classList.toggle('on', x === b);
+      x.setAttribute('aria-pressed', String(x === b));
+    });
     opts.onRange(+b.getAttribute('data-range'));
   });
 }

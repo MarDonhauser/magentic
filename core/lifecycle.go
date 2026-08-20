@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -254,10 +255,15 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 	if !request.CreateWorktree {
 		record.Applied.WorktreeReady = true
 	}
-	if _, err := l.putRecord(ctx, record, false); err != nil {
-		return SessionLifecycleResult{}, err
-	}
-	advanced, err := l.advanceRunning(ctx, record)
+	advanced := record
+	err := l.withSessionTransition(ctx, session.ID, session.Name, func() error {
+		if _, putErr := l.putRecord(ctx, record, false); putErr != nil {
+			return putErr
+		}
+		var advanceErr error
+		advanced, advanceErr = l.advanceRunning(ctx, record)
+		return advanceErr
+	})
 	return SessionLifecycleResult{Session: advanced.Session, Record: advanced}, err
 }
 
@@ -287,6 +293,30 @@ func (l *SessionLifecycle) planExisting(ctx context.Context, id SessionID, name 
 		return SessionLifecycleResult{}, fmt.Errorf("Session %q not found", name)
 	}
 	session := state.Agents[idx]
+	advanced := LifecycleRecord{SessionID: session.ID, Session: session, Desired: desired}
+	err = l.withSessionTransition(ctx, session.ID, session.Name, func() error {
+		// The first read resolves legacy name-only callers to a stable SessionID.
+		// Re-read under the transition lock so a preceding transition's Registry
+		// change is part of this transition's starting point.
+		currentSnapshot, snapshotErr := l.registry.Snapshot(ctx)
+		if snapshotErr != nil {
+			return snapshotErr
+		}
+		currentState := currentSnapshot.State()
+		currentIndex := sessionIndex(&currentState, session.ID, session.Name)
+		if currentIndex < 0 {
+			return fmt.Errorf("Session %q not found", session.Name)
+		}
+		var advanceErr error
+		advanced, advanceErr = l.planSessionLocked(ctx, currentState, currentState.Agents[currentIndex], desired)
+		return advanceErr
+	})
+	return SessionLifecycleResult{Session: advanced.Session, Record: advanced}, err
+}
+
+// planSessionLocked persists intent before calling either external
+// Implementation. The caller must hold this Session's transition lock.
+func (l *SessionLifecycle) planSessionLocked(ctx context.Context, state State, session Session, desired SessionDesiredState) (LifecycleRecord, error) {
 	now := l.now()
 	record := LifecycleRecord{
 		TransitionID: NewUUID(), SessionID: session.ID, Desired: desired,
@@ -301,15 +331,16 @@ func (l *SessionLifecycle) planExisting(ctx context.Context, id SessionID, name 
 		record.Project = *project
 	}
 	if _, err := l.putRecord(ctx, record, false); err != nil {
-		return SessionLifecycleResult{}, err
+		return record, err
 	}
 	var advanced LifecycleRecord
+	var err error
 	if desired == SessionDesiredRunning {
 		advanced, err = l.advanceRunning(ctx, record)
 	} else {
 		advanced, err = l.advanceStopped(ctx, record)
 	}
-	return SessionLifecycleResult{Session: advanced.Session, Record: advanced}, err
+	return advanced, err
 }
 
 func (l *SessionLifecycle) Reconcile(ctx context.Context) (LifecycleReconcileResult, error) {
@@ -327,12 +358,8 @@ func (l *SessionLifecycle) Reconcile(ctx context.Context) (LifecycleReconcileRes
 		}
 		result.Examined++
 		beforeRuntime := record.Applied.RuntimePresent
-		var advanced LifecycleRecord
-		if record.Desired == SessionDesiredRunning {
-			advanced, err = l.advanceRunning(ctx, record)
-		} else {
-			advanced, err = l.advanceStopped(ctx, record)
-		}
+		advanced, advanceErr := l.advanceSerialized(ctx, record)
+		err = advanceErr
 		if err != nil {
 			result.Problems = append(result.Problems, LifecycleProblem{SessionID: record.SessionID, Name: record.Session.Name, Message: err.Error()})
 			continue
@@ -349,62 +376,109 @@ func (l *SessionLifecycle) Reconcile(ctx context.Context) (LifecycleReconcileRes
 	if err != nil {
 		return result, err
 	}
-	ledgerSnapshot, err := l.Snapshot(ctx)
-	if err != nil {
-		return result, err
-	}
-	current := make(map[SessionID]LifecycleRecord, len(ledgerSnapshot.Records))
-	for _, record := range ledgerSnapshot.Records {
-		current[record.SessionID] = record
-	}
 	for _, session := range registrySnapshot.State().Agents {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		exists, observeErr := l.runtime.Exists(ctx, session)
-		if observeErr != nil {
-			result.Problems = append(result.Problems, LifecycleProblem{SessionID: session.ID, Name: session.Name, Message: observeErr.Error()})
+		examined, restored, reconcileErr := l.reconcileRegisteredSession(ctx, session.ID, session.Name)
+		if reconcileErr != nil {
+			result.Problems = append(result.Problems, LifecycleProblem{SessionID: session.ID, Name: session.Name, Message: reconcileErr.Error()})
 			continue
 		}
-		desired := SessionDesiredRunning
-		if !session.LaterAt.IsZero() {
-			desired = SessionDesiredLater
-		}
-		already := current[session.ID]
-		if already.TransitionID != "" && already.Phase != LifecycleConverged {
-			// This transition was already attempted above. Keep its exact
-			// partial state instead of replacing it with a prompt-less intent.
-			continue
-		}
-		if already.Desired == desired && already.Phase != LifecycleFailed &&
-			((desired == SessionDesiredRunning && exists) || (desired == SessionDesiredLater && !exists)) {
-			continue
-		}
-		if desired == SessionDesiredRunning && exists {
-			continue
-		}
-		if desired == SessionDesiredLater && !exists {
-			continue
-		}
-		result.Examined++
-		var planned SessionLifecycleResult
-		if desired == SessionDesiredRunning {
-			planned, err = l.Resume(ctx, session.ID, session.Name)
-		} else {
-			planned, err = l.Park(ctx, session.ID, session.Name)
-		}
-		if err != nil {
-			result.Problems = append(result.Problems, LifecycleProblem{SessionID: session.ID, Name: session.Name, Message: err.Error()})
-			continue
-		}
-		if planned.Record.Phase == LifecycleConverged {
+		if examined {
+			result.Examined++
 			result.Converged++
-			if desired == SessionDesiredRunning {
+			if restored {
 				result.Restored++
 			}
 		}
 	}
 	return result, nil
+}
+
+// advanceSerialized reconciles the newest record for a Session while holding
+// the same process-coordinated lock used by explicit transitions. If the
+// caller observed an older record, no stale side effect is allowed to cross
+// the runtime Seam.
+func (l *SessionLifecycle) advanceSerialized(ctx context.Context, expected LifecycleRecord) (LifecycleRecord, error) {
+	advanced := expected
+	err := l.withSessionTransition(ctx, expected.SessionID, expected.Session.Name, func() error {
+		latest, ok, readErr := l.recordForSession(ctx, expected.SessionID)
+		if readErr != nil {
+			return readErr
+		}
+		if !ok {
+			return ErrLifecycleSuperseded
+		}
+		if latest.Phase == LifecycleConverged {
+			advanced = latest
+			return nil
+		}
+		var advanceErr error
+		if latest.Desired == SessionDesiredRunning {
+			advanced, advanceErr = l.advanceRunning(ctx, latest)
+		} else {
+			advanced, advanceErr = l.advanceStopped(ctx, latest)
+		}
+		return advanceErr
+	})
+	return advanced, err
+}
+
+// reconcileRegisteredSession takes its observation and decision under the
+// Session transition lock. An explicit Park or Resume that was already in
+// flight therefore cannot be undone using a stale Registry snapshot.
+func (l *SessionLifecycle) reconcileRegisteredSession(ctx context.Context, id SessionID, name string) (examined, restored bool, err error) {
+	err = l.withSessionTransition(ctx, id, name, func() error {
+		registrySnapshot, snapshotErr := l.registry.Snapshot(ctx)
+		if snapshotErr != nil {
+			return snapshotErr
+		}
+		state := registrySnapshot.State()
+		idx := sessionIndex(&state, id, name)
+		if idx < 0 {
+			return nil
+		}
+		session := state.Agents[idx]
+		exists, observeErr := l.runtime.Exists(ctx, session)
+		if observeErr != nil {
+			return observeErr
+		}
+		desired := SessionDesiredRunning
+		if !session.LaterAt.IsZero() {
+			desired = SessionDesiredLater
+		}
+		latest, hasRecord, readErr := l.recordForSession(ctx, session.ID)
+		if readErr != nil {
+			return readErr
+		}
+		if hasRecord && latest.Phase != LifecycleConverged {
+			// The exact partial intent was already attempted in the first pass.
+			return nil
+		}
+		consistent := (desired == SessionDesiredRunning && exists) || (desired == SessionDesiredLater && !exists)
+		if consistent {
+			return nil
+		}
+		examined = true
+		advanced, advanceErr := l.planSessionLocked(ctx, state, session, desired)
+		if advanceErr != nil {
+			return advanceErr
+		}
+		restored = advanced.Desired == SessionDesiredRunning && advanced.Applied.RuntimePresent
+		return nil
+	})
+	return examined, restored, err
+}
+
+func (l *SessionLifecycle) withSessionTransition(ctx context.Context, id SessionID, name string, fn func() error) error {
+	key := string(id)
+	if key == "" {
+		key = "name:" + name
+	}
+	digest := sha256.Sum256([]byte(key))
+	lockPath := filepath.Join(filepath.Dir(l.ledgerPath), ".lifecycle-session-locks", fmt.Sprintf("%x", digest[:]))
+	return withRegistryFileLock(ctx, lockPath, fn)
 }
 
 func (l *SessionLifecycle) advanceRunning(ctx context.Context, record LifecycleRecord) (LifecycleRecord, error) {
@@ -477,15 +551,30 @@ func (l *SessionLifecycle) advanceRunning(ctx context.Context, record LifecycleR
 	}
 	state := registrySnapshot.State()
 	idx := sessionIndex(&state, record.Session.ID, record.Session.Name)
+	var registryResult RegistryChangeResult
 	if idx < 0 {
-		if _, err = l.registry.Change(ctx, RegisterSession(record.Session)); err != nil {
+		registryResult, err = l.registry.Change(ctx, RegisterSession(record.Session))
+		if err != nil {
 			return l.failRecord(ctx, record, err)
 		}
 	} else if state.Agents[idx].ID != record.Session.ID {
 		return l.failRecord(ctx, record, fmt.Errorf("Session name %q belongs to another SessionID", record.Session.Name))
 	} else {
-		record.Session = state.Agents[idx]
+		// Running is a durable Registry intent as well as a runtime
+		// postcondition. Reopening through the semantic Interface clears
+		// LaterAt idempotently; merely observing the existing record would leave
+		// a resumed runtime marked for the next reconciliation to stop again.
+		registryResult, err = l.registry.Change(ctx, ReopenRegisteredSession(record.Session.ID, record.Session.Name))
+		if err != nil {
+			return l.failRecord(ctx, record, err)
+		}
 	}
+	registeredState := registryResult.Snapshot.State()
+	registeredIndex := sessionIndex(&registeredState, record.Session.ID, record.Session.Name)
+	if registeredIndex < 0 {
+		return l.failRecord(ctx, record, fmt.Errorf("Session %q was not present after Registry update", record.Session.Name))
+	}
+	record.Session = registeredState.Agents[registeredIndex]
 	record.Applied.RegistryUpdated = true
 	record.Phase = LifecycleRegistered
 	if record, err = l.putRecord(ctx, record, true); err != nil {
@@ -580,6 +669,20 @@ func (l *SessionLifecycle) currentRecord(ctx context.Context, expected Lifecycle
 		return nil
 	})
 	return record, err
+}
+
+func (l *SessionLifecycle) recordForSession(ctx context.Context, id SessionID) (LifecycleRecord, bool, error) {
+	var record LifecycleRecord
+	var ok bool
+	err := withRegistryFileLock(ctx, l.ledgerPath, func() error {
+		ledger, err := readLifecycleLedger(l.ledgerPath)
+		if err != nil {
+			return err
+		}
+		record, ok = ledger.Records[string(id)]
+		return nil
+	})
+	return record, ok, err
 }
 
 func (l *SessionLifecycle) failRecord(ctx context.Context, record LifecycleRecord, cause error) (LifecycleRecord, error) {
@@ -717,10 +820,21 @@ func writeLifecycleLedger(path string, ledger *lifecycleLedger) error {
 	return nil
 }
 
-type tmuxLifecycleRuntime struct{}
+type lifecycleCommandRunner func(context.Context, string, ...string) ([]byte, error)
 
-func (tmuxLifecycleRuntime) Exists(ctx context.Context, session Session) (bool, error) {
-	err := exec.CommandContext(ctx, "tmux", "has-session", "-t", TargetSession(session.TmuxName())).Run()
+type tmuxLifecycleRuntime struct {
+	command lifecycleCommandRunner
+}
+
+func (r tmuxLifecycleRuntime) combinedOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if r.command != nil {
+		return r.command(ctx, name, args...)
+	}
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
+func (r tmuxLifecycleRuntime) Exists(ctx context.Context, session Session) (bool, error) {
+	out, err := r.combinedOutput(ctx, "tmux", "has-session", "-t", TargetSession(session.TmuxName()))
 	if err == nil {
 		return true, nil
 	}
@@ -728,10 +842,20 @@ func (tmuxLifecycleRuntime) Exists(ctx context.Context, session Session) (bool, 
 		return false, ctx.Err()
 	}
 	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	if errors.As(err, &exitErr) && tmuxTargetKnownAbsent(out) {
 		return false, nil
 	}
-	return false, err
+	message := strings.TrimSpace(string(out))
+	if message == "" {
+		return false, fmt.Errorf("observe tmux Session %q: %w", session.TmuxName(), err)
+	}
+	return false, fmt.Errorf("observe tmux Session %q: %w: %s", session.TmuxName(), err, message)
+}
+
+func tmuxTargetKnownAbsent(output []byte) bool {
+	message := strings.ToLower(strings.TrimSpace(string(output)))
+	return strings.Contains(message, "can't find session:") ||
+		strings.Contains(message, "no server running on ")
 }
 
 func (tmuxLifecycleRuntime) Start(ctx context.Context, session Session, mode string) error {
