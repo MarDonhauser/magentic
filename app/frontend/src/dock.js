@@ -9,7 +9,6 @@ const STORE_KEY = 'magentic.dock';
 const DEFAULT_HEIGHT = 280;
 const MIN_HEIGHT = 120;
 const MAX_RATIO = 0.8;
-const SCROLL_MULT = 4;
 const TERM_THEME = { background: '#282d35', foreground: '#dbe0e6', cursor: '#5eead4', selectionBackground: 'rgba(55,207,189,0.30)' };
 
 const enc = new TextEncoder();
@@ -143,24 +142,6 @@ function notifyLayout() {
   try { window.dispatchEvent(new Event('resize')); } finally { selfResize = false; }
 }
 
-function boostWheel(term) {
-  let boosting = false;
-  term.element?.addEventListener('wheel', ev => {
-    if (boosting || term.buffer.active.type !== 'alternate') return;
-    boosting = true;
-    try {
-      for (let i = 0; i < SCROLL_MULT - 1; i++) {
-        ev.target.dispatchEvent(new WheelEvent('wheel', {
-          deltaX: ev.deltaX, deltaY: ev.deltaY, deltaZ: ev.deltaZ, deltaMode: ev.deltaMode,
-          clientX: ev.clientX, clientY: ev.clientY, bubbles: true, cancelable: true, view: window,
-        }));
-      }
-    } finally {
-      boosting = false;
-    }
-  }, { passive: true });
-}
-
 function bindKeys(term, t) {
   let lastSel = '';
   let lastSelAt = 0;
@@ -267,7 +248,6 @@ function ensureLive(t) {
   term.loadAddon(fit);
   term.loadAddon(new WebLinksAddon((e, uri) => openURL(uri)));
   term.open(t.host);
-  boostWheel(term);
   bindKeys(term, t);
 
   term.onData(d => cb.write?.(t.name, toB64(d)));

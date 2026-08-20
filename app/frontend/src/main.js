@@ -86,7 +86,6 @@ const sessionsEl = $('sessions'), usageBoxEl = $('usage-box'), zgBoxEl = $('zg-b
 const overviewEl = $('overview'), termsEl = $('terms'), deployBadgeEl = $('deploy-badge');
 
 const TERM_THEME = { background: '#282d35', foreground: '#dbe0e6', cursor: '#5eead4', selectionBackground: 'rgba(55,207,189,0.30)' };
-const SCROLL_MULT = 4;
 
 let view = 'overview';
 let activeTerm = null;
@@ -196,21 +195,6 @@ function makeTerm(name) {
   term.loadAddon(fit);
   term.loadAddon(new WebLinksAddon((e, uri) => BrowserOpenURL(uri)));
   term.open(inner);
-  let wheelBoosting = false;
-  term.element?.addEventListener('wheel', ev => {
-    if (wheelBoosting || term.buffer.active.type !== 'alternate') return;
-    wheelBoosting = true;
-    try {
-      for (let i = 0; i < SCROLL_MULT - 1; i++) {
-        ev.target.dispatchEvent(new WheelEvent('wheel', {
-          deltaX: ev.deltaX, deltaY: ev.deltaY, deltaZ: ev.deltaZ, deltaMode: ev.deltaMode,
-          clientX: ev.clientX, clientY: ev.clientY, bubbles: true, cancelable: true, view: window,
-        }));
-      }
-    } finally {
-      wheelBoosting = false;
-    }
-  }, { passive: true });
   term.onData(d => WriteTerm(name, toB64(d)));
   term.onResize(({ cols, rows }) => ResizeTerm(name, cols, rows));
 

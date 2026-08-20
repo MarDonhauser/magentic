@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/wailsapp/wails/v2"
+	"github.com/wailsapp/wails/v2/pkg/menu"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
@@ -43,12 +44,19 @@ func main() {
 	fixPath()
 	app := NewApp()
 
+	// Ohne Edit-Menü liefert macOS Cmd+C/Cmd+V nie an den WebView aus —
+	// Einfügen ins Terminal wäre damit unmöglich.
+	appMenu := menu.NewMenu()
+	appMenu.Append(menu.AppMenu())
+	appMenu.Append(menu.EditMenu())
+
 	err := wails.Run(&options.App{
 		Title:     "magentic",
 		Width:     1360,
 		Height:    860,
 		MinWidth:  700,
 		MinHeight: 400,
+		Menu:      appMenu,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

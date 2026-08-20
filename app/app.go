@@ -50,6 +50,7 @@ func (a *App) startup(ctx context.Context) {
 	installNativeNotifier()
 	runtime.OnFileDrop(ctx, a.onFileDrop)
 	core.Logf("startup: pid %d", os.Getpid())
+	core.TmuxConfigureUX()
 	if st, err := core.LoadState(); err == nil {
 		if n := core.RestoreSessions(st); n > 0 {
 			word := "Sessions"

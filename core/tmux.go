@@ -42,7 +42,19 @@ func TmuxNewShellSession(session, dir string) error {
 	if _, err := Tmux("new-session", "-d", "-s", session, "-c", dir, "-x", "220", "-y", "50"); err != nil {
 		return fmt.Errorf("tmux new-session: %w", err)
 	}
+	TmuxConfigureUX()
 	return nil
+}
+
+// Ohne Maus-Modus ist die tmux-Historie aus xterm.js unerreichbar, und die
+// xterm-Selektion überlebt Claudes ständige Redraws nicht. Mit Maus übernimmt
+// tmux beides: Rad scrollt in den Copy-Mode, Auswahl landet beim Loslassen
+// über copy-command im macOS-Clipboard.
+func TmuxConfigureUX() {
+	Tmux("set-option", "-g", "mouse", "on")
+	Tmux("set-option", "-s", "copy-command", "pbcopy")
+	Tmux("bind-key", "-T", "copy-mode", "MouseDragEnd1Pane", "send-keys", "-X", "copy-pipe-and-cancel")
+	Tmux("bind-key", "-T", "copy-mode-vi", "MouseDragEnd1Pane", "send-keys", "-X", "copy-pipe-and-cancel")
 }
 
 func TmuxNewClaudeSession(session, dir string, extraArgs string) error {
