@@ -8,7 +8,6 @@ type (
 	Agent          = core.Agent
 	RegistryChange = core.RegistryChange
 	AgentStatus    = core.AgentStatus
-	PaneInfo       = core.PaneInfo
 	UsageInfo      = core.UsageInfo
 	Overview       = core.Overview
 	ZgInfo         = core.ZgInfo
@@ -39,9 +38,6 @@ var (
 	TmuxNewClaudeSession = core.TmuxNewClaudeSession
 	TmuxNewShellSession  = core.TmuxNewShellSession
 	TmuxKillSession      = core.TmuxKillSession
-	TmuxCapturePane      = core.TmuxCapturePane
-	TmuxPaneInfos        = core.TmuxPaneInfos
-	TmuxListSessions     = core.TmuxListSessions
 
 	LoadState             = core.LoadState
 	StatePath             = core.StatePath
@@ -50,7 +46,6 @@ var (
 	RemoveProject         = core.RemoveProject
 	AddDiscoveredSessions = core.AddDiscoveredSessions
 
-	DetectClaudeStatus   = core.DetectClaudeStatus
 	lastLines            = core.LastLines
 	statusRank           = core.StatusRank
 	notifyDesktop        = core.NotifyDesktop
@@ -73,11 +68,12 @@ var (
 	discoverNew          = core.DiscoverNew
 	createAgentSession   = core.CreateAgentSession
 	createTermSession    = core.CreateTermSession
-	createTermSessionFor = core.CreateTermSessionFor
+	createTermSessionForID = core.CreateTermSessionForID
 	removeSession        = core.RemoveRegisteredSession
 	startSkillAgent      = core.StartSkillAgent
 	sendPromptWhenReady  = core.SendPromptWhenReady
 	sendSkillByID        = core.SendSkillByID
+	observeSessions      = core.Observe
 
 	shortPath     = core.ShortPath
 	formatAge     = core.FormatAge

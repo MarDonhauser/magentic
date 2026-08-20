@@ -215,7 +215,7 @@ type observedPane struct {
 	command       string
 	activity      time.Time
 	activityKnown bool
-	active        bool
+	selected      bool
 	partial       bool
 }
 
@@ -303,7 +303,7 @@ func observeWithRunner(ctx context.Context, sessions []Session, runner observati
 
 	listArgs := []string{
 		"list-panes", "-a", "-F",
-		"#{session_name}\t#{pane_id}\t#{pane_current_command}\t#{window_activity}\t#{pane_active}",
+		"#{session_name}\t#{pane_id}\t#{pane_current_command}\t#{window_activity}\t#{window_active}\t#{pane_active}",
 	}
 	listed, err, timedOut := runObservationCommand(cycleCtx, runner, config.probeTimeout, listArgs...)
 	if err != nil {
@@ -342,11 +342,14 @@ func observeWithRunner(ctx context.Context, sessions []Session, runner observati
 		}
 
 		observed.Availability = ObservationAvailable
-		if pane.partial {
+		if pane.partial || !presenceComplete {
 			observed.Availability = ObservationPartial
 		}
 		observed.Presence = SessionPresencePresent
 		observed.Occupancy = OccupancyOccupied
+		if !pane.selected {
+			continue
+		}
 		observed.Tool = observedSessionTool(session, pane.command)
 		observed.Activity = pane.activity
 		observed.ActivityKnown = pane.activityKnown
@@ -429,22 +432,32 @@ func runObservationCommand(ctx context.Context, runner observationRunner, timeou
 
 func parseObservedPanes(output string) (map[string]observedPane, []ObservationProblem, bool) {
 	panes := map[string]observedPane{}
+	ambiguousSelections := map[string]bool{}
 	var problems []ObservationProblem
 	presenceComplete := true
-	for lineNo, line := range strings.Split(strings.TrimRight(output, "\n"), "\n") {
-		if line == "" {
-			continue
+	if output == "" || !strings.HasSuffix(output, "\n") {
+		return panes, []ObservationProblem{{
+			Operation: "parse-list-panes", Message: "empty or unterminated output",
+		}}, false
+	}
+	rows := strings.Split(strings.TrimSuffix(output, "\n"), "\n")
+	if len(rows) == 0 || len(rows) == 1 && rows[0] == "" {
+		return panes, []ObservationProblem{{
+			Operation: "parse-list-panes", Message: "empty output",
+		}}, false
+	}
+	for lineNo, line := range rows {
+		parts := strings.SplitN(line, "\t", 6)
+		runtimeName := ""
+		if len(parts) > 0 {
+			runtimeName = strings.TrimSpace(parts[0])
 		}
-		parts := strings.SplitN(line, "\t", 5)
-		if len(parts) != 5 || strings.TrimSpace(parts[0]) == "" || !validObservedPaneID(parts[1]) {
+		if len(parts) != 6 || runtimeName == "" || !validObservedPaneID(parts[1]) ||
+			!validObservedBinaryFact(parts[4]) || !validObservedBinaryFact(parts[5]) {
 			// An unidentifiable row may belong to any registered RuntimeName. The
 			// remaining parsed rows still prove presence, but their absence cannot
 			// prove that a Session is gone.
 			presenceComplete = false
-			runtimeName := ""
-			if len(parts) > 0 {
-				runtimeName = strings.TrimSpace(parts[0])
-			}
 			problems = append(problems, ObservationProblem{
 				RuntimeName: runtimeName, Operation: "parse-list-panes",
 				Message: fmt.Sprintf("malformed row %d", lineNo+1),
@@ -452,7 +465,8 @@ func parseObservedPanes(output string) (map[string]observedPane, []ObservationPr
 			continue
 		}
 		pane := observedPane{
-			id: parts[1], command: strings.TrimSpace(parts[2]), active: strings.TrimSpace(parts[4]) == "1",
+			id: parts[1], command: strings.TrimSpace(parts[2]),
+			selected: strings.TrimSpace(parts[4]) == "1" && strings.TrimSpace(parts[5]) == "1",
 		}
 		if stamp, err := strconv.ParseInt(strings.TrimSpace(parts[3]), 10, 64); err == nil && stamp > 0 {
 			pane.activity = time.Unix(stamp, 0).UTC()
@@ -464,12 +478,44 @@ func parseObservedPanes(output string) (map[string]observedPane, []ObservationPr
 				Message: fmt.Sprintf("invalid activity in row %d", lineNo+1),
 			})
 		}
-		current, exists := panes[parts[0]]
-		if !exists || (!current.active && pane.active) {
-			panes[parts[0]] = pane
+		current, exists := panes[runtimeName]
+		switch {
+		case !exists:
+			panes[runtimeName] = pane
+		case pane.selected && ambiguousSelections[runtimeName]:
+			// Keep the Session known-present but refuse to select any pane.
+		case pane.selected && !current.selected:
+			panes[runtimeName] = pane
+		case pane.selected && current.selected:
+			presenceComplete = false
+			ambiguousSelections[runtimeName] = true
+			current.selected = false
+			current.partial = true
+			panes[runtimeName] = current
+			problems = append(problems, ObservationProblem{
+				RuntimeName: runtimeName, Operation: "parse-list-panes",
+				Message: fmt.Sprintf("multiple active panes for Session in row %d", lineNo+1),
+			})
 		}
 	}
+	for runtimeName, pane := range panes {
+		if pane.selected {
+			continue
+		}
+		presenceComplete = false
+		pane.partial = true
+		panes[runtimeName] = pane
+		problems = append(problems, ObservationProblem{
+			RuntimeName: runtimeName, Operation: "parse-list-panes",
+			Message: "Session has no unambiguous active pane",
+		})
+	}
 	return panes, problems, presenceComplete
+}
+
+func validObservedBinaryFact(value string) bool {
+	value = strings.TrimSpace(value)
+	return value == "0" || value == "1"
 }
 
 func validObservedPaneID(id string) bool {

@@ -897,7 +897,7 @@ func (m model) createTermAgent(name string) (tea.Model, tea.Cmd) {
 	if a == nil {
 		return m.createAgent(false, name, KindTerm)
 	}
-	n, err := createTermSessionFor(m.state, a.Name, name)
+	n, err := createTermSessionForID(m.state, a.ID, name)
 	if err != nil {
 		m.setFlash(err.Error(), true)
 		return m, nil
@@ -1075,12 +1075,31 @@ func (m model) attach() (tea.Model, tea.Cmd) {
 	if a == nil {
 		return m, nil
 	}
-	sn := a.TmuxName()
-	if !TmuxHasSession(sn) {
+	latest, err := LoadState()
+	if err != nil {
+		m.setFlash("Session Registry: "+err.Error(), true)
+		return m, nil
+	}
+	current := latest.SessionByID(a.ID)
+	if current == nil {
+		m.setFlash("Session existiert nicht mehr — Ansicht aktualisieren", true)
+		return m, nil
+	}
+	observed := observeSessions(context.Background(), []core.Session{*current})
+	if len(observed.Sessions) != 1 || observed.Sessions[0].SessionID != current.ID ||
+		observed.Sessions[0].Presence == core.SessionPresenceUnknown {
+		m.setFlash("Session-Laufzeit kann derzeit nicht verlässlich geprüft werden", true)
+		return m, nil
+	}
+	if observed.Sessions[0].Presence == core.SessionPresenceAbsent {
 		m.setFlash("Session existiert nicht mehr — mit x entfernen oder n neu starten", true)
 		return m, nil
 	}
-	tmux("set-option", "-w", "-t", sn+":", "window-size", "latest")
+	sn := current.TmuxName()
+	if _, err := tmux("set-option", "-w", "-t", sn+":", "window-size", "latest"); err != nil {
+		m.setFlash("tmux set-option: "+err.Error(), true)
+		return m, nil
+	}
 	if os.Getenv("TMUX") != "" {
 		if err := exec.Command("tmux", "switch-client", "-t", targetSession(sn)).Run(); err != nil {
 			m.setFlash("tmux switch-client: "+err.Error(), true)

@@ -1619,6 +1619,22 @@ function deploySyncState() {
     `<button class="btn" data-act="dsrefresh">Erneut versuchen</button></div>`;
 }
 
+function deployRemoteCoverageState(coverage) {
+  if (!coverage || !['partial', 'unavailable'].includes(coverage.state)) return '';
+  const problems = (Array.isArray(coverage.problems) ? coverage.problems : [])
+    .map(problem => [problem?.project, problem?.message].filter(Boolean).join(': '))
+    .filter(Boolean);
+  const detail = problems.length ? ` title="${esc(problems.join(' · '))}"` : '';
+  const known = coverage.projects > 0
+    ? `${coverage.availableProjects || 0} von ${coverage.projects} Projekten lesbar. `
+    : '';
+  const summary = coverage.state === 'unavailable'
+    ? 'Azure-Remotes derzeit nicht prüfbar.'
+    : 'Azure-Remote-Erkennung teilweise verfügbar.';
+  return `<div class="tl-coverage" role="status"${detail}>${icon('warn')}` +
+    `<span><strong>${summary}</strong> ${known}Builds zeigen nur den bekannten Teilstand.</span></div>`;
+}
+
 function deployCard() {
   const ds = deployStatus;
   if (!ds) {
@@ -1659,7 +1675,8 @@ function deployCard() {
     `${azChip}${subChip}${argoChip}${watching}` +
     `<span class="actions"><span class="path">${esc(deployStamp)}</span>` +
     `<button class="btn tiny" data-act="dsrefresh" title="Status neu laden">↻</button></span></div>` +
-    `${deploySyncState()}<div class="ds-cols"><div class="ds-col"><div class="ds-title">${developerIcon('azure')} Azure DevOps Builds</div>${builds}</div>` +
+    `${deploySyncState()}${deployRemoteCoverageState(ds.azRemoteCoverage)}` +
+    `<div class="ds-cols"><div class="ds-col"><div class="ds-title">${developerIcon('azure')} Azure DevOps Builds</div>${builds}</div>` +
     `<div class="ds-col"><div class="ds-title">${developerIcon('kubernetes')} ArgoCD</div>${argoHtml}</div></div></div>`;
 }
 

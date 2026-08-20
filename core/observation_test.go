@@ -50,7 +50,7 @@ func malformedListPanesObservation(t testing.TB, sessions []Session) Observation
 	}
 	runner := &recordingObservationRunner{run: func(_ context.Context, args ...string) (string, error) {
 		if len(args) > 0 && args[0] == "list-panes" {
-			return runtimeName + "\tnot-a-pane-id\tclaude\t1787227200\t1\n", nil
+			return runtimeName + "\tnot-a-pane-id\tclaude\t1787227200\t1\t1\n", nil
 		}
 		return "", errors.New("capture-pane must not run for an unparsed pane")
 	}}
@@ -90,7 +90,7 @@ func TestObserveDistinguishesTmuxUnavailableFromAbsentSession(t *testing.T) {
 			if args[0] != "list-panes" {
 				t.Fatalf("unexpected command: %v", args)
 			}
-			return "another-session\t%8\tzsh\t1787227200\t1\n", nil
+			return "another-session\t%8\tzsh\t1787227200\t1\t1\n", nil
 		}}
 		got := observeWithRunner(context.Background(), []Session{session}, runner, testObservationConfig(now))
 
@@ -133,8 +133,8 @@ func TestObserveReturnsPartialResultsWhenOnePaneFails(t *testing.T) {
 		switch args[0] {
 		case "list-panes":
 			stamp := strconv.FormatInt(activity, 10)
-			return "mgt-one\t%1\tclaude\t" + stamp + "\t1\n" +
-				"mgt-two\t%2\tclaude\t" + stamp + "\t1\n", nil
+			return "mgt-one\t%1\tclaude\t" + stamp + "\t1\t1\n" +
+				"mgt-two\t%2\tclaude\t" + stamp + "\t1\t1\n", nil
 		case "capture-pane":
 			if args[3] == "%2" {
 				return "", errors.New("pane disappeared")
@@ -165,6 +165,60 @@ func TestObserveReturnsPartialResultsWhenOnePaneFails(t *testing.T) {
 	}
 }
 
+func TestObserveSelectsPaneFromActiveWindow(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	runner := &recordingObservationRunner{run: func(_ context.Context, args ...string) (string, error) {
+		switch args[0] {
+		case "list-panes":
+			// pane_active is true once per window. Only the pane that is also in
+			// window_active may represent the Session's current state.
+			return "mgt-one\t%1\tclaude\t1787227100\t0\t1\n" +
+				"mgt-one\t%2\tclaude\t1787227200\t1\t1\n", nil
+		case "capture-pane":
+			if args[3] == "%1" {
+				return "Ready\nshift+tab to cycle\n", nil
+			}
+			if args[3] == "%2" {
+				return "working… (esc to interrupt)\n", nil
+			}
+			return "", errors.New("unexpected pane")
+		default:
+			return "", errors.New("unexpected command")
+		}
+	}}
+	session := Session{ID: "session-1", Name: "one", RuntimeName: "mgt-one"}
+
+	got := observeWithRunner(context.Background(), []Session{session}, runner, testObservationConfig(now))
+	observed := got.Sessions[0]
+	if observed.Availability != ObservationAvailable || observed.Status != StatusRunning ||
+		!strings.Contains(observed.Content, "working") {
+		t.Fatalf("inactive window supplied Session status: %#v", observed)
+	}
+	for _, call := range runner.Calls() {
+		if len(call) > 3 && call[0] == "capture-pane" && call[3] == "%1" {
+			t.Fatalf("Observe captured inactive-window pane: %#v", call)
+		}
+	}
+}
+
+func TestObserveEmptyOrUnterminatedPaneListKeepsPresenceUnknown(t *testing.T) {
+	session := Session{ID: "session-1", Name: "one", RuntimeName: "mgt-one"}
+	for _, output := range []string{"", "another-session\t%8\tzsh\t1787227200\t1\t1"} {
+		runner := &recordingObservationRunner{run: func(_ context.Context, args ...string) (string, error) {
+			if args[0] == "list-panes" {
+				return output, nil
+			}
+			return "", errors.New("capture-pane must not run")
+		}}
+		got := observeWithRunner(context.Background(), []Session{session}, runner, testObservationConfig(time.Now()))
+		observed := got.Sessions[0]
+		if got.Availability != ObservationPartial || observed.Availability != ObservationPartial ||
+			observed.Presence != SessionPresenceUnknown || observed.Status != StatusUnknown {
+			t.Fatalf("malformed successful listing fabricated absence: %#v", got)
+		}
+	}
+}
+
 func TestPromptTargetActionsRejectUnknownOrUnavailableCapture(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	target := Session{ID: "target", Name: "target", RuntimeName: "mgt-target"}
@@ -184,7 +238,7 @@ func TestPromptTargetActionsRejectUnknownOrUnavailableCapture(t *testing.T) {
 			name: "capture unavailable",
 			run: func(_ context.Context, args ...string) (string, error) {
 				if args[0] == "list-panes" {
-					return "mgt-target\t%7\tclaude\t1787227200\t1\n", nil
+					return "mgt-target\t%7\tclaude\t1787227200\t1\t1\n", nil
 				}
 				return "", errors.New("capture failed")
 			},
@@ -222,7 +276,7 @@ func TestObserveNormalizesPaneFactsAndDoesNotMutateSessions(t *testing.T) {
 	before := append([]Session(nil), sessions...)
 	runner := &recordingObservationRunner{run: func(_ context.Context, args ...string) (string, error) {
 		if args[0] == "list-panes" {
-			return "mgt-one\t%3\tclaude\t" + strconv.FormatInt(activity.Unix(), 10) + "\t1\n", nil
+			return "mgt-one\t%3\tclaude\t" + strconv.FormatInt(activity.Unix(), 10) + "\t1\t1\n", nil
 		}
 		return "\r\n\x1b[31mDo you want to run this command?\x1b[0m  \r\n  ❯ 1. Yes   \r\n\r\n", nil
 	}}
@@ -258,7 +312,7 @@ func TestObserveDoesNotApplyClaudeSemanticsToOtherProviders(t *testing.T) {
 		t.Run(tool, func(t *testing.T) {
 			runner := &recordingObservationRunner{run: func(_ context.Context, args ...string) (string, error) {
 				if args[0] == "list-panes" {
-					return "mgt-one\t%3\t" + tool + "\t1787227200\t1\n", nil
+					return "mgt-one\t%3\t" + tool + "\t1787227200\t1\t1\n", nil
 				}
 				// These strings would look blocked or idle to the Claude parser.
 				return "Do you want to run this command?\n❯ 1. Yes\n", nil
@@ -319,7 +373,7 @@ func TestObserveNeverPassesRuntimeNameToTmuxCommands(t *testing.T) {
 	malicious := "mgt-one; kill-server"
 	runner := &recordingObservationRunner{run: func(_ context.Context, args ...string) (string, error) {
 		if args[0] == "list-panes" {
-			return malicious + "\t%9\tclaude\t1787227200\t1\n", nil
+			return malicious + "\t%9\tclaude\t1787227200\t1\t1\n", nil
 		}
 		return "❯ \n", nil
 	}}

@@ -708,20 +708,23 @@ func CreateDockSession(st *State, projName string) (string, error) {
 	return createSession(st, projName, false, "", KindDock)
 }
 
-func CreateTermSessionFor(st *State, agentName, name string) (string, error) {
-	a := st.AgentByName(agentName)
-	if a == nil {
-		return "", fmt.Errorf("Session %q nicht gefunden", agentName)
-	}
-	return createTermSessionFor(st, *a, name)
-}
-
 func CreateTermSessionForID(st *State, sessionID SessionID, name string) (string, error) {
-	a := st.SessionByID(sessionID)
+	current, err := LoadState()
+	if err != nil {
+		return "", err
+	}
+	a := current.SessionByID(sessionID)
 	if a == nil {
 		return "", fmt.Errorf("SessionID %q nicht gefunden", sessionID)
 	}
-	return createTermSessionFor(st, *a, name)
+	created, err := createTermSessionFor(current, *a, name)
+	if err != nil {
+		return "", err
+	}
+	if st != nil {
+		*st = *current
+	}
+	return created, nil
 }
 
 func createTermSessionFor(st *State, a Session, name string) (string, error) {

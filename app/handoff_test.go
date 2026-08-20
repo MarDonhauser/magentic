@@ -72,9 +72,9 @@ case "$1" in
 	case "$4" in
 	  *pane_id*)
 		if [ -z "$MAGENTIC_HANDOFF_OMIT_SOURCE" ]; then
-			printf '%s\t%%1\t%s\t1\t1\n' "$MAGENTIC_HANDOFF_SOURCE_RUNTIME" "$MAGENTIC_HANDOFF_SOURCE_COMMAND"
+			printf '%s\t%%1\t%s\t1\t1\t1\n' "$MAGENTIC_HANDOFF_SOURCE_RUNTIME" "$MAGENTIC_HANDOFF_SOURCE_COMMAND"
 		fi
-		printf '%s\t%%2\t%s\t1\t1\n' "$MAGENTIC_HANDOFF_TARGET_RUNTIME" "$target_command"
+		printf '%s\t%%2\t%s\t1\t1\t1\n' "$MAGENTIC_HANDOFF_TARGET_RUNTIME" "$target_command"
 		;;
 	  *)
 		if [ -z "$MAGENTIC_HANDOFF_OMIT_SOURCE" ]; then
