@@ -20,8 +20,8 @@ func TestBuildSessionHandoffPromptIsSummaryOnlyAndTreatsTranscriptAsData(t *test
 		`Verzeichnis: "/work/magentic-agents/atlas"`,
 		`Tool: "claude"`,
 		`Gespeicherte Provider-/CLI-Session-ID: "11111111-2222-4333-8444-555555555555"`,
-		`Magentic-/tmux-Session-ID (Suchreferenz): "mgt-atlas"`,
-		`tmux-Pane-Ziel: "=mgt-atlas:"`,
+		`Magentic-/tmux-Session-ID (Suchreferenz): "` + SessionName("atlas") + `"`,
+		`tmux-Pane-Ziel: "` + TargetPane(SessionName("atlas")) + `"`,
 		`~/.claude/projects/*/11111111-2222-4333-8444-555555555555.jsonl`,
 		`tmux capture-pane -p -J -S -3000`,
 		`${CODEX_HOME:-~/.codex}/sessions/**/rollout-*.jsonl`,
@@ -68,14 +68,24 @@ func TestBuildSessionHandoffPromptWithoutProviderIDUsesTmuxReference(t *testing.
 	for _, want := range []string{
 		`Tool: "codex"`,
 		`Gespeicherte Provider-/CLI-Session-ID: "(nicht gespeichert — read-only über die tmux-Suchreferenz ermitteln)"`,
-		`Magentic-/tmux-Session-ID (Suchreferenz): "mgt-term-navi"`,
-		`tmux-Pane-Ziel: "=mgt-term-navi:"`,
+		`Magentic-/tmux-Session-ID (Suchreferenz): "` + SessionName("term-navi") + `"`,
+		`tmux-Pane-Ziel: "` + TargetPane(SessionName("term-navi")) + `"`,
 		`~/.claude/projects/*/<provider-session-id>.jsonl`,
 		`${CODEX_HOME:-~/.codex}/archived_sessions/**/rollout-*.jsonl`,
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("Handoff-Prompt enthält %q nicht:\n%s", want, prompt)
 		}
+	}
+}
+
+func TestPromptTerminalInputUsesBracketedPasteForMultilinePrompt(t *testing.T) {
+	if got := promptTerminalInput("eine Zeile"); got != "eine Zeile" {
+		t.Fatalf("einzeiliger Prompt = %q", got)
+	}
+	want := "\x1b[200~erste\rzweite\rdritte\x1b[201~"
+	if got := promptTerminalInput("erste\nzweite\r\ndritte"); got != want {
+		t.Fatalf("mehrzeiliger Prompt = %q, want %q", got, want)
 	}
 }
 
