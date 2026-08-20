@@ -621,7 +621,7 @@ function drawProjects(host, projects, focusName = '') {
   const tips = [];
   projects.forEach((p, i) => {
     const y = padT + i * rowH;
-    const active = p.active > 0;
+    const registered = p.active > 0;
     const focused = !!focusName && p.name === focusName;
     const w = Math.max(2, (p.tokens / max) * barW);
     const label = p.name || 'ohne Projekt';
@@ -631,16 +631,16 @@ function drawProjects(host, projects, focusName = '') {
       s += `<rect class="st-project-focus-row" x="0" y="${y + 2}" width="${W}" height="${rowH - 4}" rx="5"/>`;
       s += `<rect x="0" y="${y + 8}" width="3" height="${rowH - 16}" rx="1.5" fill="var(--accent)"/>`;
     }
-    s += `<text class="st-ax-s" x="${focused ? 8 : 0}" y="${y + rowH / 2}" dominant-baseline="middle" fill="${active || focused ? 'var(--ink)' : 'var(--ink-2)'}"${focused ? ' font-weight="700"' : ''}>${esc(clipped)}</text>`;
-    if (active) s += `<circle cx="${nameW + 4}" cy="${y + rowH / 2}" r="3" fill="var(--accent)"/>`;
-    s += `<path d="${rightRound(barX, y + rowH / 2 - 7, w, 14, 4)}" fill="${active ? SERIES[0] : FADED}"/>`;
+    s += `<text class="st-ax-s" x="${focused ? 8 : 0}" y="${y + rowH / 2}" dominant-baseline="middle" fill="${registered || focused ? 'var(--ink)' : 'var(--ink-2)'}"${focused ? ' font-weight="700"' : ''}>${esc(clipped)}</text>`;
+    if (registered) s += `<circle cx="${nameW + 4}" cy="${y + rowH / 2}" r="3" fill="var(--accent)"/>`;
+    s += `<path d="${rightRound(barX, y + rowH / 2 - 7, w, 14, 4)}" fill="${registered ? SERIES[0] : FADED}"/>`;
     s += `<text class="st-ax" x="${barX + w + 7}" y="${y + rowH / 2}" dominant-baseline="middle">${esc(compact(p.tokens))}</text>`;
     s += `<text class="st-ax" x="${costX}" y="${y + rowH / 2}" text-anchor="end" dominant-baseline="middle" fill="var(--ink-2)">${esc(costValue(p.cost, p.costState))}</text>`;
     if (!narrow) s += `<text class="st-ax" x="${promptsX}" y="${y + rowH / 2}" text-anchor="end" dominant-baseline="middle">${esc(compact(p.prompts))}</text>`;
     s += `<text class="st-ax" x="${commitsX}" y="${y + rowH / 2}" text-anchor="end" dominant-baseline="middle">${esc(commitValue(p.commits, p.commitState))}</text>`;
     tips.push({
-      html: `<div class="st-tip-t">${esc(label)}${focused ? ' · Projektfokus' : ''}${active ? ' · aktive Session' : ''}</div>` +
-        tipRow('Tokens', esc(compact(p.tokens)), active ? SERIES[0] : FADED) +
+      html: `<div class="st-tip-t">${esc(label)}${focused ? ' · Projektfokus' : ''}${registered ? ` · ${esc(nf0.format(p.active))} ${p.active === 1 ? 'registrierte Session' : 'registrierte Sessions'}` : ''}</div>` +
+        tipRow('Tokens', esc(compact(p.tokens)), registered ? SERIES[0] : FADED) +
         tipRow('bekannte Kosten', esc(costValue(p.cost, p.costState))) +
         tipRow('Prompts', esc(nf0.format(p.prompts))) +
         tipRow('Sessions', esc(nf0.format(p.sessions))) +
@@ -927,7 +927,7 @@ export function renderStats(el, stats, opts = {}) {
   const modelCost = modelsSorted.reduce((sum, model) =>
     model.costState === 'priced' || model.costState === 'partial' ? sum + model.cost : sum, 0);
   const projects = data.projects.slice().sort((a, b) => b.tokens - a.tokens);
-  const activeCount = projects.filter((p) => p.active > 0).length;
+  const registeredProjectCount = projects.filter((p) => p.active > 0).length;
   const avgPrompts = t.days > 0 ? t.prompts / t.days : 0;
   const perPrompt = t.prompts > 0 ? t.cost / t.prompts : 0;
   const commitTile = commitTilePresentation(data.commitCoverage, t.commits, data.range);
@@ -951,7 +951,7 @@ export function renderStats(el, stats, opts = {}) {
     `<div class="st-tiles">` +
     tileHtml('Prompts', compact(t.prompts), `Ø ${nf1.format(avgPrompts)} pro Tag`) +
     tileHtml('Turns', compact(t.turns), t.prompts > 0 ? `${nf1.format(t.turns / t.prompts)} pro Prompt` : '') +
-    tileHtml('Sessions', compact(t.sessions), activeCount ? `${nf0.format(activeCount)} Projekte gerade aktiv` : 'keine aktive Session') +
+    tileHtml('Sessions', compact(t.sessions), registeredProjectCount ? `${nf0.format(registeredProjectCount)} Projekte mit registrierten Sessions` : 'keine registrierte Session') +
     tileHtml('Tokens', compact(t.tokens), `${compact(t.input + t.output)} ohne Cache`) +
     tileHtml('Kosten', costValue(t.cost, t.costState), costTileNote) +
     tileHtml('Cache-Treffer', pct(t.cacheHit, true), `${compact(t.cacheRead)} gelesen`) +
@@ -987,7 +987,7 @@ export function renderStats(el, stats, opts = {}) {
 
     `<div class="st-cols">` +
       `<div class="st-card"><div class="st-card-head"><h2>Projekte</h2>` +
-        `<span class="st-note">nach Tokens${activeCount ? ` · <span style="color:var(--accent)">●</span> aktive Session` : ''}</span></div>` +
+        `<span class="st-note">nach Tokens${registeredProjectCount ? ` · <span style="color:var(--accent)">●</span> registrierte Session` : ''}</span></div>` +
         `<div class="st-plot" data-plot="projects"></div></div>` +
       `<div class="st-card"><div class="st-card-head"><h2>Modelle</h2>` +
         `<span class="st-note">${modelCostPartial ? 'bekannte Kosten; weitere Nutzung ohne Preis' : 'Kostenanteil'}</span></div>` +

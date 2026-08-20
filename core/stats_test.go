@@ -245,6 +245,32 @@ func TestBuildStatsConsumesNormalizedWorkHistory(t *testing.T) {
 	}
 }
 
+func TestRegisteredStatsProjectsCountsParkedAndRuntimeAbsentSessions(t *testing.T) {
+	now := time.Now()
+	state := &State{
+		Projects: []Project{{ID: ProjectID("project-id"), Name: "Durable project"}},
+		Agents: []Session{
+			{
+				ID:        SessionID("parked"),
+				Name:      "Parked session",
+				ProjectID: ProjectID("project-id"),
+				LaterAt:   now,
+			},
+			{
+				ID:          SessionID("runtime-absent"),
+				Name:        "Exited runtime still in Registry",
+				ProjectID:   ProjectID("project-id"),
+				RuntimeName: "no-longer-present",
+			},
+		},
+	}
+
+	registered := registeredStatsProjects(state)
+	if got := registered["Durable project"]; got != 2 {
+		t.Fatalf("registered session count = %d, want parked and runtime-absent Registry records", got)
+	}
+}
+
 func TestModelCostOnlyPricesClaude(t *testing.T) {
 	const (
 		input      = int64(1_000_000)

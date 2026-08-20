@@ -1,5 +1,5 @@
 import './avatar.css';
-import { sessionToolCandidates } from './session-tool.js';
+import { resolveSessionToolKey } from './session-tool.js';
 
 const cache = new Map();
 
@@ -334,11 +334,7 @@ const SESSION_TOOL_LABELS = Object.freeze({
 });
 
 export function sessionToolKey(session) {
-  for (const identity of sessionToolCandidates(session)) {
-    const resolved = developerIconName(identity);
-    if (resolved) return resolved;
-  }
-  return session?.term ? 'bash' : '';
+  return resolveSessionToolKey(session, developerIconName);
 }
 
 export function sessionToolLabel(session) {

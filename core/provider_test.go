@@ -48,8 +48,8 @@ func TestOverviewCarriesDetectedAgentTool(t *testing.T) {
 	if tool := agent.Tool; tool != AgentToolCodex {
 		t.Fatalf("Overview tool = %q, want codex", tool)
 	}
-	if !agent.Term || !agent.HandoffSource || !agent.HandoffTarget {
-		t.Fatalf("Codex in Term-Session muss als Handoff-fähige KI sichtbar sein: %#v", agent)
+	if !agent.Term || !agent.HandoffSource || agent.HandoffTarget {
+		t.Fatalf("Codex in Term-Session muss Quelle sein, darf ohne bekannte Readiness aber kein Ziel sein: %#v", agent)
 	}
 	shell := got.Projects[0].Worktrees[0].Agents[1]
 	if shell.Tool != AgentToolBash || shell.HandoffSource || shell.HandoffTarget {

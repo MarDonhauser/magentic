@@ -44,7 +44,10 @@ type StatsProject struct {
 	Sessions    int                `json:"sessions"`
 	Commits     int                `json:"commits"`
 	CommitState HistorySourceState `json:"commitState"`
-	Active      int                `json:"active"`
+	// Active is the legacy transport name for the number of Sessions durably
+	// registered to this project. It does not imply that a runtime was observed
+	// as present or active; parked and runtime-absent Sessions still count.
+	Active int `json:"active"`
 }
 
 type StatsModel struct {
@@ -515,7 +518,7 @@ func buildStatsWithGit(ctx context.Context, state *State, days int, history *Wor
 	for _, event := range events {
 		acc.addEvent(event)
 	}
-	active := activeStatsProjects(state)
+	registered := registeredStatsProjects(state)
 
 	var totals StatsTotals
 	var totalCosts statsAgg
@@ -571,7 +574,7 @@ func buildStatsWithGit(ctx context.Context, state *State, days int, history *Wor
 		totals.Streak++
 		cursor = cursor.AddDate(0, 0, -1)
 	}
-	result.Projects = buildStatsProjects(acc, state, active, commitsByProject, commits.ProjectStates)
+	result.Projects = buildStatsProjects(acc, state, registered, commitsByProject, commits.ProjectStates)
 	result.Models = buildStatsModels(summary)
 	result.Providers = buildStatsProviders(summary)
 	if statsHistoryCoverageIncomplete(summary.Meta.Coverage) {
@@ -771,8 +774,11 @@ func selectStatsCommits(commits map[string]map[string]int, from, to string) (map
 	return byDay, byProject
 }
 
-func activeStatsProjects(state *State) map[string]int {
-	active := map[string]int{}
+// registeredStatsProjects counts durable Registry records only. Runtime
+// presence belongs to Session Observation and is intentionally not consulted,
+// so parked or exited-but-not-yet-removed Sessions remain registered here.
+func registeredStatsProjects(state *State) map[string]int {
+	registered := map[string]int{}
 	for _, session := range state.Agents {
 		name := session.Project
 		if session.ProjectID != "" {
@@ -780,28 +786,28 @@ func activeStatsProjects(state *State) map[string]int {
 				name = project.Name
 			}
 		}
-		active[name]++
+		registered[name]++
 	}
-	return active
+	return registered
 }
 
-func buildStatsProjects(acc *statsAcc, state *State, active, commits map[string]int, commitStates map[string]HistorySourceState) []StatsProject {
+func buildStatsProjects(acc *statsAcc, state *State, registered, commits map[string]int, commitStates map[string]HistorySourceState) []StatsProject {
 	seen := map[string]bool{}
 	var projects []StatsProject
 	for name, slot := range acc.projects {
 		seen[name] = true
 		projects = append(projects, StatsProject{
 			Name: name, Tokens: slot.tokens(), Cost: slot.Cost, CostState: slot.costState(), Prompts: slot.Prompts,
-			Sessions: len(slot.sessions), Commits: commits[name], CommitState: statsProjectCommitState(commitStates, name), Active: active[name],
+			Sessions: len(slot.sessions), Commits: commits[name], CommitState: statsProjectCommitState(commitStates, name), Active: registered[name],
 		})
 	}
 	for _, project := range state.Projects {
 		commitState := statsProjectCommitState(commitStates, project.Name)
-		if seen[project.Name] || commits[project.Name] == 0 && active[project.Name] == 0 && commitState != HistorySourcePartial && commitState != HistorySourceUnavailable {
+		if seen[project.Name] || commits[project.Name] == 0 && registered[project.Name] == 0 && commitState != HistorySourcePartial && commitState != HistorySourceUnavailable {
 			continue
 		}
 		projects = append(projects, StatsProject{
-			Name: project.Name, Commits: commits[project.Name], CommitState: commitState, Active: active[project.Name],
+			Name: project.Name, Commits: commits[project.Name], CommitState: commitState, Active: registered[project.Name],
 		})
 	}
 	sort.Slice(projects, func(i, j int) bool {

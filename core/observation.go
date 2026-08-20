@@ -358,8 +358,13 @@ func parseObservedPanes(output string) (map[string]observedPane, []ObservationPr
 			// remaining parsed rows still prove presence, but their absence cannot
 			// prove that a Session is gone.
 			presenceComplete = false
+			runtimeName := ""
+			if len(parts) > 0 {
+				runtimeName = strings.TrimSpace(parts[0])
+			}
 			problems = append(problems, ObservationProblem{
-				Operation: "parse-list-panes", Message: fmt.Sprintf("malformed row %d", lineNo+1),
+				RuntimeName: runtimeName, Operation: "parse-list-panes",
+				Message: fmt.Sprintf("malformed row %d", lineNo+1),
 			})
 			continue
 		}

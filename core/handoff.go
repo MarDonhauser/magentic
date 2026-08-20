@@ -205,7 +205,7 @@ func handoffObservationForSession(snapshot ObservationSnapshot, session Session)
 	}
 }
 
-func validateHandoffReady(name, tool string, status AgentStatus, content string) error {
+func validateHandoffDeliveryReady(name, tool string, status AgentStatus, content string) error {
 	if tool != AgentToolClaude {
 		if _, supported := handoffVendorForTool(tool); supported {
 			return fmt.Errorf("Eingabebereitschaft der Ziel-Session %q ist für %s unbekannt", name, tool)
@@ -232,39 +232,54 @@ func validateHandoffReady(name, tool string, status AgentStatus, content string)
 	return nil
 }
 
-func validateHandoffTarget(session Session, observed SessionObservation) (string, error) {
+func validateHandoffTarget(session Session, observed SessionObservation) (string, bool, error) {
 	if session.ID == "" {
-		return "", fmt.Errorf("Ziel-Session %q besitzt keine stabile SessionID", session.Name)
+		return "", false, fmt.Errorf("Ziel-Session %q besitzt keine stabile SessionID", session.Name)
 	}
 	if strings.TrimSpace(session.TmuxName()) == "" {
-		return "", fmt.Errorf("Ziel-Session %q besitzt keinen RuntimeName", session.Name)
+		return "", false, fmt.Errorf("Ziel-Session %q besitzt keinen RuntimeName", session.Name)
 	}
 	if observed.Availability != ObservationAvailable {
-		return "", fmt.Errorf("Observation der Ziel-Session %q ist nicht vollständig verfügbar", session.Name)
+		return "", false, fmt.Errorf("Observation der Ziel-Session %q ist nicht vollständig verfügbar", session.Name)
 	}
 	if observed.Presence != SessionPresencePresent {
 		if observed.Presence == SessionPresenceAbsent {
-			return "", fmt.Errorf("Ziel-Session %q läuft nicht mehr", session.Name)
+			return "", false, fmt.Errorf("Ziel-Session %q läuft nicht mehr", session.Name)
 		}
-		return "", fmt.Errorf("Laufzeit-Präsenz der Ziel-Session %q ist unbekannt", session.Name)
+		return "", false, fmt.Errorf("Laufzeit-Präsenz der Ziel-Session %q ist unbekannt", session.Name)
 	}
 	if !observed.ContentKnown {
-		return "", fmt.Errorf("Terminalinhalt der Ziel-Session %q ist nicht bekannt", session.Name)
+		return "", false, fmt.Errorf("Terminalinhalt der Ziel-Session %q ist nicht bekannt", session.Name)
 	}
 	tool := strings.TrimSpace(observed.Tool)
 	if tool == AgentToolBash && session.IsTerm() {
-		return "", fmt.Errorf("Ziel-Session %q ist ein reines Terminal — kein laufender KI-Prozess erkannt", session.Name)
+		return "", false, fmt.Errorf("Ziel-Session %q ist ein reines Terminal — kein laufender KI-Prozess erkannt", session.Name)
 	}
-	if err := validateHandoffReady(session.Name, tool, observed.Status, observed.Content); err != nil {
-		return "", err
+	if tool != AgentToolClaude {
+		if _, supported := handoffVendorForTool(tool); supported {
+			return "", false, fmt.Errorf("Eingabebereitschaft der Ziel-Session %q ist für %s unbekannt", session.Name, tool)
+		}
+		return "", false, fmt.Errorf("in Ziel-Session %q läuft kein unterstütztes KI-Tool", session.Name)
 	}
-	return tool, nil
+	switch observed.Status {
+	case StatusRunning, StatusAgents, StatusShell, StatusIdle:
+		waitForReady := observed.Status != StatusIdle || !strings.Contains(strings.ToLower(observed.Content), "shift+tab to cycle")
+		return tool, waitForReady, nil
+	case StatusBlocked:
+		return "", false, fmt.Errorf("Ziel-Session %q wartet auf eine Antwort — erst den offenen Dialog beantworten", session.Name)
+	case StatusExited:
+		return "", false, fmt.Errorf("KI in Ziel-Session %q ist beendet", session.Name)
+	case StatusDead:
+		return "", false, fmt.Errorf("Ziel-Session %q läuft nicht mehr", session.Name)
+	default:
+		return "", false, fmt.Errorf("Eingabebereitschaft der Ziel-Session %q ist unbekannt", session.Name)
+	}
 }
 
 func handoffLiveTargetValidator(name string) promptTargetValidator {
 	return func(tool, content string) error {
 		status := statusForAgentRuntime(true, tool, tool, LastLines(content, 25))
-		return validateHandoffReady(name, tool, status, content)
+		return validateHandoffDeliveryReady(name, tool, status, content)
 	}
 }
 
@@ -274,7 +289,7 @@ func handoffSourceCapable(session Session, observed SessionObservation) bool {
 }
 
 func handoffTargetCapable(session Session, observed SessionObservation) bool {
-	_, err := validateHandoffTarget(session, observed)
+	_, _, err := validateHandoffTarget(session, observed)
 	return err == nil
 }
 
@@ -314,13 +329,13 @@ func HandoffSession(st *State, snapshot ObservationSnapshot, sourceID, targetID 
 		return err
 	}
 	targetObservation := handoffObservationForSession(snapshot, target)
-	targetTool, err := validateHandoffTarget(target, targetObservation)
+	targetTool, waitForReady, err := validateHandoffTarget(target, targetObservation)
 	if err != nil {
 		return err
 	}
 	prompt := buildSessionHandoffPrompt(resolved)
 	return enqueuePrompt(
 		target.TmuxName(), prompt, true, targetTool,
-		false, false, true, handoffLiveTargetValidator(target.Name),
+		waitForReady, false, true, handoffLiveTargetValidator(target.Name),
 	)
 }

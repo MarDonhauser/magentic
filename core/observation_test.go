@@ -42,6 +42,24 @@ func testObservationConfig(now time.Time) observationConfig {
 	}
 }
 
+func malformedListPanesObservation(t testing.TB, sessions []Session) ObservationSnapshot {
+	t.Helper()
+	runtimeName := "mgt-malformed"
+	if len(sessions) > 0 {
+		runtimeName = sessions[0].TmuxName()
+	}
+	runner := &recordingObservationRunner{run: func(_ context.Context, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "list-panes" {
+			return runtimeName + "\tnot-a-pane-id\tclaude\t1787227200\t1\n", nil
+		}
+		return "", errors.New("capture-pane must not run for an unparsed pane")
+	}}
+	return observeWithRunner(
+		context.Background(), sessions, runner,
+		testObservationConfig(time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)),
+	)
+}
+
 func TestObserveDistinguishesTmuxUnavailableFromAbsentSession(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	session := Session{ID: "session-1", Name: "one", RuntimeName: "mgt-one", Dir: "/work/one"}
@@ -87,6 +105,25 @@ func TestObserveDistinguishesTmuxUnavailableFromAbsentSession(t *testing.T) {
 			t.Fatalf("absent Session must not occupy its Worktree: %#v", observed)
 		}
 	})
+}
+
+func TestObserveMalformedListDoesNotProveMissingSessionAbsent(t *testing.T) {
+	session := Session{ID: "session-1", Name: "one", RuntimeName: "mgt-one", Dir: "/work/one"}
+	got := malformedListPanesObservation(t, []Session{session})
+
+	if got.Availability != ObservationPartial || len(got.Problems) != 1 {
+		t.Fatalf("malformed list-panes must make the snapshot partial: %#v", got)
+	}
+	observed := got.Sessions[0]
+	if observed.Availability != ObservationPartial || observed.Presence != SessionPresenceUnknown {
+		t.Fatalf("unparsed row fabricated Session absence: %#v", observed)
+	}
+	if observed.Status != StatusUnknown || observed.Attention != AttentionUnknown || observed.Occupancy != OccupancyUnknown {
+		t.Fatalf("unknown presence leaked derived negative facts: %#v", observed)
+	}
+	if got.Problems[0].RuntimeName != session.TmuxName() || got.Problems[0].Operation != "parse-list-panes" {
+		t.Fatalf("malformed row diagnostic lost RuntimeName: %#v", got.Problems)
+	}
 }
 
 func TestObserveReturnsPartialResultsWhenOnePaneFails(t *testing.T) {

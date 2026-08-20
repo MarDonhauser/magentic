@@ -13,3 +13,11 @@ export function sessionToolCandidates(session) {
 export function sessionToolIdentity(session) {
   return sessionToolCandidates(session).join(' ') || (session?.term ? 'bash' : '');
 }
+
+export function resolveSessionToolKey(session, resolve) {
+  for (const identity of sessionToolCandidates(session)) {
+    const resolved = resolve(identity);
+    if (resolved) return resolved;
+  }
+  return session?.term ? 'bash' : '';
+}

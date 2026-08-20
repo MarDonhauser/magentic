@@ -21,6 +21,16 @@ func TestWorktreeRemovalRejectsPartialCaptureKnowledge(t *testing.T) {
 	}
 }
 
+func TestWorktreeRemovalRejectsAbsenceFromMalformedPaneList(t *testing.T) {
+	session := Agent{ID: "session-1", Name: "topic", RuntimeName: "mgt-topic"}
+	snapshot := malformedListPanesObservation(t, []Session{session})
+
+	err := validateWorktreeRemovalObservations([]Agent{session}, snapshot)
+	if err == nil || !strings.Contains(err.Error(), "nicht verlässlich") {
+		t.Fatalf("malformed pane list authorized removal: %v (snapshot %#v)", err, snapshot)
+	}
+}
+
 func TestWorktreeRemovalRequiresKnownSafeSessionState(t *testing.T) {
 	session := Agent{ID: "session-1", Name: "topic"}
 	tests := []struct {

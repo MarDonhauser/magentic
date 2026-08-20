@@ -48,6 +48,22 @@ func TestAttentionDistinguishesUnavailableObservationFromAllDead(t *testing.T) {
 	}
 }
 
+func TestAttentionDoesNotTreatMalformedPaneListAsAllDead(t *testing.T) {
+	session := Session{ID: "session-1", Name: "one", RuntimeName: "mgt-one"}
+	snapshot := malformedListPanesObservation(t, []Session{session})
+	plan := NewAttentionPlanner(AttentionPlannerConfig{}).Plan(attentionTestInput(attentionTestStart, snapshot))
+
+	if plan.Observation != AttentionObservationPartial || plan.Observation == AttentionObservationAllDead {
+		t.Fatalf("malformed pane list became all-dead: %#v", plan)
+	}
+	if plan.DockBadge.Update || plan.DockBadge.Complete {
+		t.Fatalf("partial runtime knowledge replaced the exact badge: %#v", plan.DockBadge)
+	}
+	if !hasAttentionSuppression(plan, AttentionSuppressedInsufficientFacts) {
+		t.Fatalf("unknown Session was not surfaced: %#v", plan.Suppressions)
+	}
+}
+
 func TestAttentionNeedsInputTransitionsAreQuietAndActiveAware(t *testing.T) {
 	planner := NewAttentionPlanner(AttentionPlannerConfig{})
 	labels := map[SessionID]string{"one": "Renamed Session"}

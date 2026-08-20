@@ -174,7 +174,7 @@ func deliverPrompt(session, prompt string, submit bool, expectedTool string, wai
 	if waitForReady {
 		for i := 0; i < 180; i++ {
 			time.Sleep(1 * time.Second)
-			_, content, err := inspectLivePromptTarget(session, expectedTool)
+			tool, content, err := inspectLivePromptTarget(session, expectedTool)
 			if err != nil {
 				if tolerateStartup {
 					continue
@@ -187,6 +187,11 @@ func deliverPrompt(session, prompt string, submit bool, expectedTool string, wai
 			}
 			if !strings.Contains(content, "shift+tab to cycle") {
 				continue
+			}
+			if validate != nil {
+				if err := validate(tool, content); err != nil {
+					continue
+				}
 			}
 			time.Sleep(500 * time.Millisecond)
 			return sendPromptLiteralValidated(session, prompt, submit, expectedTool, validate)

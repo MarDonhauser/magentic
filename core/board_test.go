@@ -3,6 +3,7 @@ package core
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -113,6 +114,22 @@ func TestLiveSpecificationSessionsRequiresKnownLiveObservation(t *testing.T) {
 	}
 	if len(problems) != 1 {
 		t.Fatalf("liveSpecificationSessions() problems = %#v, want one unknown-runtime diagnostic", problems)
+	}
+}
+
+func TestBoardSurfacesUnknownRuntimeFromMalformedPaneList(t *testing.T) {
+	reference := makeSpecificationRef(Project{ID: "project-1"}, SpecificationSpecKit, "login", false)
+	session := Session{
+		ID: "session-1", Name: "login", RuntimeName: "mgt-login", SpecificationRef: reference,
+	}
+	snapshot := malformedListPanesObservation(t, []Session{session})
+
+	live, problems := liveSpecificationSessions([]Session{session}, snapshot)
+	if len(live) != 0 {
+		t.Fatalf("unknown runtime was presented as a live Board Session: %#v", live)
+	}
+	if len(problems) != 1 || !strings.Contains(problems[0], "Laufzeit unbekannt") {
+		t.Fatalf("Board did not surface unknown runtime knowledge: %#v", problems)
 	}
 }
 
