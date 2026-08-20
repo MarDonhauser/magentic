@@ -503,6 +503,32 @@ func TestLifecycleRenameKeepsOpaqueRuntimeWhenRuntimeIsAbsent(t *testing.T) {
 	}
 }
 
+func TestLifecycleRenameTreatsPersistedDefaultRuntimeAsOpaqueWhenAbsent(t *testing.T) {
+	lifecycle, runtime, registry, _ := lifecycleHarness(t)
+	oldRuntime := SessionName("offline-default")
+	session := registerLifecycleSession(t, registry, runtime, Session{
+		ID: "session-offline-default", Name: "offline-default", RuntimeName: oldRuntime,
+		Dir: "/workspace/project",
+	}, false)
+
+	result, err := lifecycle.Rename(context.Background(), session.ID, session.Name, "new-display")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.renameCalls != 0 || result.Record.Applied.RuntimeRenamed {
+		t.Fatalf("absent default runtime was treated as externally renamed: %+v", result.Record)
+	}
+	snapshot, err := registry.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := snapshot.State()
+	renamed := state.SessionByID(session.ID)
+	if renamed == nil || renamed.Name != "new-display" || renamed.RuntimeName != oldRuntime {
+		t.Fatalf("offline rename reconstructed RuntimeName from the new display name: %+v", renamed)
+	}
+}
+
 func TestLifecycleRenameRejectsDisplayAndRuntimeCollisionsBeforeSideEffect(t *testing.T) {
 	t.Run("display name", func(t *testing.T) {
 		lifecycle, runtime, registry, _ := lifecycleHarness(t)

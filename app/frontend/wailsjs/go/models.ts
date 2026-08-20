@@ -23,7 +23,6 @@ export namespace core {
 	    id: string;
 	    title: string;
 	    summary?: string;
-	    path?: string;
 	    kind: string;
 	    column: string;
 	    total: number;
@@ -48,7 +47,6 @@ export namespace core {
 	        this.id = source["id"];
 	        this.title = source["title"];
 	        this.summary = source["summary"];
-	        this.path = source["path"];
 	        this.kind = source["kind"];
 	        this.column = source["column"];
 	        this.total = source["total"];
@@ -83,7 +81,6 @@ export namespace core {
 	export class BoardSource {
 	    kind: string;
 	    location: string;
-	    root?: string;
 	    items: number;
 	    archived: number;
 	    specs: number;
@@ -98,7 +95,6 @@ export namespace core {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
 	        this.location = source["location"];
-	        this.root = source["root"];
 	        this.items = source["items"];
 	        this.archived = source["archived"];
 	        this.specs = source["specs"];
@@ -110,7 +106,6 @@ export namespace core {
 	    projectId?: string;
 	    project: string;
 	    kind: string;
-	    root?: string;
 	    sources?: BoardSource[];
 	    items: BoardItem[];
 	    archived: number;
@@ -126,7 +121,6 @@ export namespace core {
 	        this.projectId = source["projectId"];
 	        this.project = source["project"];
 	        this.kind = source["kind"];
-	        this.root = source["root"];
 	        this.sources = this.convertValues(source["sources"], BoardSource);
 	        this.items = this.convertValues(source["items"], BoardItem);
 	        this.archived = source["archived"];
@@ -229,7 +223,8 @@ export namespace core {
 	    name: string;
 	    lane: number;
 	    isMain: boolean;
-	    worktree?: string;
+	    worktreeRef?: string;
+	    worktreeLocation?: string;
 	    ahead: number;
 	    behind: number;
 	    divergenceKnown: boolean;
@@ -245,7 +240,8 @@ export namespace core {
 	        this.name = source["name"];
 	        this.lane = source["lane"];
 	        this.isMain = source["isMain"];
-	        this.worktree = source["worktree"];
+	        this.worktreeRef = source["worktreeRef"];
+	        this.worktreeLocation = source["worktreeLocation"];
 	        this.ahead = source["ahead"];
 	        this.behind = source["behind"];
 	        this.divergenceKnown = source["divergenceKnown"];
@@ -256,7 +252,8 @@ export namespace core {
 	export class GraphRef {
 	    name: string;
 	    kind: string;
-	    worktree?: string;
+	    worktreeRef?: string;
+	    worktreeLocation?: string;
 	    current?: boolean;
 	
 	    static createFrom(source: any = {}) {
@@ -267,7 +264,8 @@ export namespace core {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
 	        this.kind = source["kind"];
-	        this.worktree = source["worktree"];
+	        this.worktreeRef = source["worktreeRef"];
+	        this.worktreeLocation = source["worktreeLocation"];
 	        this.current = source["current"];
 	    }
 	}
@@ -515,8 +513,8 @@ export namespace core {
 	    }
 	}
 	export class OvWorktree {
-	    path: string;
-	    shortPath: string;
+	    reference?: string;
+	    location?: string;
 	    branch: string;
 	    isMain: boolean;
 	    ahead: number;
@@ -540,8 +538,8 @@ export namespace core {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.path = source["path"];
-	        this.shortPath = source["shortPath"];
+	        this.reference = source["reference"];
+	        this.location = source["location"];
 	        this.branch = source["branch"];
 	        this.isMain = source["isMain"];
 	        this.ahead = source["ahead"];
@@ -728,6 +726,58 @@ export namespace core {
 	        this.streak = source["streak"];
 	    }
 	}
+	export class StatsCommitProblem {
+	    project: string;
+	    kind: string;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StatsCommitProblem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.project = source["project"];
+	        this.kind = source["kind"];
+	        this.message = source["message"];
+	    }
+	}
+	export class StatsCommitCoverage {
+	    state: string;
+	    repositories: number;
+	    availableRepositories: number;
+	    problems?: StatsCommitProblem[];
+	
+	    static createFrom(source: any = {}) {
+	        return new StatsCommitCoverage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.state = source["state"];
+	        this.repositories = source["repositories"];
+	        this.availableRepositories = source["availableRepositories"];
+	        this.problems = this.convertValues(source["problems"], StatsCommitProblem);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class StatsProvider {
 	    provider: string;
 	    source: string;
@@ -810,6 +860,7 @@ export namespace core {
 	    prompts: number;
 	    sessions: number;
 	    commits: number;
+	    commitState: string;
 	    active: number;
 	
 	    static createFrom(source: any = {}) {
@@ -825,6 +876,7 @@ export namespace core {
 	        this.prompts = source["prompts"];
 	        this.sessions = source["sessions"];
 	        this.commits = source["commits"];
+	        this.commitState = source["commitState"];
 	        this.active = source["active"];
 	    }
 	}
@@ -868,6 +920,7 @@ export namespace core {
 	    projects: StatsProject[];
 	    models: StatsModel[];
 	    providers: StatsProvider[];
+	    commitCoverage: StatsCommitCoverage;
 	    heatmap: number[][];
 	    hours: number[];
 	    totals: StatsTotals;
@@ -884,6 +937,7 @@ export namespace core {
 	        this.projects = this.convertValues(source["projects"], StatsProject);
 	        this.models = this.convertValues(source["models"], StatsModel);
 	        this.providers = this.convertValues(source["providers"], StatsProvider);
+	        this.commitCoverage = this.convertValues(source["commitCoverage"], StatsCommitCoverage);
 	        this.heatmap = source["heatmap"];
 	        this.hours = source["hours"];
 	        this.totals = this.convertValues(source["totals"], StatsTotals);
@@ -908,6 +962,8 @@ export namespace core {
 		    return a;
 		}
 	}
+	
+	
 	
 	
 	
@@ -1129,6 +1185,9 @@ export namespace main {
 	}
 	export class SearchHit {
 	    project: string;
+	    projectKnown: boolean;
+	    attributionProblem?: string;
+	    provider: string;
 	    role: string;
 	    time: string;
 	    timeRaw: string;
@@ -1142,35 +1201,14 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.project = source["project"];
+	        this.projectKnown = source["projectKnown"];
+	        this.attributionProblem = source["attributionProblem"];
+	        this.provider = source["provider"];
 	        this.role = source["role"];
 	        this.time = source["time"];
 	        this.timeRaw = source["timeRaw"];
 	        this.snippet = source["snippet"];
 	        this.full = source["full"];
-	    }
-	}
-	export class TimelineEntry {
-	    agent: string;
-	    project: string;
-	    source: string;
-	    day: string;
-	    time: string;
-	    timeRaw: string;
-	    text: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new TimelineEntry(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.agent = source["agent"];
-	        this.project = source["project"];
-	        this.source = source["source"];
-	        this.day = source["day"];
-	        this.time = source["time"];
-	        this.timeRaw = source["timeRaw"];
-	        this.text = source["text"];
 	    }
 	}
 	export class TimelineSource {
@@ -1187,6 +1225,66 @@ export namespace main {
 	        this.source = source["source"];
 	        this.state = source["state"];
 	        this.problems = source["problems"];
+	    }
+	}
+	export class SearchResult {
+	    hits: SearchHit[];
+	    sources: TimelineSource[];
+	
+	    static createFrom(source: any = {}) {
+	        return new SearchResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.hits = this.convertValues(source["hits"], SearchHit);
+	        this.sources = this.convertValues(source["sources"], TimelineSource);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TimelineEntry {
+	    agent: string;
+	    project: string;
+	    projectKnown: boolean;
+	    attributionProblem?: string;
+	    source: string;
+	    day: string;
+	    time: string;
+	    timeRaw: string;
+	    text: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TimelineEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.agent = source["agent"];
+	        this.project = source["project"];
+	        this.projectKnown = source["projectKnown"];
+	        this.attributionProblem = source["attributionProblem"];
+	        this.source = source["source"];
+	        this.day = source["day"];
+	        this.time = source["time"];
+	        this.timeRaw = source["timeRaw"];
+	        this.text = source["text"];
 	    }
 	}
 	export class TimelineResult {

@@ -51,8 +51,6 @@ var (
 	OpenRegistry                   = core.OpenRegistry
 	RegisterProject                = core.RegisterProject
 	RemoveProject                  = core.RemoveProject
-	RenameRegisteredSession        = core.RenameRegisteredSession
-	RenameRegisteredSessionRuntime = core.RenameRegisteredSessionRuntime
 	AddDiscoveredSessions          = core.AddDiscoveredSessions
 
 	CollectStatuses      = core.CollectStatuses

@@ -81,7 +81,7 @@ export function RevealPath(arg1:string):Promise<void>;
 
 export function SaveImage(arg1:string):Promise<string>;
 
-export function SearchTranscripts(arg1:string):Promise<Array<main.SearchHit>>;
+export function SearchTranscripts(arg1:string):Promise<main.SearchResult>;
 
 export function SendSkill(arg1:string,arg2:string):Promise<void>;
 
@@ -105,7 +105,7 @@ export function TakeBreak():Promise<void>;
 
 export function Timeline():Promise<main.TimelineResult>;
 
-export function WorktreeDiff(arg1:string):Promise<string>;
+export function WorktreeDiff(arg1:string,arg2:string):Promise<string>;
 
 export function WriteTerm(arg1:string,arg2:string):Promise<void>;
 

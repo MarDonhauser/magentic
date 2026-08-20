@@ -206,8 +206,8 @@ export function Timeline() {
   return window['go']['main']['App']['Timeline']();
 }
 
-export function WorktreeDiff(arg1) {
-  return window['go']['main']['App']['WorktreeDiff'](arg1);
+export function WorktreeDiff(arg1, arg2) {
+  return window['go']['main']['App']['WorktreeDiff'](arg1, arg2);
 }
 
 export function WriteTerm(arg1, arg2) {
