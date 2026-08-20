@@ -354,6 +354,8 @@ export namespace core {
 	    branch?: string;
 	    unread: boolean;
 	    dock: boolean;
+	    handoffSource: boolean;
+	    handoffTarget: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new OvAgent(source);
@@ -378,6 +380,8 @@ export namespace core {
 	        this.branch = source["branch"];
 	        this.unread = source["unread"];
 	        this.dock = source["dock"];
+	        this.handoffSource = source["handoffSource"];
+	        this.handoffTarget = source["handoffTarget"];
 	    }
 	}
 	export class OvLater {

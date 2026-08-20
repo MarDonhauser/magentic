@@ -1,16 +1,53 @@
 package core
 
 import (
-	"bytes"
-	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 )
 
+type ProjectID string
+type SessionID string
+
+type AgentVendor string
+
+const (
+	AgentVendorClaude  AgentVendor = "claude"
+	AgentVendorCodex   AgentVendor = "codex"
+	AgentVendorGemini  AgentVendor = "gemini"
+	AgentVendorCopilot AgentVendor = "copilot"
+)
+
+type AgentRunRef struct {
+	Vendor     AgentVendor `json:"vendor"`
+	ExternalID string      `json:"external_id"`
+}
+
+type SessionKind string
+
+const (
+	SessionKindCodingAgent SessionKind = "coding-agent"
+	SessionKindTerminal    SessionKind = "terminal"
+)
+
+type SessionPresentation string
+
+const (
+	SessionPresentationListed SessionPresentation = "listed"
+	SessionPresentationDock   SessionPresentation = "dock"
+)
+
+type SessionPurpose string
+
+const (
+	SessionPurposeWork    SessionPurpose = "work"
+	SessionPurposeCleanup SessionPurpose = "cleanup"
+	SessionPurposeMerge   SessionPurpose = "merge"
+	SessionPurposeDeploy  SessionPurpose = "deploy"
+)
+
 type Project struct {
+	ID         ProjectID `json:"id,omitempty"`
 	Name       string `json:"name"`
 	Path       string `json:"path"`
 	MainBranch string `json:"main_branch,omitempty"`
@@ -23,24 +60,38 @@ const KindTerm = "term"
 // sie gehören zum Dock und werden dort auch wieder geschlossen.
 const KindDock = "dock"
 
-type Agent struct {
-	Name       string    `json:"name"`
-	Project    string    `json:"project"`
-	Dir        string    `json:"dir"`
-	Worktree   bool      `json:"worktree"`
-	Kind       string    `json:"kind,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	BaseCommit string    `json:"base_commit,omitempty"`
-	BaseDirty  []string  `json:"base_dirty,omitempty"`
-	SessionID  string    `json:"session_id,omitempty"`
-	DeployAt   time.Time `json:"deploy_at,omitzero"`
-	LaterAt    time.Time `json:"later_at,omitzero"`
-	SeenAt     time.Time `json:"seen_at,omitzero"`
+type Session struct {
+	ID           SessionID           `json:"id,omitempty"`
+	Name         string              `json:"name"`
+	Project      string              `json:"project"`
+	Dir          string              `json:"dir"`
+	Worktree     bool                `json:"worktree"`
+	Kind         string              `json:"kind,omitempty"` // legacy transport field
+	SessionKind  SessionKind         `json:"session_kind,omitempty"`
+	Presentation SessionPresentation `json:"presentation,omitempty"`
+	Purpose      SessionPurpose      `json:"purpose,omitempty"`
+	RuntimeName  string              `json:"runtime_name,omitempty"`
+	CreatedAt    time.Time           `json:"created_at"`
+	BaseCommit   string              `json:"base_commit,omitempty"`
+	BaseDirty    []string            `json:"base_dirty,omitempty"`
+	SessionID    string              `json:"session_id,omitempty"` // legacy Claude run identifier
+	AgentRuns    []AgentRunRef        `json:"agent_runs,omitempty"`
+	DeployAt     time.Time           `json:"deploy_at,omitzero"`
+	LaterAt      time.Time           `json:"later_at,omitzero"`
+	SeenAt       time.Time           `json:"seen_at,omitzero"`
 }
 
+// Agent remains as a source-compatible name while callers migrate to Session.
+type Agent = Session
+
 type State struct {
+	Schema   int       `json:"schema,omitempty"`
+	Revision uint64    `json:"revision,omitempty"`
 	Projects []Project `json:"projects"`
-	Agents   []Agent   `json:"agents"`
+	Agents   []Session `json:"agents"`
+
+	registryPath string
+	baseline     *State
 }
 
 func StatePath() string {
@@ -52,60 +103,44 @@ func StatePath() string {
 }
 
 func LoadState() (*State, error) {
-	s := &State{}
-	data, err := os.ReadFile(StatePath())
-	if os.IsNotExist(err) {
-		return s, nil
-	}
+	snapshot, err := OpenRegistry(StatePath()).Snapshot(nil)
 	if err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal(data, s); err == nil {
-		return s, nil
-	}
-	// Wurde die Datei von zwei Prozessen überlappend geschrieben, steht am
-	// Anfang noch ein vollständiges Objekt — das ist der letzte heile Stand.
-	rescued := &State{}
-	if derr := json.NewDecoder(bytes.NewReader(data)).Decode(rescued); derr != nil {
-		return nil, fmt.Errorf("state.json ist beschädigt: %w", derr)
-	}
-	rescued.Save()
-	return rescued, nil
+	return snapshot.MutableState(), nil
 }
 
-var saveMu sync.Mutex
-
+// Save is the compatibility Adapter for callers that still hold a mutable
+// State. New code should express one semantic mutation with Registry.Change.
 func (s *State) Save() error {
-	saveMu.Lock()
-	defer saveMu.Unlock()
-
-	p := StatePath()
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(s, "", "  ")
-	if err != nil {
-		return err
-	}
-	// Eindeutiger Name pro Prozess: TUI und App schreiben sonst in dieselbe
-	// Zwischendatei und verschränken ihre Bytes zu ungültigem JSON.
-	tmp := fmt.Sprintf("%s.tmp.%d", p, os.Getpid())
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, p); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return nil
+	return saveMutableState(s)
 }
 
-func (a Agent) IsTerm() bool {
-	return a.Kind == KindTerm || a.Kind == KindDock
+func (a Session) IsTerm() bool {
+	return a.SessionKind == SessionKindTerminal || a.Kind == KindTerm || a.Kind == KindDock
 }
 
-func (a Agent) IsDock() bool {
-	return a.Kind == KindDock
+func (a Session) IsDock() bool {
+	return a.Presentation == SessionPresentationDock || a.Kind == KindDock
+}
+
+func (a Session) TmuxName() string {
+	if a.RuntimeName != "" {
+		return a.RuntimeName
+	}
+	return SessionName(a.Name)
+}
+
+func (a Session) AgentRun(vendor AgentVendor) (AgentRunRef, bool) {
+	for _, run := range a.AgentRuns {
+		if run.Vendor == vendor && run.ExternalID != "" {
+			return run, true
+		}
+	}
+	if vendor == AgentVendorClaude && a.SessionID != "" {
+		return AgentRunRef{Vendor: AgentVendorClaude, ExternalID: a.SessionID}, true
+	}
+	return AgentRunRef{}, false
 }
 
 func (s *State) AgentByName(name string) *Agent {

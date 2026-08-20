@@ -818,15 +818,18 @@ function updateHydraHandoffState() {
     button.setAttribute('aria-pressed', String(isSource));
 
     if (!handoffSourceName) {
-      button.disabled = handoffBusy || !!sourceReason;
+      button.disabled = handoffBusy;
+      button.setAttribute('aria-disabled', String(!!sourceReason));
       button.setAttribute('aria-label', sourceReason ? `${name}: ${sourceReason}` : `Kontext aus Session ${name} weitergeben`);
       button.title = sourceReason || 'Session-Magnet: auf eine andere KI-Session ziehen oder zum Auswählen aktivieren';
     } else if (isSource) {
       button.disabled = handoffBusy;
+      button.setAttribute('aria-disabled', 'false');
       button.setAttribute('aria-label', `Kontextübergabe aus Session ${name} abbrechen`);
       button.title = 'Kontextübergabe abbrechen';
     } else {
-      button.disabled = handoffBusy || !!targetReason;
+      button.disabled = handoffBusy;
+      button.setAttribute('aria-disabled', String(!!targetReason));
       button.setAttribute('aria-label', targetReason ? `${name}: ${targetReason}` : `Kontext aus Session ${handoffSourceName} an ${name} übergeben`);
       button.title = targetReason || `Kontext aus „${handoffSourceName}“ hierhin übergeben`;
     }
@@ -835,10 +838,14 @@ function updateHydraHandoffState() {
 }
 
 function removeHandoffDragVisuals() {
+  const drag = handoffDrag;
   window.removeEventListener('pointermove', moveSessionMagnet);
   window.removeEventListener('pointerup', dropSessionMagnet);
   window.removeEventListener('pointercancel', cancelSessionMagnetDrag);
-  handoffDrag?.ghost?.remove();
+  if (drag?.pointerTarget?.hasPointerCapture?.(drag.pointerId)) {
+    try { drag.pointerTarget.releasePointerCapture(drag.pointerId); } catch { /* pointer is already gone */ }
+  }
+  drag?.ghost?.remove();
   handoffDrag = null;
   handoffOverName = '';
   document.body.classList.remove('session-magnet-dragging');
@@ -847,6 +854,7 @@ function removeHandoffDragVisuals() {
 function cancelSessionHandoff(force = false) {
   if (handoffBusy && !force) return;
   removeHandoffDragVisuals();
+  suppressHandoffClick = false;
   handoffSourceName = '';
   handoffTargetName = '';
   updateHydraHandoffState();
@@ -895,19 +903,26 @@ function sessionMagnetPointerDown(e, term) {
   e.stopPropagation();
   handoffDrag = {
     source: term.name,
+    pointerId: e.pointerId,
+    pointerTarget: e.currentTarget,
     startX: e.clientX,
     startY: e.clientY,
     active: false,
     ghost: null,
   };
+  e.currentTarget.setPointerCapture?.(e.pointerId);
   window.addEventListener('pointermove', moveSessionMagnet);
-  window.addEventListener('pointerup', dropSessionMagnet, { once: true });
-  window.addEventListener('pointercancel', cancelSessionMagnetDrag, { once: true });
+  window.addEventListener('pointerup', dropSessionMagnet);
+  window.addEventListener('pointercancel', cancelSessionMagnetDrag);
 }
 
 function moveSessionMagnet(e) {
   const drag = handoffDrag;
-  if (!drag) return;
+  if (!drag || e.pointerId !== drag.pointerId) return;
+  if (e.pointerType === 'mouse' && e.buttons === 0) {
+    cancelSessionMagnetDrag();
+    return;
+  }
   if (!drag.active) {
     if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) < 4) return;
     drag.active = true;
@@ -930,8 +945,9 @@ function moveSessionMagnet(e) {
   }
 }
 
-function dropSessionMagnet() {
+function dropSessionMagnet(e) {
   const drag = handoffDrag;
+  if (drag && e?.pointerId !== drag.pointerId) return;
   const target = handoffOverName;
   const wasActive = !!drag?.active;
   removeHandoffDragVisuals();
@@ -942,7 +958,8 @@ function dropSessionMagnet() {
   else toast('Kein gültiges KI-Terminal getroffen — Ziel wählen oder mit Esc abbrechen', true);
 }
 
-function cancelSessionMagnetDrag() {
+function cancelSessionMagnetDrag(e) {
+  if (handoffDrag && e?.pointerId != null && e.pointerId !== handoffDrag.pointerId) return;
   const wasActive = !!handoffDrag?.active;
   removeHandoffDragVisuals();
   if (wasActive) cancelSessionHandoff();
@@ -950,6 +967,15 @@ function cancelSessionMagnetDrag() {
 }
 
 window.addEventListener('blur', cancelSessionMagnetDrag);
+
+// Consume Escape before xterm sees it; cancelling the handoff must never send
+// an ESC byte to the focused agent terminal.
+window.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || !handoffSourceName) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  cancelSessionHandoff();
+}, { capture: true });
 
 function hydraAgents() {
   const p = (ov?.projects || []).find(x => x.name === hydraProject);
@@ -2364,7 +2390,6 @@ document.addEventListener('mousedown', e => {
 window.addEventListener('blur', hideSubMenu);
 
 window.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && handoffSourceName) { cancelSessionHandoff(); return; }
   if (e.key === 'Escape' && subMenuEl.style.display === 'block') { hideSubMenu(); return; }
   if (e.key === 'Escape' && modalEl.style.display === 'flex') { modalEl.style.display = 'none'; return; }
   if (e.key === 'Escape' && menuEl.style.display === 'block') { hideMenu(); return; }

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -120,22 +121,110 @@ func ReopenLater(st *State, name string) error {
 	return st.Save()
 }
 
-func SendPromptWhenReady(session, prompt string, submit bool) {
-	for i := 0; i < 180; i++ {
-		time.Sleep(1 * time.Second)
-		content := strings.ToLower(TmuxCapturePane(session, 0))
-		if content == "" {
-			return
-		}
-		if strings.Contains(content, "trust this folder") {
-			continue
-		}
-		if strings.Contains(content, "shift+tab to cycle") {
-			time.Sleep(500 * time.Millisecond)
-			_ = sendPromptLiteral(session, prompt, submit)
-			return
-		}
+type promptTargetQueue struct {
+	sendMu    sync.Mutex
+	pendingMu sync.Mutex
+	pending   map[string]struct{}
+}
+
+var promptTargetQueues sync.Map
+
+func queueForPromptTarget(session string) *promptTargetQueue {
+	q, _ := promptTargetQueues.LoadOrStore(session, &promptTargetQueue{pending: map[string]struct{}{}})
+	return q.(*promptTargetQueue)
+}
+
+func (q *promptTargetQueue) begin(key string) bool {
+	q.pendingMu.Lock()
+	defer q.pendingMu.Unlock()
+	if _, exists := q.pending[key]; exists {
+		return false
 	}
+	q.pending[key] = struct{}{}
+	return true
+}
+
+func (q *promptTargetQueue) finish(key string) {
+	q.pendingMu.Lock()
+	delete(q.pending, key)
+	q.pendingMu.Unlock()
+}
+
+func inspectLivePromptTarget(session, expectedTool string) (string, string, error) {
+	info, exists := TmuxPaneInfos()[session]
+	if !exists {
+		return "", "", fmt.Errorf("Ziel-Session %q läuft nicht mehr", strings.TrimPrefix(session, SessionPrefix))
+	}
+	tool := handoffAITool(info.Command)
+	if tool == "" {
+		return "", "", fmt.Errorf("in Ziel-Session %q läuft kein unterstütztes KI-Tool mehr", strings.TrimPrefix(session, SessionPrefix))
+	}
+	if expectedTool != "" && tool != expectedTool {
+		return "", "", fmt.Errorf("KI-Tool in Ziel-Session %q wechselte von %s zu %s", strings.TrimPrefix(session, SessionPrefix), expectedTool, tool)
+	}
+	content := TmuxCapturePane(session, 0)
+	status := DetectClaudeStatus(true, info.Command, LastLines(content, 25))
+	if err := validateHandoffTargetStatus(strings.TrimPrefix(session, SessionPrefix), status); err != nil {
+		return "", "", err
+	}
+	return tool, content, nil
+}
+
+func deliverPrompt(session, prompt string, submit bool, expectedTool string, waitForReady, tolerateStartup bool) error {
+	if waitForReady {
+		for i := 0; i < 180; i++ {
+			time.Sleep(1 * time.Second)
+			_, content, err := inspectLivePromptTarget(session, expectedTool)
+			if err != nil {
+				if tolerateStartup {
+					continue
+				}
+				return err
+			}
+			content = strings.ToLower(content)
+			if strings.Contains(content, "trust this folder") {
+				continue
+			}
+			if !strings.Contains(content, "shift+tab to cycle") {
+				continue
+			}
+			time.Sleep(500 * time.Millisecond)
+			return sendPromptLiteral(session, prompt, submit, expectedTool)
+		}
+		return fmt.Errorf("Ziel-Session %q wurde nicht rechtzeitig eingabebereit", strings.TrimPrefix(session, SessionPrefix))
+	}
+	return sendPromptLiteral(session, prompt, submit, expectedTool)
+}
+
+func enqueuePrompt(session, prompt string, submit bool, expectedTool string, waitForReady, tolerateStartup, preferSync bool) error {
+	if strings.TrimSpace(prompt) == "" {
+		return fmt.Errorf("Prompt ist leer")
+	}
+	key := expectedTool + "\x00" + strconv.FormatBool(submit) + "\x00" + prompt
+	q := queueForPromptTarget(session)
+	if !q.begin(key) {
+		return nil
+	}
+	run := func() error {
+		defer q.finish(key)
+		return deliverPrompt(session, prompt, submit, expectedTool, waitForReady, tolerateStartup)
+	}
+	if preferSync && q.sendMu.TryLock() {
+		defer q.sendMu.Unlock()
+		return run()
+	}
+	go func() {
+		q.sendMu.Lock()
+		defer q.sendMu.Unlock()
+		if err := run(); err != nil {
+			Logf("Prompt-Queue %s: %v", session, err)
+		}
+	}()
+	return nil
+}
+
+func SendPromptWhenReady(session, prompt string, submit bool) {
+	_ = enqueuePrompt(session, prompt, submit, AgentToolClaude, true, true, false)
 }
 
 func promptTerminalInput(prompt string) string {
@@ -153,12 +242,18 @@ func promptTerminalInput(prompt string) string {
 // sendPromptLiteral passes the prompt as one tmux argument. In particular, it
 // must never be interpolated into a shell command: handoff metadata can contain
 // paths and names that have meaning to a shell.
-func sendPromptLiteral(session, prompt string, submit bool) error {
+func sendPromptLiteral(session, prompt string, submit bool, expectedTool string) error {
+	if _, _, err := inspectLivePromptTarget(session, expectedTool); err != nil {
+		return err
+	}
 	if _, err := Tmux("send-keys", "-t", TargetPane(session), "-l", promptTerminalInput(prompt)); err != nil {
 		return fmt.Errorf("Prompt an tmux senden: %w", err)
 	}
 	if !submit {
 		return nil
+	}
+	if _, _, err := inspectLivePromptTarget(session, expectedTool); err != nil {
+		return err
 	}
 	if _, err := Tmux("send-keys", "-t", TargetPane(session), "Enter"); err != nil {
 		return fmt.Errorf("Prompt in tmux absenden: %w", err)
@@ -170,15 +265,12 @@ func sendPromptLiteral(session, prompt string, submit bool) error {
 // agent is working, it reuses the established readiness loop and submits the
 // prompt once the composer is available again.
 func SendPromptToSession(session, prompt string) error {
-	if strings.TrimSpace(prompt) == "" {
-		return fmt.Errorf("Prompt ist leer")
+	tool, content, err := inspectLivePromptTarget(session, "")
+	if err != nil {
+		return err
 	}
-	content := strings.ToLower(TmuxCapturePane(session, 0))
-	if strings.Contains(content, "shift+tab to cycle") {
-		return sendPromptLiteral(session, prompt, true)
-	}
-	go SendPromptWhenReady(session, prompt, true)
-	return nil
+	ready := tool != AgentToolClaude || strings.Contains(strings.ToLower(content), "shift+tab to cycle")
+	return enqueuePrompt(session, prompt, true, tool, !ready, false, ready)
 }
 
 func SendSlashCommand(session, cmd string) {
