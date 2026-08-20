@@ -531,10 +531,86 @@ func StartMerge(st *State, projPath, source, target string) (string, error) {
 }
 
 func StartBoardSession(st *State, projPath, id, itemPath string) (string, error) {
-	prompt := fmt.Sprintf("Arbeite am Change %q. Die Spezifikation liegt unter %s — lies proposal bzw. spec, den Plan und tasks.md, "+
-		"und arbeite die offenen Tasks ab. Hake erledigte Tasks in tasks.md ab. "+
-		"Zeige mir zuerst deinen Plan, bevor du etwas ausführst.", id, itemPath)
-	return StartSkillAgent(st, projPath, prompt, "", id)
+	return StartSpecificationSession(st, SpecificationStartIntent{
+		ID:                     id,
+		ProjectDirectory:       projPath,
+		SpecificationDirectory: itemPath,
+		WorkInstructions: SpecificationWorkInstructions{
+			ReadInOrder:      []SpecificationDocumentKind{SpecificationDocumentProposal, SpecificationDocumentSpecification, SpecificationDocumentDesign, SpecificationDocumentPlan, SpecificationDocumentTasks},
+			KeepTasksUpdated: true,
+			ReviewBeforeWork: true,
+		},
+	})
+}
+
+// StartSpecificationSession is the controlled handoff from Specifications to
+// Session Lifecycle. Callers must obtain intent through Specifications.ResolveStart;
+// the compatibility StartBoardSession Adapter above exists only for older Go
+// callers and is not exposed by the desktop facade.
+func StartSpecificationSession(st *State, intent SpecificationStartIntent) (string, error) {
+	if strings.TrimSpace(intent.ID) == "" || strings.TrimSpace(intent.ProjectDirectory) == "" || strings.TrimSpace(intent.SpecificationDirectory) == "" {
+		return "", fmt.Errorf("unvollst\u00e4ndiger Specification-Start")
+	}
+	prompt := specificationWorkPrompt(intent)
+	return StartSkillAgent(st, intent.ProjectDirectory, prompt, "", intent.ID)
+}
+
+func specificationWorkPrompt(intent SpecificationStartIntent) string {
+	documents := make([]string, 0, len(intent.WorkInstructions.ReadInOrder))
+	for _, document := range intent.WorkInstructions.ReadInOrder {
+		if label := specificationDocumentPromptLabel(document); label != "" {
+			documents = append(documents, label)
+		}
+	}
+	if len(documents) == 0 {
+		documents = []string{"die vorhandenen Spezifikationsdokumente", "tasks.md"}
+	}
+
+	steps := []string{
+		fmt.Sprintf("Arbeite am Change %q.", intent.ID),
+		fmt.Sprintf("Die Spezifikation liegt unter %q.", intent.SpecificationDirectory),
+		"Lies in dieser Reihenfolge: " + strings.Join(documents, ", ") + ".",
+	}
+	if intent.WorkInstructions.ReviewBeforeWork {
+		steps = append(steps, "Zeige mir zuerst deinen Plan, bevor du etwas ausf\u00fchrst.")
+	}
+	steps = append(steps, "Arbeite danach die offenen Aufgaben ab.")
+	if intent.WorkInstructions.KeepTasksUpdated {
+		steps = append(steps, "Halte den Aufgabenstatus in der Spezifikation w\u00e4hrend der Arbeit aktuell.")
+	}
+	if intent.WorkInstructions.ArchiveAfterWork {
+		steps = append(steps, "Schlage nach abgeschlossener Abnahme die Archivierung nach den Regeln des Spec-Systems vor.")
+	}
+	return strings.Join(steps, " ")
+}
+
+func specificationDocumentPromptLabel(document SpecificationDocumentKind) string {
+	switch document {
+	case SpecificationDocumentProposal:
+		return "proposal"
+	case SpecificationDocumentRequirements:
+		return "requirements"
+	case SpecificationDocumentSpecification:
+		return "spec"
+	case SpecificationDocumentDesign:
+		return "design"
+	case SpecificationDocumentPlan:
+		return "plan"
+	case SpecificationDocumentTasks:
+		return "tasks"
+	case SpecificationDocumentShape:
+		return "shape"
+	case SpecificationDocumentStandards:
+		return "standards"
+	case SpecificationDocumentReferences:
+		return "references"
+	case SpecificationDocumentOverview:
+		return "overview"
+	case SpecificationDocumentSupporting:
+		return "supporting documents"
+	default:
+		return ""
+	}
 }
 
 func StartDeploy(st *State, projPath string) (string, error) {

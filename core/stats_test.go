@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,8 +90,15 @@ func TestBuildStatsConsumesNormalizedWorkHistory(t *testing.T) {
 	if stats.Totals.Input != 30 || stats.Totals.Output != 12 || stats.Totals.CacheRead != 5 || stats.Totals.CacheWrite != 1 || stats.Totals.Tokens != 48 {
 		t.Fatalf("normalized token totals = %#v", stats.Totals)
 	}
+	wantClaudeCost := float64(10)*5/1_000_000 + float64(5)*25/1_000_000 + float64(2)*5*.1/1_000_000 + float64(1)*5*1.25/1_000_000
+	if math.Abs(stats.Totals.Cost-wantClaudeCost) > 1e-12 || stats.Totals.CostState != StatsCostPartial {
+		t.Fatalf("provider-aware cost = %#v, want Claude subtotal %f marked partial", stats.Totals, wantClaudeCost)
+	}
 	if len(stats.Projects) != 1 || stats.Projects[0].Name != "Durable project" || stats.Projects[0].Prompts != 2 || stats.Projects[0].Sessions != 2 || stats.Projects[0].Tokens != 48 || stats.Projects[0].Active != 2 {
 		t.Fatalf("stable Registry project attribution = %#v", stats.Projects)
+	}
+	if math.Abs(stats.Projects[0].Cost-wantClaudeCost) > 1e-12 || stats.Projects[0].CostState != StatsCostPartial {
+		t.Fatalf("project cost must expose a Claude-only subtotal: %#v", stats.Projects[0])
 	}
 	day := stats.Days[len(stats.Days)-1]
 	if day.Prompts != 2 || day.Turns != 2 || day.Sessions != 2 {
@@ -103,6 +111,9 @@ func TestBuildStatsConsumesNormalizedWorkHistory(t *testing.T) {
 		if model.Source == "" || model.Turns != 1 {
 			t.Fatalf("model activity counted usage record as another turn: %#v", model)
 		}
+		if model.Provider == string(HistoryProviderCodex) && (model.Cost != 0 || model.CostState != StatsCostUnpriced) {
+			t.Fatalf("Codex usage was priced as Claude: %#v", model)
+		}
 	}
 	claude := findStatsProvider(t, stats.Providers, HistoryProviderClaude)
 	if claude.State != HistorySourcePartial || claude.Prompts != 1 || claude.Turns != 1 || len(claude.Problems) != 1 {
@@ -111,6 +122,24 @@ func TestBuildStatsConsumesNormalizedWorkHistory(t *testing.T) {
 	codex := findStatsProvider(t, stats.Providers, HistoryProviderCodex)
 	if codex.State != HistorySourceAvailable || codex.Prompts != 1 || codex.Turns != 1 || codex.Tokens != 30 {
 		t.Fatalf("Codex provider activity = %#v", codex)
+	}
+}
+
+func TestModelCostOnlyPricesClaude(t *testing.T) {
+	const (
+		input      = int64(1_000_000)
+		output     = int64(1_000_000)
+		cacheRead  = int64(1_000_000)
+		cacheWrite = int64(1_000_000)
+	)
+	cost, priced := modelCost(HistoryProviderClaude, "claude-sonnet-4-6", input, output, cacheRead, cacheWrite)
+	if !priced || math.Abs(cost-(3+15+0.3+3.75)) > 1e-12 {
+		t.Fatalf("Claude pricing = (%f, %v)", cost, priced)
+	}
+	for _, provider := range []HistoryProvider{HistoryProviderCodex, HistoryProviderGemini, HistoryProviderCopilot} {
+		if cost, priced := modelCost(provider, "claude-sonnet-4-6", input, output, cacheRead, cacheWrite); priced || cost != 0 {
+			t.Errorf("%s inherited Claude pricing: (%f, %v)", provider, cost, priced)
+		}
 	}
 }
 

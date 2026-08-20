@@ -10,39 +10,54 @@ import (
 	"time"
 )
 
+// StatsCostState describes how much of an aggregate can be priced without
+// pretending that every agent vendor shares Claude's public API prices.
+type StatsCostState string
+
+const (
+	StatsCostPriced   StatsCostState = "priced"
+	StatsCostPartial  StatsCostState = "partial"
+	StatsCostUnpriced StatsCostState = "unpriced"
+	StatsCostNone     StatsCostState = "none"
+)
+
 type StatsDay struct {
-	Date       string  `json:"date"`
-	Weekday    string  `json:"weekday"`
-	Prompts    int     `json:"prompts"`
-	Turns      int     `json:"turns"`
-	Input      int64   `json:"input"`
-	Output     int64   `json:"output"`
-	CacheRead  int64   `json:"cacheRead"`
-	CacheWrite int64   `json:"cacheWrite"`
-	Cost       float64 `json:"cost"`
-	Sessions   int     `json:"sessions"`
-	Commits    int     `json:"commits"`
+	Date       string         `json:"date"`
+	Weekday    string         `json:"weekday"`
+	Prompts    int            `json:"prompts"`
+	Turns      int            `json:"turns"`
+	Input      int64          `json:"input"`
+	Output     int64          `json:"output"`
+	CacheRead  int64          `json:"cacheRead"`
+	CacheWrite int64          `json:"cacheWrite"`
+	Cost       float64        `json:"cost"`
+	CostState  StatsCostState `json:"costState"`
+	Sessions   int            `json:"sessions"`
+	Commits    int            `json:"commits"`
 }
 
 type StatsProject struct {
-	Name     string  `json:"name"`
-	Tokens   int64   `json:"tokens"`
-	Cost     float64 `json:"cost"`
-	Prompts  int     `json:"prompts"`
-	Sessions int     `json:"sessions"`
-	Commits  int     `json:"commits"`
-	Active   int     `json:"active"`
+	Name      string         `json:"name"`
+	Tokens    int64          `json:"tokens"`
+	Cost      float64        `json:"cost"`
+	CostState StatsCostState `json:"costState"`
+	Prompts   int            `json:"prompts"`
+	Sessions  int            `json:"sessions"`
+	Commits   int            `json:"commits"`
+	Active    int            `json:"active"`
 }
 
 type StatsModel struct {
-	Model      string  `json:"model"`
-	Source     string  `json:"source,omitempty"`
-	Turns      int     `json:"turns"`
-	Input      int64   `json:"input"`
-	Output     int64   `json:"output"`
-	CacheRead  int64   `json:"cacheRead"`
-	CacheWrite int64   `json:"cacheWrite"`
-	Cost       float64 `json:"cost"`
+	Model      string         `json:"model"`
+	Provider   string         `json:"provider"`
+	Source     string         `json:"source,omitempty"`
+	Turns      int            `json:"turns"`
+	Input      int64          `json:"input"`
+	Output     int64          `json:"output"`
+	CacheRead  int64          `json:"cacheRead"`
+	CacheWrite int64          `json:"cacheWrite"`
+	Cost       float64        `json:"cost"`
+	CostState  StatsCostState `json:"costState"`
 }
 
 // StatsProvider exposes source coverage alongside the known activity subtotal.
@@ -59,20 +74,21 @@ type StatsProvider struct {
 }
 
 type StatsTotals struct {
-	Days       int     `json:"days"`
-	Prompts    int     `json:"prompts"`
-	Turns      int     `json:"turns"`
-	Sessions   int     `json:"sessions"`
-	Tokens     int64   `json:"tokens"`
-	Input      int64   `json:"input"`
-	Output     int64   `json:"output"`
-	CacheRead  int64   `json:"cacheRead"`
-	CacheWrite int64   `json:"cacheWrite"`
-	Cost       float64 `json:"cost"`
-	Commits    int     `json:"commits"`
-	CacheHit   float64 `json:"cacheHit"`
-	BusiestDay string  `json:"busiestDay"`
-	Streak     int     `json:"streak"`
+	Days       int            `json:"days"`
+	Prompts    int            `json:"prompts"`
+	Turns      int            `json:"turns"`
+	Sessions   int            `json:"sessions"`
+	Tokens     int64          `json:"tokens"`
+	Input      int64          `json:"input"`
+	Output     int64          `json:"output"`
+	CacheRead  int64          `json:"cacheRead"`
+	CacheWrite int64          `json:"cacheWrite"`
+	Cost       float64        `json:"cost"`
+	CostState  StatsCostState `json:"costState"`
+	Commits    int            `json:"commits"`
+	CacheHit   float64        `json:"cacheHit"`
+	BusiestDay string         `json:"busiestDay"`
+	Streak     int            `json:"streak"`
 }
 
 type Stats struct {
@@ -123,23 +139,28 @@ func modelPrice(model string) (float64, float64) {
 	return defaultPriceIn, defaultPriceOut
 }
 
-func modelCost(model string, input, output, cacheRead, cacheWrite int64) float64 {
+func modelCost(provider HistoryProvider, model string, input, output, cacheRead, cacheWrite int64) (float64, bool) {
+	if provider != HistoryProviderClaude {
+		return 0, false
+	}
 	in, out := modelPrice(model)
 	const million = 1_000_000.0
 	return float64(input)*in/million +
 		float64(output)*out/million +
 		float64(cacheWrite)*in*1.25/million +
-		float64(cacheRead)*in*0.1/million
+		float64(cacheRead)*in*0.1/million, true
 }
 
 type statsAgg struct {
-	Prompts    int
-	Turns      int
-	Input      int64
-	Output     int64
-	CacheRead  int64
-	CacheWrite int64
-	Cost       float64
+	Prompts     int
+	Turns       int
+	Input       int64
+	Output      int64
+	CacheRead   int64
+	CacheWrite  int64
+	Cost        float64
+	costPriced  bool
+	costUnknown bool
 }
 
 func (a *statsAgg) add(other statsAgg) {
@@ -150,10 +171,25 @@ func (a *statsAgg) add(other statsAgg) {
 	a.CacheRead += other.CacheRead
 	a.CacheWrite += other.CacheWrite
 	a.Cost += other.Cost
+	a.costPriced = a.costPriced || other.costPriced
+	a.costUnknown = a.costUnknown || other.costUnknown
 }
 
 func (a statsAgg) tokens() int64 {
 	return a.Input + a.Output + a.CacheRead + a.CacheWrite
+}
+
+func (a statsAgg) costState() StatsCostState {
+	switch {
+	case a.costPriced && a.costUnknown:
+		return StatsCostPartial
+	case a.costPriced:
+		return StatsCostPriced
+	case a.costUnknown:
+		return StatsCostUnpriced
+	default:
+		return StatsCostNone
+	}
 }
 
 type statsSlot struct {
@@ -182,7 +218,6 @@ func statsSlotFor(slots map[string]*statsSlot, key string) *statsSlot {
 	}
 	return slot
 }
-
 func (a *statsAcc) addEvent(event HistoryEvent) {
 	if event.OccurredAt.State != HistoryFactKnown {
 		return
@@ -216,12 +251,37 @@ func (a *statsAcc) addEvent(event HistoryEvent) {
 		if event.Model.State == HistoryFactKnown {
 			model = event.Model.Value
 		}
-		activity.Cost = modelCost(model, activity.Input, activity.Output, activity.CacheRead, activity.CacheWrite)
+		knownUsage, unknownUsage := statsUsageFactState(event.Usage)
+		if event.Provider == HistoryProviderClaude && knownUsage {
+			activity.Cost, activity.costPriced = modelCost(event.Provider, model, activity.Input, activity.Output, activity.CacheRead, activity.CacheWrite)
+		}
+		// An assistant output represents potentially billable work even when its
+		// adapter cannot expose token facts. Non-Claude activity is deliberately
+		// unpriced: applying Claude's fallback here would manufacture precision.
+		activity.costUnknown = event.Provider != HistoryProviderClaude || unknownUsage || event.Kind == HistoryEventOutput && !knownUsage
 	default:
 		return
 	}
 	day.add(activity)
 	projectSlot.add(activity)
+}
+
+func statsUsageFactState(usage HistoryUsage) (known, unknown bool) {
+	states := [...]HistoryFactState{
+		usage.InputTokens.State,
+		usage.OutputTokens.State,
+		usage.CacheReadTokens.State,
+		usage.CacheWriteTokens.State,
+	}
+	for _, state := range states {
+		switch state {
+		case HistoryFactKnown:
+			known = true
+		case HistoryFactUnknown:
+			unknown = true
+		}
+	}
+	return known, unknown
 }
 
 func statsEventProject(event HistoryEvent) string {
@@ -352,6 +412,7 @@ func buildStats(ctx context.Context, state *State, days int, history *WorkHistor
 	active := activeStatsProjects(state)
 
 	var totals StatsTotals
+	var totalCosts statsAgg
 	busiestScore := [2]int{-1, -1}
 	activeDays := map[string]bool{}
 	for day := first; !day.After(last); day = day.AddDate(0, 0, 1) {
@@ -364,9 +425,10 @@ func buildStats(ctx context.Context, state *State, days int, history *WorkHistor
 			Date: key, Weekday: statsWeekdayNames[(int(day.Weekday())+6)%7],
 			Prompts: slot.Prompts, Turns: slot.Turns,
 			Input: slot.Input, Output: slot.Output, CacheRead: slot.CacheRead, CacheWrite: slot.CacheWrite,
-			Cost: slot.Cost, Sessions: len(slot.sessions), Commits: commitsByDay[key],
+			Cost: slot.Cost, CostState: slot.costState(), Sessions: len(slot.sessions), Commits: commitsByDay[key],
 		}
 		result.Days = append(result.Days, item)
+		totalCosts.add(slot.statsAgg)
 		totals.Cost += item.Cost
 		totals.Commits += item.Commits
 		if item.Prompts > 0 || item.Turns > 0 || item.Commits > 0 {
@@ -391,6 +453,7 @@ func buildStats(ctx context.Context, state *State, days int, history *WorkHistor
 	totals.CacheRead = summary.Totals.Usage.CacheReadTokens.Value
 	totals.CacheWrite = summary.Totals.Usage.CacheWriteTokens.Value
 	totals.Tokens = totals.Input + totals.Output + totals.CacheRead + totals.CacheWrite
+	totals.CostState = totalCosts.costState()
 	if base := totals.CacheRead + totals.Input + totals.CacheWrite; base > 0 {
 		totals.CacheHit = float64(totals.CacheRead) / float64(base) * 100
 	}
@@ -402,11 +465,22 @@ func buildStats(ctx context.Context, state *State, days int, history *WorkHistor
 		totals.Streak++
 		cursor = cursor.AddDate(0, 0, -1)
 	}
-	result.Totals = totals
-
 	result.Projects = buildStatsProjects(acc, state, active, commitsByProject)
 	result.Models = buildStatsModels(summary)
 	result.Providers = buildStatsProviders(summary)
+	if statsHistoryCoverageIncomplete(summary.Meta.Coverage) {
+		totals.CostState = partialStatsCostState(totals.CostState)
+		for i := range result.Days {
+			result.Days[i].CostState = partialStatsCostState(result.Days[i].CostState)
+		}
+		for i := range result.Projects {
+			result.Projects[i].CostState = partialStatsCostState(result.Projects[i].CostState)
+		}
+		for i := range result.Models {
+			result.Models[i].CostState = partialStatsCostState(result.Models[i].CostState)
+		}
+	}
+	result.Totals = totals
 	result.Heatmap = make([][]int, 7)
 	for i := range result.Heatmap {
 		result.Heatmap[i] = append([]int(nil), acc.heatmap[i][:]...)
@@ -422,6 +496,22 @@ func buildStats(ctx context.Context, state *State, days int, history *WorkHistor
 		result.Providers = []StatsProvider{}
 	}
 	return result
+}
+
+func statsHistoryCoverageIncomplete(coverage []HistoryProviderCoverage) bool {
+	for _, source := range coverage {
+		if source.State == HistorySourcePartial || source.State == HistorySourceUnavailable {
+			return true
+		}
+	}
+	return false
+}
+
+func partialStatsCostState(state StatsCostState) StatsCostState {
+	if state == StatsCostPriced {
+		return StatsCostPartial
+	}
+	return state
 }
 
 func coherentStatsHistory(ctx context.Context, history *WorkHistory, associations HistoryAssociations, query HistoryEventQuery) (HistorySummary, []HistoryEvent, error) {
@@ -524,7 +614,7 @@ func buildStatsProjects(acc *statsAcc, state *State, active, commits map[string]
 	for name, slot := range acc.projects {
 		seen[name] = true
 		projects = append(projects, StatsProject{
-			Name: name, Tokens: slot.tokens(), Cost: slot.Cost, Prompts: slot.Prompts,
+			Name: name, Tokens: slot.tokens(), Cost: slot.Cost, CostState: slot.costState(), Prompts: slot.Prompts,
 			Sessions: len(slot.sessions), Commits: commits[name], Active: active[name],
 		})
 	}
@@ -554,10 +644,21 @@ func buildStatsModels(summary HistorySummary) []StatsModel {
 		output := model.Usage.OutputTokens.Value
 		cacheRead := model.Usage.CacheReadTokens.Value
 		cacheWrite := model.Usage.CacheWriteTokens.Value
+		knownUsage, unknownUsage := statsUsageSummaryState(model.Usage)
+		cost, priced := modelCost(model.Provider, name, input, output, cacheRead, cacheWrite)
+		costState := StatsCostNone
+		switch {
+		case priced && knownUsage && unknownUsage:
+			costState = StatsCostPartial
+		case priced && knownUsage:
+			costState = StatsCostPriced
+		case model.Turns > 0 || knownUsage || unknownUsage:
+			costState = StatsCostUnpriced
+		}
 		models = append(models, StatsModel{
-			Model: name, Source: model.Provider.Label(), Turns: model.Turns,
+			Model: name, Provider: string(model.Provider), Source: model.Provider.Label(), Turns: model.Turns,
 			Input: input, Output: output, CacheRead: cacheRead, CacheWrite: cacheWrite,
-			Cost: modelCost(name, input, output, cacheRead, cacheWrite),
+			Cost: cost, CostState: costState,
 		})
 	}
 	sort.Slice(models, func(i, j int) bool {
@@ -570,6 +671,20 @@ func buildStatsModels(summary HistorySummary) []StatsModel {
 		return models[i].Model < models[j].Model
 	})
 	return models
+}
+
+func statsUsageSummaryState(usage HistoryUsageSummary) (known, unknown bool) {
+	measures := [...]HistoryMeasure{
+		usage.InputTokens,
+		usage.OutputTokens,
+		usage.CacheReadTokens,
+		usage.CacheWriteTokens,
+	}
+	for _, measure := range measures {
+		known = known || measure.KnownEvents > 0
+		unknown = unknown || measure.UnknownEvents > 0
+	}
+	return known, unknown
 }
 
 func buildStatsProviders(summary HistorySummary) []StatsProvider {

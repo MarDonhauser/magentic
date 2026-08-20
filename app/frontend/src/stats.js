@@ -1,5 +1,4 @@
 import './stats.css';
-import { developerIcon } from './avatar.js';
 
 const SERIES = Array.from({ length: 6 }, (_, i) => `var(--chart-series-${i + 1})`);
 const RAMP = Array.from({ length: 7 }, (_, i) => `var(--heat-${i + 1})`);
@@ -43,6 +42,18 @@ function money(v) {
   const n = num(v);
   if (Math.abs(n) >= 10000) return '$' + nf0.format(Math.round(n));
   return '$' + nf2.format(n);
+}
+
+const COST_STATES = new Set(['priced', 'partial', 'unpriced', 'none']);
+function normalizeCostState(value, cost) {
+  const state = String(value || '');
+  if (COST_STATES.has(state)) return state;
+  return num(cost) > 0 ? 'priced' : 'none';
+}
+
+function costValue(value, state) {
+  if (state === 'unpriced' || state === 'none') return '–';
+  return `${state === 'partial' ? 'ab ' : ''}${money(value)}`;
 }
 
 function pct(v, digits) {
@@ -124,6 +135,7 @@ function normalize(raw) {
     cacheRead: num(d.cacheRead),
     cacheWrite: num(d.cacheWrite),
     cost: num(d.cost),
+    costState: normalizeCostState(d.costState, d.cost),
     sessions: num(d.sessions),
     commits: num(d.commits),
   }));
@@ -145,6 +157,7 @@ function normalize(raw) {
     name: String(p.name || ''),
     tokens: num(p.tokens),
     cost: num(p.cost),
+    costState: normalizeCostState(p.costState, p.cost),
     prompts: num(p.prompts),
     sessions: num(p.sessions),
     commits: num(p.commits),
@@ -153,12 +166,30 @@ function normalize(raw) {
 
   const models = (Array.isArray(src.models) ? src.models : []).filter(Boolean).map((m) => ({
     model: String(m.model || ''),
+    provider: String(m.provider || ''),
+    source: String(m.source || m.provider || ''),
     turns: num(m.turns),
     input: num(m.input),
     output: num(m.output),
     cacheRead: num(m.cacheRead),
     cacheWrite: num(m.cacheWrite),
     cost: num(m.cost),
+    costState: normalizeCostState(m.costState, m.cost),
+  }));
+
+  const providers = (Array.isArray(src.providers) ? src.providers : []).filter(Boolean).map((p) => ({
+    provider: String(p.provider || ''),
+    source: String(p.source || p.provider || ''),
+    state: ['available', 'absent', 'partial', 'unavailable'].includes(String(p.state))
+      ? String(p.state)
+      : 'unavailable',
+    prompts: num(p.prompts),
+    turns: num(p.turns),
+    tokens: num(p.tokens),
+    problems: (Array.isArray(p.problems) ? p.problems : []).filter(Boolean).map((problem) => ({
+      kind: String(problem.kind || ''),
+      message: String(problem.message || ''),
+    })),
   }));
 
   const sum = (k) => days.reduce((a, d) => a + d[k], 0);
@@ -178,6 +209,7 @@ function normalize(raw) {
     cacheWrite,
     tokens: t.tokens != null ? num(t.tokens) : input + output + cacheRead + cacheWrite,
     cost: t.cost != null ? num(t.cost) : sum('cost'),
+    costState: normalizeCostState(t.costState, t.cost != null ? t.cost : sum('cost')),
     commits: t.commits != null ? num(t.commits) : sum('commits'),
     cacheHit: t.cacheHit != null ? num(t.cacheHit) : (input + cacheRead > 0 ? (cacheRead / (input + cacheRead)) * 100 : 0),
     busiestDay: String(t.busiestDay || ''),
@@ -192,6 +224,7 @@ function normalize(raw) {
     hours,
     projects,
     models,
+    providers,
     totals,
   };
 }
@@ -631,7 +664,7 @@ function legend(items, shape) {
 }
 
 const TILE_HINT = {
-  Kosten: 'Zu API-Listenpreisen hochgerechnet. Mit einem Max-Abo zahlst du diesen Betrag nicht — die Zahl zeigt, was die Arbeit über die API gekostet hätte.',
+  Kosten: 'Nur Claude-Nutzung wird zu bekannten API-Listenpreisen hochgerechnet. Andere Anbieter bleiben ausdrücklich unbepreist. Ein Abo-Preis ist damit nicht gemeint.',
   Tokens: 'Inklusive Cache-Read: bei jedem Turn wird der gesamte bisherige Kontext erneut gelesen. Das summiert sich schnell in die Milliarden und ist kein zusätzlicher Verbrauch. „ohne Cache" zeigt die tatsächlich neu verarbeiteten Tokens.',
   Turns: 'Antworten der Agents, inklusive aller Subagents — deshalb ein Vielfaches deiner Prompts.',
 };
@@ -648,7 +681,7 @@ function projectFocusHtml(name, project, range) {
   const metrics = project
     ? `<div class="st-project-metrics">` +
       `<span><b>${esc(compact(project.tokens))}</b> Tokens</span>` +
-      `<span><b>${esc(money(project.cost))}</b> Kosten</span>` +
+      `<span><b>${esc(costValue(project.cost, project.costState))}</b> bekannte Kosten</span>` +
       `<span><b>${esc(nf0.format(project.prompts))}</b> Prompts</span>` +
       `<span><b>${esc(nf0.format(project.sessions))}</b> Sessions</span>` +
       `<span><b>${esc(nf0.format(project.commits))}</b> Commits</span></div>`
@@ -658,6 +691,49 @@ function projectFocusHtml(name, project, range) {
     `<div class="st-project-focus-head"><div><h2>${esc(name)}</h2>` +
     `<p>Projektwerte für ${esc(nf0.format(range))} Tage. Alle Kennzahlen und Diagramme darunter zeigen weiterhin alle Projekte.</p></div>` +
     `<button type="button" data-clear-project>Gesamtansicht</button></div>${metrics}</section>`;
+}
+
+const SOURCE_STATE_LABELS = {
+  available: 'verfügbar',
+  absent: 'nicht gefunden',
+  partial: 'teilweise',
+  unavailable: 'nicht verfügbar',
+};
+
+function coverageHtml(providers) {
+  if (!providers.length) return '';
+  const rows = providers.map((provider) => {
+    const messages = provider.problems.map((problem) => problem.message || problem.kind).filter(Boolean);
+    const firstProblem = messages[0] || '';
+    const more = messages.length > 1 ? ` (+${nf0.format(messages.length - 1)})` : '';
+    const title = messages.length ? ` title="${esc(messages.join(' · '))}"` : '';
+    return `<li class="st-source st-source-${esc(provider.state)}"${title}>` +
+      `<i aria-hidden="true"></i><span class="st-source-name">${esc(provider.source)}</span>` +
+      `<span class="st-source-state">${esc(SOURCE_STATE_LABELS[provider.state])}</span>` +
+      (firstProblem ? `<span class="st-source-problem">${esc(firstProblem + more)}</span>` : '') +
+      `</li>`;
+  }).join('');
+  return `<section class="st-coverage" aria-label="Abdeckung des Arbeitsverlaufs">` +
+    `<span class="st-coverage-label">Quellen</span><ul>${rows}</ul></section>`;
+}
+
+function emptyStatsHtml(data) {
+  const t = data.totals;
+  const incomplete = data.providers.filter((provider) => provider.state === 'partial' || provider.state === 'unavailable');
+  const commitNote = t.commits > 0
+    ? ` ${nf0.format(t.commits)} Git-${t.commits === 1 ? 'Commit wurde' : 'Commits wurden'} unabhängig davon gefunden.`
+    : '';
+  if (data.err) {
+    return `<div class="st-empty" role="status"><b>Arbeitsverlauf nicht verfügbar</b>` +
+      `Agent-Aktivität und Kosten lassen sich für diesen Zeitraum nicht bewerten.${esc(commitNote)}</div>`;
+  }
+  if (incomplete.length) {
+    const names = incomplete.map((provider) => provider.source).join(', ');
+    return `<div class="st-empty" role="status"><b>Keine bekannte Agent-Aktivität</b>` +
+      `${esc(names)} ${incomplete.length === 1 ? 'ist' : 'sind'} nicht vollständig lesbar. Die leere Ansicht ist daher keine Aussage über Inaktivität.${esc(commitNote)}</div>`;
+  }
+  return `<div class="st-empty" role="status"><b>Keine Agent-Aktivität im Zeitraum</b>` +
+    `In den verfügbaren Verläufen wurden keine Prompts oder Antworten gefunden.${esc(commitNote)}</div>`;
 }
 
 export function renderStats(el, stats, opts = {}) {
@@ -686,36 +762,58 @@ export function renderStats(el, stats, opts = {}) {
   const last = d.length ? longDate(d[d.length - 1].date) : '';
   const busiest = d.find((x) => x.date === t.busiestDay);
   const head =
-    `<div class="st-head"><div><h1>${developerIcon('claude')} Statistik</h1>` +
+    `<div class="st-head"><div><h1>Statistik</h1>` +
     `<div class="st-sub">${d.length ? `${esc(first)} – ${esc(last)} · <b>${esc(nf0.format(t.days))}</b> ${t.days === 1 ? 'Tag' : 'Tage'}` : 'kein Zeitraum'}` +
     `${busiest ? ` · aktivster Tag <b>${esc(busiest.weekday)}, ${esc(longDate(busiest.date))}</b> (${esc(nf0.format(busiest.prompts))} Prompts)` : ''}</div></div>` +
     `<div class="st-head-r">${rangeBtns}</div></div>` +
-    (data.err ? `<div class="st-err">${esc(data.err)}</div>` : '');
+    (data.err ? `<div class="st-err" role="alert">${esc(data.err)}</div>` : '') +
+    coverageHtml(data.providers);
 
-  if (t.prompts <= 0) {
-    el.innerHTML = head + projectFocus +
-      `<div class="st-empty"><b>Noch keine Aktivität im Zeitraum</b>` +
-      `Sobald du Sessions startest und Prompts schickst, füllen sich hier Verlauf, Arbeitsrhythmus, Projekte und Kosten.</div>`;
+  if (t.prompts <= 0 && t.turns <= 0) {
+    el.innerHTML = head + projectFocus + emptyStatsHtml(data);
     wireRange(el, opts);
     wireProject(el, opts);
     el.__statsCleanup = () => {};
     return;
   }
 
-  const modelsSorted = data.models.slice().sort((a, b) => b.cost - a.cost);
+  const modelKey = (model) => `${model.provider}\u0000${model.model}`;
+  const modelsSorted = data.models.slice().sort((a, b) => {
+    const pricedA = a.costState === 'priced' || a.costState === 'partial';
+    const pricedB = b.costState === 'priced' || b.costState === 'partial';
+    if (pricedA !== pricedB) return pricedA ? -1 : 1;
+    if (a.cost !== b.cost) return b.cost - a.cost;
+    return (b.input + b.output + b.cacheRead + b.cacheWrite) - (a.input + a.output + a.cacheRead + a.cacheWrite);
+  });
   const slotOrder = data.models.slice().sort((a, b) => {
     const fr = familyRank(a.model) - familyRank(b.model);
-    return fr || String(a.model).localeCompare(String(b.model));
-  }).map((m) => m.model);
-  const slotOf = (id) => {
-    const i = slotOrder.indexOf(id);
+    return fr || modelKey(a).localeCompare(modelKey(b));
+  }).map(modelKey);
+  const slotOf = (model) => {
+    const i = slotOrder.indexOf(modelKey(model));
     return i < 0 ? SERIES.length - 1 : i % SERIES.length;
   };
-  const modelCost = modelsSorted.reduce((a, m) => a + m.cost, 0);
+  const modelCost = modelsSorted.reduce((sum, model) =>
+    model.costState === 'priced' || model.costState === 'partial' ? sum + model.cost : sum, 0);
   const projects = data.projects.slice().sort((a, b) => b.tokens - a.tokens);
   const activeCount = projects.filter((p) => p.active > 0).length;
   const avgPrompts = t.days > 0 ? t.prompts / t.days : 0;
   const perPrompt = t.prompts > 0 ? t.cost / t.prompts : 0;
+  const knownCost = t.costState === 'priced' || t.costState === 'partial';
+  const costTileNote = t.costState === 'priced'
+    ? `Claude-Listenpreise · ${money(perPrompt)} pro Prompt`
+    : t.costState === 'partial'
+      ? 'bekannter Claude-Teilbetrag; weitere Nutzung fehlt'
+      : t.costState === 'unpriced'
+        ? 'für diese Anbieter ist kein Preis hinterlegt'
+        : 'keine bepreisbare Nutzung';
+  const costCard = knownCost
+    ? `<div class="st-card"><div class="st-card-head"><h2>${t.costState === 'partial' ? 'Bekannte Kosten pro Tag' : 'Kosten pro Tag'}</h2>` +
+      `<span class="st-note">${t.costState === 'partial' ? 'Claude-Teilbetrag; nicht bepreiste oder nicht lesbare Nutzung fehlt' : 'Claude API-Listenpreise · Tageswerte oben, kumulierter Verlauf unten'}</span></div>` +
+      `<div class="st-plot" data-plot="cost"></div></div>`
+    : `<div class="st-card st-cost-missing"><div class="st-card-head"><h2>Kosten</h2></div>` +
+      `<p>${t.costState === 'unpriced' ? 'Die Aktivität ist bekannt, für ihre Anbieter ist aber kein Preis hinterlegt.' : 'Im Zeitraum liegt keine bepreisbare Token-Nutzung vor.'}</p></div>`;
+  const modelCostPartial = modelsSorted.some((model) => model.costState === 'partial' || model.costState === 'unpriced');
 
   el.innerHTML = head + projectFocus +
     `<div class="st-tiles">` +
@@ -723,7 +821,7 @@ export function renderStats(el, stats, opts = {}) {
     tileHtml('Turns', compact(t.turns), t.prompts > 0 ? `${nf1.format(t.turns / t.prompts)} pro Prompt` : '') +
     tileHtml('Sessions', compact(t.sessions), activeCount ? `${nf0.format(activeCount)} Projekte gerade aktiv` : 'keine aktive Session') +
     tileHtml('Tokens', compact(t.tokens), `${compact(t.input + t.output)} ohne Cache`) +
-    tileHtml('Kosten', money(t.cost), `hochgerechnet · ${money(perPrompt)} pro Prompt`) +
+    tileHtml('Kosten', costValue(t.cost, t.costState), costTileNote) +
     tileHtml('Cache-Treffer', pct(t.cacheHit, true), `${compact(t.cacheRead)} gelesen`) +
     tileHtml('Serie', nf0.format(t.streak), `${t.streak === 1 ? 'Tag' : 'Tage'} in Folge aktiv`) +
     `<div class="st-tile wide" title="Nur Commits, die unter deiner git-Identität stehen — fremde Commits im selben Repository zählen nicht mit."><div class="tx"><div class="k">Commits</div>` +
@@ -746,9 +844,7 @@ export function renderStats(el, stats, opts = {}) {
       `</div></div></div>` +
       `<div class="st-plot" data-plot="tokens"></div></div>` +
 
-    `<div class="st-card"><div class="st-card-head"><h2>Kosten pro Tag</h2>` +
-      `<span class="st-note">Tagesbalken oben, kumulierter Verlauf unten — gleiche Zeitachse, eigene Skala</span></div>` +
-      `<div class="st-plot" data-plot="cost"></div></div>` +
+    costCard +
 
     `<div class="st-card"><div class="st-card-head"><h2>Arbeitsrhythmus</h2>` +
       `<span class="st-note">Prompts nach Wochentag und Stunde</span>` +
@@ -761,8 +857,8 @@ export function renderStats(el, stats, opts = {}) {
       `<div class="st-card"><div class="st-card-head"><h2>Projekte</h2>` +
         `<span class="st-note">nach Tokens${activeCount ? ` · <span style="color:var(--accent)">●</span> aktive Session` : ''}</span></div>` +
         `<div class="st-plot" data-plot="projects"></div></div>` +
-      `<div class="st-card"><div class="st-card-head"><h2>${developerIcon('claude')} Modelle</h2>` +
-        `<span class="st-note">Kostenanteil</span></div>` +
+      `<div class="st-card"><div class="st-card-head"><h2>Modelle</h2>` +
+        `<span class="st-note">${modelCostPartial ? 'bekannte Kosten; weitere Nutzung ohne Preis' : 'Kostenanteil'}</span></div>` +
         `<div class="st-plot" data-plot="models"></div>` +
         modelTable(modelsSorted, modelCost, slotOf) +
       `</div>` +

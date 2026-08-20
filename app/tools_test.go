@@ -28,6 +28,15 @@ func TestExtractURLs(t *testing.T) {
 	}
 }
 
+func TestKnownWorktreePathDeniesUnknownRepositoryFacts(t *testing.T) {
+	_, _, _, statePath := configureHistoryAppTest(t)
+	unknownPath := filepath.Join(t.TempDir(), "missing-repository")
+	writeAppState(t, statePath, core.State{Projects: []core.Project{{ID: core.ProjectID("unknown"), Name: "Unknown", Path: unknownPath}}})
+	if knownWorktreePath(unknownPath) {
+		t.Fatal("unknown repository topology authorized a Worktree path")
+	}
+}
+
 func TestTimelineUsesNormalizedWorkHistoryForAllProviders(t *testing.T) {
 	home, codexHome, projectPath, statePath := configureHistoryAppTest(t)
 	state := core.State{
@@ -64,15 +73,18 @@ func TestTimelineUsesNormalizedWorkHistoryForAllProviders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 4 {
-		t.Fatalf("Timeline entries = %d, want four normalized primary prompts: %#v", len(got), got)
+	if len(got.Entries) != 4 {
+		t.Fatalf("Timeline entries = %d, want four normalized primary prompts: %#v", len(got.Entries), got)
 	}
 	bySource := map[string]TimelineEntry{}
-	for _, entry := range got {
+	for _, entry := range got.Entries {
 		bySource[entry.Source] = entry
 		if entry.Project != "Stable project" {
 			t.Fatalf("Timeline used stale name/path inference: %#v", entry)
 		}
+	}
+	if len(got.Sources) != 4 {
+		t.Fatalf("Timeline coverage = %#v, want all four providers", got.Sources)
 	}
 	want := map[string]struct{ agent, text string }{
 		timelineSourceClaude:  {"Claude agent", "Claude prompt"},
@@ -86,7 +98,7 @@ func TestTimelineUsesNormalizedWorkHistoryForAllProviders(t *testing.T) {
 			t.Fatalf("%s entry = %#v", source, entry)
 		}
 	}
-	if strings.Contains(strings.Join([]string{got[0].Text, got[1].Text, got[2].Text, got[3].Text}, "|"), "delegated") {
+	if strings.Contains(strings.Join([]string{got.Entries[0].Text, got.Entries[1].Text, got.Entries[2].Text, got.Entries[3].Text}, "|"), "delegated") {
 		t.Fatalf("Timeline included delegated coding-agent work: %#v", got)
 	}
 }

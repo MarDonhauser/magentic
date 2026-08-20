@@ -120,7 +120,9 @@ function legendHtml(branches, mainLane, mainName, opts) {
     const behind = Number(b.behind) || 0;
     const ab = isMain
       ? ''
-      : `<span class="gg-ab">${ahead ? `<span class="gg-ahead" title="${ahead} Commits vor ${esc(mainName)}">↑${ahead}</span>` : ''}${behind ? `<span class="gg-behind" title="${behind} Commits hinter ${esc(mainName)}">↓${behind}</span>` : ''}${!ahead && !behind ? '<span title="deckungsgleich mit ' + esc(mainName) + '">=</span>' : ''}</span>`;
+      : (b.divergenceKnown
+          ? `<span class="gg-ab">${ahead ? `<span class="gg-ahead" title="${ahead} Commits vor ${esc(mainName)}">↑${ahead}</span>` : ''}${behind ? `<span class="gg-behind" title="${behind} Commits hinter ${esc(mainName)}">↓${behind}</span>` : ''}${!ahead && !behind ? '<span title="deckungsgleich mit ' + esc(mainName) + '">=</span>' : ''}</span>`
+          : `<span class="gg-ab gg-ab-unknown" title="Abstand zu ${esc(mainName)} konnte nicht ermittelt werden">?</span>`);
     const merged = b.merged && !isMain ? `<span class="gg-badge gg-merged">merged</span>` : '';
     const wt = b.worktree
       ? `<span class="gg-wt-hint" title="Worktree ${esc(b.worktree)}">${ico('folder')}${esc(baseName(b.worktree))}</span>`
@@ -286,6 +288,9 @@ export function renderGitGraph(el, graph, opts = {}) {
 
   if (g.err) {
     parts.push(`<div class="gg-note gg-err">${ico('warn')}<span>Git-Graph konnte nicht gelesen werden.</span><span class="gg-err-msg">${esc(g.err)}</span></div>`);
+  } else if (Array.isArray(g.problems) && g.problems.length) {
+    const details = g.problems.map(problem => problem?.message || problem?.operation || '').filter(Boolean).join('; ');
+    parts.push(`<div class="gg-note gg-err gg-partial">${ico('warn')}<span>Git-Fakten sind teilweise unbekannt.</span><span class="gg-err-msg">${esc(details)}</span></div>`);
   }
   if (branches.length) parts.push(legendHtml(branches, mainLane, mainName, opts));
 

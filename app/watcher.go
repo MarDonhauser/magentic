@@ -1,8 +1,7 @@
 package main
 
 import (
-	"os"
-	"strconv"
+	"context"
 	"time"
 
 	"magentic/core"
@@ -20,124 +19,51 @@ func (a *App) getActiveTerm() string {
 	return a.activeTerm
 }
 
-func (a *App) storeStatuses(st map[string]core.AgentStatus, ct map[string]string, act map[string]time.Time) {
-	a.statusMu.Lock()
-	a.statusCache = st
-	a.contentCache = ct
-	a.activityCache = act
-	a.statusAt = time.Now()
-	a.statusMu.Unlock()
+func cloneObservation(snapshot core.ObservationSnapshot) core.ObservationSnapshot {
+	copyOfSnapshot := snapshot
+	copyOfSnapshot.Sessions = append([]core.SessionObservation(nil), snapshot.Sessions...)
+	copyOfSnapshot.Problems = append([]core.ObservationProblem(nil), snapshot.Problems...)
+	return copyOfSnapshot
 }
 
-func (a *App) statusesFor(agents []core.Agent) (map[string]core.AgentStatus, map[string]string, map[string]time.Time) {
-	a.statusMu.Lock()
-	st, ct, act, at := a.statusCache, a.contentCache, a.activityCache, a.statusAt
-	a.statusMu.Unlock()
-	if time.Since(at) > 5*time.Second {
-		s, c, ac := core.CollectStatuses(agents)
-		a.storeStatuses(s, c, ac)
-		return s, c, ac
-	}
-	var missing []core.Agent
-	for _, ag := range agents {
-		if _, ok := st[ag.Name]; !ok {
-			missing = append(missing, ag)
-		}
-	}
-	if len(missing) == 0 {
-		return st, ct, act
-	}
-	ms, mc, ma := core.CollectStatuses(missing)
-	outS := make(map[string]core.AgentStatus, len(st)+len(ms))
-	outC := make(map[string]string, len(ct)+len(mc))
-	outA := make(map[string]time.Time, len(act)+len(ma))
-	for k, v := range st {
-		outS[k] = v
-	}
-	for k, v := range ms {
-		outS[k] = v
-	}
-	for k, v := range ct {
-		outC[k] = v
-	}
-	for k, v := range mc {
-		outC[k] = v
-	}
-	for k, v := range act {
-		outA[k] = v
-	}
-	for k, v := range ma {
-		outA[k] = v
-	}
-	return outS, outC, outA
+func (a *App) storeObservation(snapshot core.ObservationSnapshot) {
+	a.observationMu.Lock()
+	a.observation = cloneObservation(snapshot)
+	a.observationAt = time.Now()
+	a.observationMu.Unlock()
 }
 
-// Eine einmalige Benachrichtigung reicht nicht — sie ist nach ein paar
-// Sekunden weg und die Pause damit vergessen. Deshalb wiederholt sich die
-// Erinnerung und wird lauter, je länger sie ignoriert wird.
-const (
-	breakRemindEvery   = 8 * time.Minute
-	breakInsistAfter   = 2
-	breakAttentionText = "Steh mal auf — ein paar Schritte reichen."
-)
-
-func (a *App) checkBreak(st *core.State, statuses map[string]core.AgentStatus, activity map[string]time.Time) {
-	adv := core.BreakStatus(st, statuses, activity)
-	if !adv.Enabled {
-		return
-	}
-	switch adv.Level {
-	case core.BreakLevelNone, core.BreakLevelHint, core.BreakLevelResting:
-		if a.breakNotified != "" {
-			cancelAttention()
+func (a *App) observationFor(sessions []core.Session, fresh bool) core.ObservationSnapshot {
+	if !fresh {
+		a.observationMu.Lock()
+		cached, cachedAt := cloneObservation(a.observation), a.observationAt
+		a.observationMu.Unlock()
+		if time.Since(cachedAt) <= 5*time.Second && observationCovers(cached, sessions) {
+			return cached
 		}
-		a.breakNotified = ""
-		a.breakReminders = 0
-		return
 	}
-	if adv.Snoozed {
-		return
+	snapshot := core.Observe(context.Background(), sessions)
+	a.storeObservation(snapshot)
+	return snapshot
+}
+
+func observationCovers(snapshot core.ObservationSnapshot, sessions []core.Session) bool {
+	if len(snapshot.Sessions) != len(sessions) {
+		return false
 	}
-	// Bei "due" erst stören, wenn er ohnehin auf die Agents wartet; bei
-	// "overdue" auch mittendrin.
-	if adv.Level == core.BreakLevelDue && !adv.GoodMoment {
-		return
+	observed := make(map[core.SessionID]bool, len(snapshot.Sessions))
+	for _, session := range snapshot.Sessions {
+		observed[session.SessionID] = true
 	}
-	// Belegtes Mikro heißt Meeting: nicht stören und vor allem nicht beim
-	// Screen-Sharing nach vorne drängen. Die Erinnerung kommt danach normal.
-	if micInUse() {
-		if !a.meetingQuiet {
-			core.Logf("break: Mikrofon belegt (Meeting?) — Erinnerung zurückgestellt")
-			a.meetingQuiet = true
+	for _, session := range sessions {
+		if session.ID == "" || !observed[session.ID] {
+			return false
 		}
-		return
 	}
-	a.meetingQuiet = false
-	first := adv.Level != a.breakNotified
-	if !first && time.Since(a.breakRemindedAt) < breakRemindEvery {
-		return
-	}
-	if first {
-		a.breakReminders = 0
-	}
-	a.breakReminders++
-	a.breakNotified = adv.Level
-	a.breakRemindedAt = time.Now()
-
-	core.NotifyDesktop("magentic · Zeit für eine Pause", breakAttentionText, "Purr")
-
-	insist := adv.Level == core.BreakLevelOverdue || a.breakReminders >= breakInsistAfter
-	requestAttention(insist)
-	// Nur wenn er ohnehin auf die Agents wartet, sich nach vorne drängen —
-	// mitten im Tippen wäre das eine Zumutung.
-	if insist && adv.GoodMoment && a.breakReminders >= breakInsistAfter+1 {
-		bringToFront()
-	}
+	return true
 }
 
 func (a *App) watchLoop() {
-	prev := map[string]core.AgentStatus{}
-	pending := map[string]core.AgentStatus{}
 	var lastErrLog time.Time
 	for {
 		time.Sleep(4 * time.Second)
@@ -149,52 +75,69 @@ func (a *App) watchLoop() {
 			}
 			continue
 		}
-		statuses, contents, activity := core.CollectStatuses(st.Agents)
-		a.storeStatuses(statuses, contents, activity)
-		if len(st.Agents) > 0 {
-			dead := 0
-			for _, s := range statuses {
-				if s == core.StatusDead {
-					dead++
+		if discovered := core.DiscoverNew(st); len(discovered) > 0 {
+			changed, changeErr := core.OpenRegistry(core.StatePath()).Change(context.Background(), core.AddDiscoveredSessions(discovered))
+			if changeErr != nil {
+				if time.Since(lastErrLog) > time.Minute {
+					core.Logf("watchLoop: Session-Discovery fehlgeschlagen: %v", changeErr)
+					lastErrLog = time.Now()
 				}
-			}
-			if dead == len(st.Agents) && time.Since(lastErrLog) > time.Minute {
-				core.Logf("watchLoop: alle %d Agents dead — tmux nicht erreichbar? PATH=%s", dead, os.Getenv("PATH"))
-				lastErrLog = time.Now()
+			} else {
+				st = changed.Snapshot.MutableState()
 			}
 		}
-		blocked := 0
-		for _, s := range statuses {
-			if s == core.StatusBlocked {
-				blocked++
+		snapshot := core.Observe(context.Background(), st.Agents)
+		a.storeObservation(snapshot)
+		if len(st.Agents) > 0 && snapshot.Availability == core.ObservationUnavailable && time.Since(lastErrLog) > time.Minute {
+			problem := "tmux unavailable"
+			if len(snapshot.Problems) > 0 {
+				problem = snapshot.Problems[0].Operation + ": " + snapshot.Problems[0].Message
+			}
+			core.Logf("watchLoop: Observation unavailable for %d Sessions (%s)", len(st.Agents), problem)
+			lastErrLog = time.Now()
+		}
+		activeName := a.getActiveTerm()
+		labels := make(map[core.SessionID]string, len(st.Agents))
+		var activeID core.SessionID
+		for _, session := range st.Agents {
+			labels[session.ID] = session.Name
+			if session.Name == activeName {
+				activeID = session.ID
 			}
 		}
-		label := ""
-		if blocked > 0 {
-			label = strconv.Itoa(blocked)
+		quiet := core.AttentionQuietNone
+		if micInUse() {
+			quiet = core.AttentionQuietMeeting
 		}
-		setDockBadge(label)
+		plan := a.attentionPlanner().Plan(core.AttentionInput{
+			Observation:   snapshot,
+			ActiveSession: activeID,
+			SessionLabels: labels,
+			Break:         core.BreakStatusFromObservation(st, snapshot),
+			Deployments:   a.takeDeploymentOutcomes(),
+			Quiet:         quiet,
+			Now:           time.Now(),
+		})
+		executeAttentionPlan(plan)
+	}
+}
 
-		a.checkBreak(st, statuses, activity)
-
-		active := a.getActiveTerm()
-		for name, s := range statuses {
-			if p, ok := pending[name]; ok {
-				delete(pending, name)
-				if s == p && name != active {
-					core.NotifyDesktop("magentic · "+name, "Agent ist fertig — bereit für den nächsten Prompt", "Ping")
-				}
-			}
-			pv, seen := prev[name]
-			if !seen || pv == s || name == active {
-				continue
-			}
-			if s == core.StatusBlocked && (pv == core.StatusRunning || pv == core.StatusAgents || pv == core.StatusIdle) {
-				core.NotifyDesktop("magentic · "+name, "Agent wartet auf deine Eingabe", "Glass")
-			} else if (pv == core.StatusRunning || pv == core.StatusAgents) && s == core.StatusIdle {
-				pending[name] = core.StatusIdle
-			}
-		}
-		prev = statuses
+func executeAttentionPlan(plan core.AttentionPlan) {
+	if plan.DockBadge.Update {
+		setDockBadge(plan.DockBadge.Label)
+	}
+	for _, notification := range plan.Notifications {
+		core.NotifyDesktop(notification.Title, notification.Message, notification.Sound)
+	}
+	switch plan.NativeAttention {
+	case core.NativeAttentionCancel:
+		cancelAttention()
+	case core.NativeAttentionInformational:
+		requestAttention(false)
+	case core.NativeAttentionCritical:
+		requestAttention(true)
+	}
+	if plan.BringToFront {
+		bringToFront()
 	}
 }

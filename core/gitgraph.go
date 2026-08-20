@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strconv"
@@ -30,49 +31,80 @@ type GraphCommit struct {
 }
 
 type GraphBranch struct {
-	Name     string   `json:"name"`
-	Lane     int      `json:"lane"`
-	IsMain   bool     `json:"isMain"`
-	Worktree string   `json:"worktree,omitempty"`
-	Ahead    int      `json:"ahead"`
-	Behind   int      `json:"behind"`
-	Merged   bool     `json:"merged"`
-	Agents   []string `json:"agents,omitempty"`
+	Name            string   `json:"name"`
+	Lane            int      `json:"lane"`
+	IsMain          bool     `json:"isMain"`
+	Worktree        string   `json:"worktree,omitempty"`
+	Ahead           int      `json:"ahead"`
+	Behind          int      `json:"behind"`
+	DivergenceKnown bool     `json:"divergenceKnown"`
+	Merged          bool     `json:"merged"`
+	Agents          []string `json:"agents,omitempty"`
 }
 
 type GitGraph struct {
-	Project  string        `json:"project"`
-	Main     string        `json:"main"`
-	Lanes    int           `json:"lanes"`
-	Commits  []GraphCommit `json:"commits"`
-	Branches []GraphBranch `json:"branches"`
-	Truncate bool          `json:"truncated"`
-	Err      string        `json:"err,omitempty"`
+	ProjectID    ProjectID           `json:"projectId"`
+	Project      string              `json:"project"`
+	Main         string              `json:"main"`
+	Lanes        int                 `json:"lanes"`
+	Commits      []GraphCommit       `json:"commits"`
+	Branches     []GraphBranch       `json:"branches"`
+	Truncate     bool                `json:"truncated"`
+	Availability RepositoryKnowledge `json:"availability"`
+	Problems     []RepositoryProblem `json:"problems,omitempty"`
+	Err          string              `json:"err,omitempty"`
 }
 
 const graphFmt = "%H\x1f%h\x1f%P\x1f%s\x1f%an\x1f%ct\x1f%D\x1e"
 
 func BuildGitGraph(s *State, projName string, limit int) GitGraph {
-	g := GitGraph{Project: projName}
+	g := GitGraph{Project: projName, Availability: RepositoryUnknown}
 	proj := s.ProjectByName(projName)
 	if proj == nil {
 		g.Err = "Projekt nicht gefunden"
 		return g
 	}
+	g.ProjectID = proj.ID
 	if limit <= 0 || limit > 400 {
 		limit = 120
 	}
-	main := proj.MainBranch
-	wts := CollectWorktreesCached(proj.Path)
-	if main == "" && len(wts) > 0 {
-		main = wts[0].Branch
+	survey, surveyErr := NewRepositories().Survey(context.Background(), []Project{*proj})
+	if surveyErr != nil {
+		g.Err = "Repository-Status konnte nicht gelesen werden"
+		g.Problems = append(g.Problems, RepositoryProblem{Operation: "survey", Message: surveyErr.Error()})
+		return g
+	}
+	if len(survey.Projects) != 1 {
+		g.Err = "Repository-Status ist unvollständig"
+		return g
+	}
+	repository := survey.Projects[0]
+	g.Availability = repository.Presence
+	if repository.Problem != nil {
+		g.Problems = append(g.Problems, *repository.Problem)
+	}
+	if !repository.Worktrees.Known() {
+		g.Err = "Worktree-Status ist nicht verfügbar"
+		if repository.Worktrees.Problem != nil {
+			g.Problems = append(g.Problems, *repository.Worktrees.Problem)
+		}
+		return g
+	}
+	main := ""
+	if repository.MainBranch.Known() {
+		main = repository.MainBranch.Value
+	} else if repository.MainBranch.Problem != nil {
+		g.Problems = append(g.Problems, *repository.MainBranch.Problem)
 	}
 	g.Main = main
 
 	wtByBranch := map[string]string{}
-	for _, wt := range wts {
-		if wt.Branch != "" {
-			wtByBranch[wt.Branch] = wt.Path
+	divergenceByBranch := map[string]RepositoryFact[RepositoryDivergence]{}
+	for _, wt := range repository.Worktrees.Value {
+		if wt.Checkout.Known() && wt.Checkout.Value.Kind == RepositoryBranchCheckout && wt.Checkout.Value.Branch != "" {
+			branch := wt.Checkout.Value.Branch
+			wtByBranch[branch] = wt.Path
+			divergenceByBranch[branch] = wt.Divergence
 		}
 	}
 	agentsByDir := map[string][]string{}
@@ -101,7 +133,8 @@ func BuildGitGraph(s *State, projName string, limit int) GitGraph {
 			g.Lanes = c.Lane + 1
 		}
 	}
-	g.Branches = collectGraphBranches(proj.Path, main, commits, wtByBranch, agentsByDir)
+	g.Branches = collectGraphBranches(proj.Path, main, commits, wtByBranch, agentsByDir, divergenceByBranch)
+	g.Availability = RepositoryKnown
 	return g
 }
 
@@ -221,16 +254,18 @@ func assignLanes(commits []GraphCommit) {
 	}
 }
 
-func aheadBehindRefs(dir, base, ref string) (ahead, behind int) {
+func aheadBehindRefs(dir, base, ref string) (ahead, behind int, known bool) {
 	out, err := GitCmdCached(dir, "rev-list", "--left-right", "--count", base+"..."+ref)
 	if err != nil {
-		return 0, 0
+		return 0, 0, false
 	}
-	fmt.Sscanf(strings.TrimSpace(out), "%d\t%d", &behind, &ahead)
-	return ahead, behind
+	if _, err := fmt.Sscanf(strings.TrimSpace(out), "%d\t%d", &behind, &ahead); err != nil {
+		return 0, 0, false
+	}
+	return ahead, behind, true
 }
 
-func collectGraphBranches(projPath, main string, commits []GraphCommit, wtByBranch map[string]string, agentsByDir map[string][]string) []GraphBranch {
+func collectGraphBranches(projPath, main string, commits []GraphCommit, wtByBranch map[string]string, agentsByDir map[string][]string, divergenceByBranch map[string]RepositoryFact[RepositoryDivergence]) []GraphBranch {
 	laneOf := map[string]int{}
 	for _, c := range commits {
 		for _, r := range c.Refs {
@@ -259,7 +294,17 @@ func collectGraphBranches(projPath, main string, commits []GraphCommit, wtByBran
 			b.Agents = agentsByDir[wt]
 		}
 		if !b.IsMain && main != "" {
-			b.Ahead, b.Behind = aheadBehindRefs(projPath, main, name)
+			if divergence, exists := divergenceByBranch[name]; exists {
+				if divergence.Known() {
+					b.Ahead = divergence.Value.Ahead
+					b.Behind = divergence.Value.Behind
+					b.DivergenceKnown = true
+				}
+			} else {
+				b.Ahead, b.Behind, b.DivergenceKnown = aheadBehindRefs(projPath, main, name)
+			}
+		} else if b.IsMain {
+			b.DivergenceKnown = true
 		}
 		out = append(out, b)
 	}

@@ -13,7 +13,7 @@ import {
   WorktreeDiff, SessionPreview, SearchTranscripts, SessionLinks, SetActiveTerm,
   PickFolder, AddProject, RemoveProject, ReorderProjects, SaveImage, Timeline,
   Zeitgeist, ZeitgeistStart, ZeitgeistPause, ZeitgeistResume, ZeitgeistStop,
-  MarkSeen, GitGraph, Board, Stats, RevealPath, StartBoardItem, NewDockSession, BuildInfo,
+  MarkSeen, GitGraph, Board, BoardArchive, Stats, StartBoardItem, NewDockSession, BuildInfo,
   Breaks, BreakHeartbeat, TakeBreak, EndBreak, SnoozeBreak, BreakConfig, SetBreakConfig, BreakOver,
 } from '../wailsjs/go/main/App';
 import { EventsOn, EventsOff, BrowserOpenURL, ClipboardSetText } from '../wailsjs/runtime/runtime';
@@ -590,7 +590,7 @@ function showSearch() {
   renderSidebar();
 }
 
-let graphProject = null, boardProject = null, statsProject = '', statsRange = 30;
+let graphProject = null, boardProject = null, boardArchive = false, statsProject = '', statsRange = 30;
 let graphBusy = false, boardBusy = false, statsBusy = false;
 
 function projectNames() {
@@ -658,24 +658,25 @@ async function loadBoard() {
   const el = $('board-view');
   const head = `<div class="view-head"><h2>${developerIcon('markdown')} Board</h2>` +
     projectTabs(boardProject, 'boardproj') +
+    `<button class="btn tiny${boardArchive ? ' on' : ''}" data-act="boardarchive" aria-pressed="${boardArchive}" title="Archivierte Specs ${boardArchive ? 'ausblenden' : 'einblenden'}">Archiv</button>` +
     `<button class="btn tiny" data-act="boardreload" title="Specs neu einlesen">↻</button></div>`;
   if (!boardProject) { el.innerHTML = head + `<div class="none" style="padding:24px">Kein Projekt registriert.</div>`; return; }
   if (boardBusy) return;
   boardBusy = true;
-  el.innerHTML = head + `<div class="none" style="padding:24px">lese Specs…</div>`;
+  el.innerHTML = head + `<div class="none" style="padding:24px">${boardArchive ? 'lese aktuelle und archivierte Specs' : 'lese aktuelle Specs'}…</div>`;
   let b = null;
-  try { b = await Board(boardProject); }
+  try { b = boardArchive ? await BoardArchive(boardProject, 25) : await Board(boardProject); }
   catch (err) { b = { err: String(err), items: [], kind: 'none' }; }
   boardBusy = false;
   if (view !== 'board') return;
   el.innerHTML = head + `<div id="board-body"></div>`;
   renderBoard($('board-body'), b, {
+    includeArchived: boardArchive,
     avatar: sessionAvatar,
     onOpenSession: name => openSession(name),
-    onReveal: path => RevealPath(path).catch(err => toast('Fehler: ' + err, true)),
     onStart: async item => {
       try {
-        const name = await act(StartBoardItem(boardProject, item.id, item.path),
+        const name = await act(StartBoardItem(boardProject, item.startToken),
           n => `Session „${n}" für „${item.title}" gestartet`);
         if (name) setTimeout(() => openSession(name), 400);
       } catch { /* toast zeigt den Fehler */ }
@@ -744,6 +745,10 @@ for (const id of ['graph-view', 'board-view']) {
     if (b.dataset.act === 'boardproj') showBoard(b.dataset.project);
     if (b.dataset.act === 'graphreload') loadGraph();
     if (b.dataset.act === 'boardreload') loadBoard();
+    if (b.dataset.act === 'boardarchive') {
+      boardArchive = !boardArchive;
+      loadBoard();
+    }
   });
 }
 
@@ -2123,6 +2128,7 @@ $('search-results').addEventListener('click', e => {
 });
 
 let tlEntries = [];
+let tlSources = [];
 let tlTimer = null;
 let tlLoading = false;
 
@@ -2153,7 +2159,9 @@ async function refreshTimeline() {
   if (tlLoading) return;
   tlLoading = true;
   try {
-    tlEntries = (await Timeline()) || [];
+    const result = (await Timeline()) || {};
+    tlEntries = Array.isArray(result.entries) ? result.entries : [];
+    tlSources = Array.isArray(result.sources) ? result.sources : [];
     renderTimeline();
   } catch (err) {
     $('tl-body').innerHTML = `<div class="none">Fehler: ${esc(err)}</div>`;
@@ -2163,8 +2171,12 @@ async function refreshTimeline() {
 
 function renderTimeline() {
   const body = $('tl-body');
+  const degraded = tlSources.filter(source => ['partial', 'unavailable'].includes(source?.state));
+  const coverage = degraded.length
+    ? `<div class="tl-coverage" role="status">${icon('warn')}<span><strong>Verlauf teilweise verfügbar.</strong> ${esc(degraded.map(source => source.source).join(', '))} konnte${degraded.length === 1 ? '' : 'n'} nicht vollständig gelesen werden.</span></div>`
+    : '';
   if (!tlEntries.length) {
-    body.innerHTML = '<div class="none">keine Prompts aus unterstützten Sessions in den letzten 7 Tagen</div>';
+    body.innerHTML = coverage + `<div class="none">${degraded.length ? 'keine Prompts in den lesbaren Quellen' : 'keine Prompts aus unterstützten Sessions in den letzten 7 Tagen'}</div>`;
     return;
   }
   let html = '', day = '';
@@ -2181,7 +2193,7 @@ function renderTimeline() {
       `<div class="tl-text">${esc(en.text)}</div></div></button>`;
   });
   const st = body.scrollTop;
-  body.innerHTML = html;
+  body.innerHTML = coverage + html;
   body.scrollTop = st;
 }
 

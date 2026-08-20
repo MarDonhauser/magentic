@@ -393,3 +393,17 @@ func TestRepositoriesChangeReportsUnknownPostcondition(t *testing.T) {
 		t.Fatalf("Change(create) result = %#v", result)
 	}
 }
+
+func TestRepositoryWorktreeForDirectoryPrefersContainingManagedWorktree(t *testing.T) {
+	projectPath := filepath.Join(t.TempDir(), "project")
+	managedPath := filepath.Join(filepath.Dir(projectPath), "project-agents", "topic")
+	worktrees := []RepositoryWorktree{{Path: projectPath, Main: true}, {Path: managedPath}}
+
+	worktree, found := repositoryWorktreeForDirectory(worktrees, filepath.Join(managedPath, "internal", "package"))
+	if !found || !sameRepositoryPath(worktree.Path, managedPath) {
+		t.Fatalf("repositoryWorktreeForDirectory() = %#v, %v", worktree, found)
+	}
+	if _, found := repositoryWorktreeForDirectory(worktrees, filepath.Join(filepath.Dir(projectPath), "outside")); found {
+		t.Fatal("unrelated directory was assigned to a Worktree")
+	}
+}

@@ -4,12 +4,23 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sync"
 )
+
+// mutableStateSaveMu serializes the complete read/commit/copy-back sequence of
+// the legacy mutable State Adapter. Unlike Registry.Change, State.Save may be
+// called concurrently with the same State pointer (or States that share slice
+// storage), so the Registry's file lock alone cannot protect the in-memory
+// value while it is cloned and replaced.
+var mutableStateSaveMu sync.Mutex
 
 func saveMutableState(state *State) error {
 	if state == nil {
 		return fmt.Errorf("nil Registry state")
 	}
+	mutableStateSaveMu.Lock()
+	defer mutableStateSaveMu.Unlock()
+
 	path := state.registryPath
 	if path == "" {
 		path = StatePath()

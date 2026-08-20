@@ -357,6 +357,52 @@ func BreakStatus(s *State, statuses map[string]AgentStatus, activity map[string]
 	return evaluateBreak(false, s, statuses, activity)
 }
 
+// BreakStatusFromObservation derives break timing and "good moment" policy
+// from one coherent Observation cycle. Stable SessionIDs also keep activity
+// continuity when a Session's display name changes.
+func BreakStatusFromObservation(s *State, snapshot ObservationSnapshot) BreakAdvice {
+	statuses := make(map[string]AgentStatus)
+	activity := make(map[string]time.Time)
+	byID := make(map[SessionID]SessionObservation, len(snapshot.Sessions))
+	for _, observed := range snapshot.Sessions {
+		if observed.SessionID != "" {
+			byID[observed.SessionID] = observed
+		}
+	}
+	if s == nil {
+		for i, observed := range snapshot.Sessions {
+			key := string(observed.SessionID)
+			if key == "" {
+				key = fmt.Sprintf("__observation_%d", i)
+			}
+			statuses[key] = observed.Status
+			if observed.ActivityKnown {
+				activity[key] = observed.Activity
+			}
+		}
+		return evaluateBreak(false, nil, statuses, activity)
+	}
+
+	sessions := observationSessions(s.Agents)
+	for i, session := range sessions {
+		observed, found := byID[session.ID]
+		if !found && s.Agents[i].ID == "" && i < len(snapshot.Sessions) {
+			observed = snapshot.Sessions[i]
+			found = true
+		}
+		key := string(session.ID)
+		if !found {
+			statuses[key] = StatusUnknown
+			continue
+		}
+		statuses[key] = observed.Status
+		if observed.ActivityKnown {
+			activity[key] = observed.Activity
+		}
+	}
+	return evaluateBreak(false, nil, statuses, activity)
+}
+
 func BreakHeartbeat(active bool) BreakAdvice {
 	return evaluateBreak(active, nil, nil, nil)
 }

@@ -15,6 +15,8 @@ export function AzSetSubscription(arg1:string):Promise<void>;
 
 export function Board(arg1:string):Promise<core.Board>;
 
+export function BoardArchive(arg1:string,arg2:number):Promise<core.Board>;
+
 export function BreakConfig():Promise<core.BreakConfig>;
 
 export function BreakHeartbeat(arg1:boolean):Promise<core.BreakAdvice>;
@@ -95,7 +97,7 @@ export function SetMainBranch(arg1:string,arg2:string):Promise<void>;
 
 export function SnoozeBreak():Promise<void>;
 
-export function StartBoardItem(arg1:string,arg2:string,arg3:string):Promise<string>;
+export function StartBoardItem(arg1:string,arg2:string):Promise<string>;
 
 export function Stats(arg1:number):Promise<core.Stats>;
 

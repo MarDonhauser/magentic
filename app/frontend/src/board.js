@@ -127,11 +127,8 @@ function badgesHtml(item, multi) {
 
 function actionsHtml(item, opts) {
   const out = [];
-  if (typeof opts.onStart === 'function') {
+  if (typeof opts.onStart === 'function' && item.startToken) {
     out.push(`<button type="button" class="bd-act bd-act-start" data-act="start">${developerIcon('claude')}Arbeiten</button>`);
-  }
-  if (typeof opts.onReveal === 'function' && item.path) {
-    out.push(`<button type="button" class="bd-act" data-act="reveal" title="Ordner im Finder zeigen">${icon('folder')}</button>`);
   }
   if (!out.length) return '';
   return `<div class="bd-actions">${out.join('')}</div>`;
@@ -185,6 +182,10 @@ function cardHtml(item, opts, multi) {
   const summary = item.summary
     ? `<p class="bd-card-sum">${esc(item.summary)}</p>`
     : '';
+  const problems = list(item.problems).filter(Boolean);
+  const problem = problems.length
+    ? `<div class="bd-card-problem">${icon('warn')}<span>${esc(problems.join('; '))}</span></div>`
+    : '';
   return `<article class="bd-card${live ? ' is-live' : ''}${open ? ' is-open' : ''}" data-key="${esc(key)}" tabindex="0" role="button" aria-expanded="${open}">
     <div class="bd-card-head">
       <span class="bd-caret" aria-hidden="true">${icon('chevron')}</span>
@@ -194,6 +195,7 @@ function cardHtml(item, opts, multi) {
       </div>
     </div>
     ${summary}
+    ${problem}
     ${agentsHtml(item, opts)}
     ${progressHtml(item)}
     <div class="bd-card-foot">${badgesHtml(item, multi)}${actionsHtml(item, opts)}</div>
@@ -218,19 +220,22 @@ function columnHtml(col, items, opts, multi) {
 function sourcesHtml(sources) {
   if (sources.length < 2) {
     const one = sources[0];
-    return `<span class="bd-kind">${developerIcon('markdown')}${esc(kindLabel(one?.kind))}</span>` +
-      (one?.root ? `<span class="bd-root" title="${esc(one.root)}">${esc(one.root)}</span>` : '');
+    const degraded = ['partial', 'unavailable'].includes(one?.availability);
+    return `<span class="bd-kind${degraded ? ' is-problem' : ''}">${developerIcon('markdown')}${esc(kindLabel(one?.kind))}</span>` +
+      (one?.location ? `<span class="bd-root" title="${esc(one.location)}">${esc(one.location)}</span>` : '');
   }
   const chips = sources.map(s => {
     const off = hiddenKinds.has(s.kind);
-    return `<button type="button" class="bd-kind bd-kind-btn${off ? ' is-off' : ''}" data-act="kind" data-kind="${esc(s.kind)}"` +
-      ` title="${esc(s.root)}\n\nKlick blendet diese Quelle ${off ? 'wieder ein' : 'aus'}">` +
+    const degraded = ['partial', 'unavailable'].includes(s.availability);
+    const detail = list(s.problems).filter(Boolean).join('\n') || s.location || '';
+    return `<button type="button" class="bd-kind bd-kind-btn${off ? ' is-off' : ''}${degraded ? ' is-problem' : ''}" data-act="kind" data-kind="${esc(s.kind)}"` +
+      ` title="${esc(detail)}\n\nKlick blendet diese Quelle ${off ? 'wieder ein' : 'aus'}">` +
       `${developerIcon('markdown')}${esc(kindLabel(s.kind))}<span class="bd-kind-n">${Number(s.items) || 0}</span></button>`;
   }).join('');
   return `<div class="bd-kinds">${chips}</div>`;
 }
 
-function headHtml(board, items, sources) {
+function headHtml(board, items, sources, includeArchived) {
   const total = items.reduce((n, it) => n + (Number(it.total) || 0), 0);
   const done = items.reduce((n, it) => n + Math.min(Number(it.done) || 0, Number(it.total) || 0), 0);
   const p = pct(done, total);
@@ -249,7 +254,7 @@ function headHtml(board, items, sources) {
         <div class="bd-bar bd-bar-lg"><i style="width:${p}%"></i></div>
         <div class="bd-stat-lbl">Tasks erledigt</div>
       </div>
-      <div class="bd-stat"><div class="bd-stat-val">${items.length}</div><div class="bd-stat-lbl">Changes offen</div></div>
+      <div class="bd-stat"><div class="bd-stat-val">${items.length}</div><div class="bd-stat-lbl">${includeArchived ? 'Changes gezeigt' : 'Changes offen'}</div></div>
       <div class="bd-stat"><div class="bd-stat-val">${Number(board.archived) || 0}</div><div class="bd-stat-lbl">archiviert</div></div>
       <div class="bd-stat"><div class="bd-stat-val">${Number(board.specs) || 0}</div><div class="bd-stat-lbl">Spec-Dateien</div></div>
       ${liveStat}
@@ -258,6 +263,16 @@ function headHtml(board, items, sources) {
 }
 
 function noneHtml(board) {
+  if (board.err) {
+    return `<div class="bd bd-none">
+      <div class="bd-none-box bd-none-problem">
+        <span class="bd-none-ico">${icon('warn')}</span>
+        <h2>Specs sind gerade nicht verlässlich lesbar</h2>
+        <p>${esc(board.err)}</p>
+        <p class="bd-none-hint">Das ist kein leeres Board. Nach dem Beheben der Ursache kannst du die Quellen erneut einlesen.</p>
+      </div>
+    </div>`;
+  }
   return `<div class="bd bd-none">
     <div class="bd-none-box">
       <span class="bd-none-ico">${developerIcon('markdown')}</span>
@@ -302,7 +317,6 @@ function bind(el) {
       const item = findItem(ctx.board, card?.dataset.key);
       if (act.dataset.act === 'agent') opts.onOpenSession?.(act.dataset.agent);
       else if (act.dataset.act === 'start' && item) opts.onStart?.(item);
-      else if (act.dataset.act === 'reveal' && item) opts.onReveal?.(item.path);
       return;
     }
     const card = ev.target.closest('.bd-card');
@@ -334,7 +348,7 @@ export function renderBoard(el, board, opts = {}) {
 
   const sources = list(data.sources).length
     ? list(data.sources)
-    : [{ kind: data.kind, root: data.root, items: all.length }];
+    : [{ kind: data.kind, location: '', items: all.length }];
   const kinds = new Set(sources.map(s => s.kind));
   for (const k of [...hiddenKinds]) if (!kinds.has(k)) hiddenKinds.delete(k);
 
@@ -342,7 +356,7 @@ export function renderBoard(el, board, opts = {}) {
   const items = multi ? all.filter(it => !hiddenKinds.has(it.kind)) : all;
 
   const err = data.err
-    ? `<div class="bd-err">${icon('warn')}<span>${esc(data.err)}</span></div>`
+    ? `<div class="bd-err${all.length ? ' is-partial' : ''}">${icon('warn')}<span>${all.length ? '<strong>Teilweise Daten:</strong> ' : ''}${esc(data.err)}</span></div>`
     : '';
 
   const cols = COLUMNS.map(col => {
@@ -350,5 +364,5 @@ export function renderBoard(el, board, opts = {}) {
     return columnHtml(col, inCol, opts, multi);
   }).join('');
 
-  el.innerHTML = `<div class="bd">${headHtml(data, items, sources)}${err}<div class="bd-cols">${cols}</div></div>`;
+  el.innerHTML = `<div class="bd">${headHtml(data, items, sources, !!opts.includeArchived)}${err}<div class="bd-cols">${cols}</div></div>`;
 }

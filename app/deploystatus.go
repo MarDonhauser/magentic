@@ -20,12 +20,12 @@ import (
 const azureDevOpsResourceID = "499b84ac-1321-427f-aa17-267ca6975798"
 
 type BuildInfo struct {
-	Repo     string `json:"repo"`
-	Status   string `json:"status"`
-	Result   string `json:"result"`
-	Branch   string `json:"branch"`
-	Age      string `json:"age"`
-	URL      string `json:"url"`
+	Repo   string `json:"repo"`
+	Status string `json:"status"`
+	Result string `json:"result"`
+	Branch string `json:"branch"`
+	Age    string `json:"age"`
+	URL    string `json:"url"`
 }
 
 type ArgoApp struct {
@@ -179,13 +179,13 @@ func (a *App) DeployStatus() DeployStatus {
 				return
 			}
 			var runs []struct {
-				ID         int    `json:"id"`
-				Status     string `json:"status"`
-				Result     string `json:"result"`
+				ID           int    `json:"id"`
+				Status       string `json:"status"`
+				Result       string `json:"result"`
 				SourceBranch string `json:"sourceBranch"`
-				FinishTime string `json:"finishTime"`
-				StartTime  string `json:"startTime"`
-				Definition struct {
+				FinishTime   string `json:"finishTime"`
+				StartTime    string `json:"startTime"`
+				Definition   struct {
 					Name string `json:"name"`
 				} `json:"definition"`
 			}
@@ -287,14 +287,20 @@ func (a *App) DeployStatus() DeployStatus {
 	prev := a.dsPrev
 	snapshot := ds
 	a.dsPrev = &snapshot
-	a.dsMu.Unlock()
 	if prev != nil {
-		notifyDeployTransitions(prev, &ds)
+		outcomes := deploymentOutcomes(prev, &ds)
+		for index := range outcomes {
+			a.deploySequence++
+			outcomes[index].Key += fmt.Sprintf(":%d", a.deploySequence)
+		}
+		a.deployments = append(a.deployments, outcomes...)
 	}
+	a.dsMu.Unlock()
 	return ds
 }
 
-func notifyDeployTransitions(prev, cur *DeployStatus) {
+func deploymentOutcomes(prev, cur *DeployStatus) []core.AttentionDeploymentOutcome {
+	var outcomes []core.AttentionDeploymentOutcome
 	prevBuild := map[string]BuildInfo{}
 	for _, b := range prev.Builds {
 		prevBuild[b.URL] = b
@@ -302,10 +308,16 @@ func notifyDeployTransitions(prev, cur *DeployStatus) {
 	for _, b := range cur.Builds {
 		pb, known := prevBuild[b.URL]
 		if b.Status == "completed" && b.Result == "failed" && (!known || pb.Status != "completed") {
-			core.NotifyDesktop("magentic · Build failed", b.Repo+" ("+b.Branch+")", "Basso")
+			outcomes = append(outcomes, core.AttentionDeploymentOutcome{
+				Key: "build:" + b.URL + ":failed", Kind: core.AttentionDeploymentBuildFailed,
+				Name: b.Repo, Detail: "(" + b.Branch + ")",
+			})
 		}
 		if b.Status == "completed" && b.Result == "succeeded" && known && pb.Status == "inProgress" {
-			core.NotifyDesktop("magentic · Build fertig", b.Repo+" ✓ ("+b.Branch+")", "Ping")
+			outcomes = append(outcomes, core.AttentionDeploymentOutcome{
+				Key: "build:" + b.URL + ":succeeded", Kind: core.AttentionDeploymentBuildReady,
+				Name: b.Repo, Detail: "✓ (" + b.Branch + ")",
+			})
 		}
 	}
 	prevApp := map[string]ArgoApp{}
@@ -318,12 +330,25 @@ func notifyDeployTransitions(prev, cur *DeployStatus) {
 			continue
 		}
 		if pa.Health != "Degraded" && ap.Health == "Degraded" {
-			core.NotifyDesktop("magentic · Argo Degraded", ap.Name, "Basso")
+			outcomes = append(outcomes, core.AttentionDeploymentOutcome{
+				Key: "argo:" + ap.Name + ":degraded", Kind: core.AttentionDeploymentAppDegraded, Name: ap.Name,
+			})
 		}
 		if pa.Health == "Progressing" && ap.Health == "Healthy" {
-			core.NotifyDesktop("magentic · Argo Healthy", ap.Name+" ✓", "Ping")
+			outcomes = append(outcomes, core.AttentionDeploymentOutcome{
+				Key: "argo:" + ap.Name + ":healthy", Kind: core.AttentionDeploymentAppHealthy, Name: ap.Name, Detail: "✓",
+			})
 		}
 	}
+	return outcomes
+}
+
+func (a *App) takeDeploymentOutcomes() []core.AttentionDeploymentOutcome {
+	a.dsMu.Lock()
+	defer a.dsMu.Unlock()
+	outcomes := append([]core.AttentionDeploymentOutcome(nil), a.deployments...)
+	a.deployments = nil
+	return outcomes
 }
 
 func argoRank(a ArgoApp) int {

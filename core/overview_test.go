@@ -1,7 +1,9 @@
 package core
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -94,5 +96,88 @@ func TestMarkSeen(t *testing.T) {
 	}
 	if s.MarkSeen("gibtsnicht") {
 		t.Fatal("MarkSeen für unbekannte Session muss false liefern")
+	}
+}
+
+func TestOverviewProjectsCoherentObservationFactsAndStableIDs(t *testing.T) {
+	dir := t.TempDir()
+	activeAt := time.Date(2026, 8, 20, 12, 0, 0, 0, time.Local)
+	state := &State{
+		Projects: []Project{{ID: "project-1", Name: "NAVI", Path: dir, MainBranch: "main"}},
+		Agents: []Session{{
+			ID: "session-1", Name: "one", ProjectID: "project-1", Project: "NAVI", Dir: dir,
+			Purpose: SessionPurposeCleanup, CreatedAt: activeAt.Add(-time.Hour),
+		}},
+	}
+	snapshot := ObservationSnapshot{
+		ObservedAt:   activeAt,
+		Availability: ObservationAvailable,
+		Sessions: []SessionObservation{{
+			SessionID: "session-1", Availability: ObservationAvailable,
+			Presence: SessionPresencePresent, Status: StatusBlocked,
+			Content: "content intentionally does not encode the detail", ContentKnown: true,
+			Activity: activeAt, ActivityKnown: true, Tool: AgentToolCodex,
+			Detail: "coherent detail", Attention: AttentionNeedsInput, Unread: true,
+			Occupancy: OccupancyOccupied,
+		}},
+	}
+
+	got := BuildOverviewFromObservation(state, snapshot)
+	if len(got.Projects) != 1 || got.Projects[0].ID != "project-1" {
+		t.Fatalf("stable Project identity missing: %#v", got.Projects)
+	}
+	agent := got.Projects[0].Worktrees[0].Agents[0]
+	if agent.ID != "session-1" || agent.Name != "one" {
+		t.Fatalf("stable Session identity missing: %#v", agent)
+	}
+	if agent.Status != "blocked" || agent.Tool != AgentToolCodex || agent.Detail != "coherent detail" || !agent.Unread {
+		t.Fatalf("Overview recomputed or lost Observation facts: %#v", agent)
+	}
+	if agent.Phase != "cleanup" {
+		t.Fatalf("Session purpose was lost during projection: %#v", agent)
+	}
+	if got.Counts["blocked"] != 1 || got.Counts["unread"] != 1 {
+		t.Fatalf("Overview counts do not match Observation: %#v", got.Counts)
+	}
+}
+
+func TestOverviewUnavailableObservationIsReadOnlyAndDoesNotWarnAsDead(t *testing.T) {
+	dir := t.TempDir()
+	gitInit(t, dir,
+		[]string{"init", "-q", "-b", "main"},
+		[]string{"config", "user.email", "t@example.com"},
+		[]string{"config", "user.name", "Test"},
+		[]string{"commit", "-q", "--allow-empty", "-m", "init"},
+	)
+	if err := os.WriteFile(filepath.Join(dir, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	FlushGitMemo()
+	state := &State{
+		Projects: []Project{{ID: "project-1", Name: "NAVI", Path: dir, MainBranch: "main"}},
+		Agents:   []Session{{ID: "session-1", Name: "one", Project: "NAVI", Dir: dir}},
+	}
+	snapshot := ObservationSnapshot{
+		Availability: ObservationUnavailable,
+		Sessions: []SessionObservation{{
+			SessionID: "session-1", Availability: ObservationUnavailable,
+			Presence: SessionPresenceUnknown, Status: StatusUnknown,
+			Attention: AttentionUnknown, Occupancy: OccupancyUnknown,
+		}},
+	}
+
+	got := BuildOverviewFromObservation(state, snapshot)
+	if len(state.Agents) != 1 || state.Agents[0].ID != "session-1" {
+		t.Fatalf("Overview mutated the Registry-shaped input: %#v", state.Agents)
+	}
+	if got.Counts["unknown"] != 1 {
+		t.Fatalf("unavailable tmux was not preserved as unknown: %#v", got.Counts)
+	}
+	wt := got.Projects[0].Worktrees[0]
+	if wt.Clean {
+		t.Fatal("dirty Worktree fixture was not observed")
+	}
+	if len(wt.Warnings) != 0 {
+		t.Fatalf("unknown Session was treated as dead: %#v", wt.Warnings)
 	}
 }

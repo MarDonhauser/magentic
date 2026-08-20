@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -15,12 +16,17 @@ func knownWorktreePath(path string) bool {
 	if err != nil {
 		return false
 	}
-	for _, p := range st.Projects {
-		if path == p.Path {
-			return true
+	survey, err := core.NewRepositories().Survey(context.Background(), st.Projects)
+	if err != nil {
+		return false
+	}
+	target := filepath.Clean(path)
+	for _, project := range survey.Projects {
+		if project.Presence != core.RepositoryKnown || !project.Worktrees.Known() {
+			continue
 		}
-		for _, wt := range core.CollectWorktrees(p.Path) {
-			if wt.Path == path {
+		for _, worktree := range project.Worktrees.Value {
+			if filepath.Clean(worktree.Path) == target {
 				return true
 			}
 		}
@@ -220,16 +226,27 @@ type TimelineEntry struct {
 	Text    string `json:"text"`
 }
 
+type TimelineSource struct {
+	Source   string   `json:"source"`
+	State    string   `json:"state"`
+	Problems []string `json:"problems,omitempty"`
+}
+
+type TimelineResult struct {
+	Entries []TimelineEntry  `json:"entries"`
+	Sources []TimelineSource `json:"sources"`
+}
+
 var tlWeekdays = map[time.Weekday]string{
 	time.Monday: "Mo", time.Tuesday: "Di", time.Wednesday: "Mi",
 	time.Thursday: "Do", time.Friday: "Fr", time.Saturday: "Sa", time.Sunday: "So",
 }
 
-func (a *App) Timeline() ([]TimelineEntry, error) {
+func (a *App) Timeline() (TimelineResult, error) {
 	st, _ := core.LoadState()
 	history, err := core.OpenWorkHistory(core.WorkHistoryConfig{})
 	if err != nil {
-		return nil, err
+		return TimelineResult{}, err
 	}
 	page, err := history.Events(context.Background(), core.HistoryAssociationsFromState(st), core.HistoryEventQuery{
 		Since:    time.Now().AddDate(0, 0, -7),
@@ -238,9 +255,23 @@ func (a *App) Timeline() ([]TimelineEntry, error) {
 		Limit:    150,
 	})
 	if err != nil {
-		return nil, err
+		return TimelineResult{}, err
 	}
-	return timelineEntries(page), nil
+	result := TimelineResult{Entries: timelineEntries(page)}
+	for _, coverage := range page.Meta.Coverage {
+		source := TimelineSource{Source: string(coverage.Provider), State: string(coverage.State)}
+		for _, problem := range coverage.Problems {
+			message := strings.TrimSpace(problem.Message)
+			if message == "" {
+				message = strings.TrimSpace(problem.Kind)
+			}
+			if message != "" {
+				source.Problems = append(source.Problems, message)
+			}
+		}
+		result.Sources = append(result.Sources, source)
+	}
+	return result, nil
 }
 
 func snippetAround(text string, idx, qlen int) string {

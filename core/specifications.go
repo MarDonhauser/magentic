@@ -160,6 +160,7 @@ type SpecificationQuery struct {
 
 type SpecificationsDiscovery struct {
 	ObservedAt     time.Time                    `json:"observedAt"`
+	ProjectID      ProjectID                    `json:"projectId,omitempty"`
 	Project        string                       `json:"project"`
 	Sources        []SpecificationSourceSummary `json:"sources"`
 	Specifications []Specification              `json:"specifications"`
@@ -216,7 +217,7 @@ func (s *Specifications) Discover(ctx context.Context, project Project, query Sp
 		return SpecificationsDiscovery{}, err
 	}
 
-	result := SpecificationsDiscovery{ObservedAt: s.now(), Project: project.Name}
+	result := SpecificationsDiscovery{ObservedAt: s.now(), ProjectID: project.ID, Project: project.Name}
 	archiveRemaining := 0
 	if query.IncludeArchived {
 		archiveRemaining = query.ArchiveLimit
@@ -236,17 +237,23 @@ func (s *Specifications) Discover(ctx context.Context, project Project, query Sp
 			continue
 		}
 		discovered := adapter.Discover(ctx, s.filesystem, project, query.IncludeArchived, archiveRemaining)
+		if err := ctx.Err(); err != nil {
+			return SpecificationsDiscovery{}, err
+		}
 		archiveRemaining -= discovered.archivedReturned
 		if archiveRemaining < 0 {
 			archiveRemaining = 0
 		}
-		result.Sources = append(result.Sources, discovered.summary)
-		result.Problems = append(result.Problems, discovered.summary.Problems...)
+		returned := 0
 		for _, specification := range discovered.specifications {
 			if specificationStageSelected(query.Stages, specification.Lifecycle.Stage) {
 				result.Specifications = append(result.Specifications, specification)
+				returned++
 			}
 		}
+		discovered.summary.Returned = returned
+		result.Sources = append(result.Sources, discovered.summary)
+		result.Problems = append(result.Problems, discovered.summary.Problems...)
 	}
 	sortSpecifications(result.Specifications)
 	return result, nil

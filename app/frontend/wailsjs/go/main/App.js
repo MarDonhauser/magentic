@@ -26,6 +26,10 @@ export function Board(arg1) {
   return window['go']['main']['App']['Board'](arg1);
 }
 
+export function BoardArchive(arg1, arg2) {
+  return window['go']['main']['App']['BoardArchive'](arg1, arg2);
+}
+
 export function BreakConfig() {
   return window['go']['main']['App']['BreakConfig']();
 }
@@ -186,8 +190,8 @@ export function SnoozeBreak() {
   return window['go']['main']['App']['SnoozeBreak']();
 }
 
-export function StartBoardItem(arg1, arg2, arg3) {
-  return window['go']['main']['App']['StartBoardItem'](arg1, arg2, arg3);
+export function StartBoardItem(arg1, arg2) {
+  return window['go']['main']['App']['StartBoardItem'](arg1, arg2);
 }
 
 export function Stats(arg1) {

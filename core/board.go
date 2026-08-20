@@ -17,27 +17,30 @@ type BoardTask struct {
 }
 
 type BoardItem struct {
-	Key      string      `json:"key"`
-	ID       string      `json:"id"`
-	Title    string      `json:"title"`
-	Summary  string      `json:"summary,omitempty"`
-	Path     string      `json:"path"`
-	Kind     string      `json:"kind"`
-	Column   string      `json:"column"`
-	Total    int         `json:"total"`
-	Done     int         `json:"done"`
-	Specs    int         `json:"specs"`
-	HasPlan  bool        `json:"hasPlan"`
-	Updated  string      `json:"updated,omitempty"`
-	Tasks    []BoardTask `json:"tasks,omitempty"`
-	Agents   []string    `json:"agents,omitempty"`
-	Branches []string    `json:"branches,omitempty"`
-	Problems []string    `json:"problems,omitempty"`
+	Key        string                  `json:"key"`
+	Reference  SpecificationRef        `json:"reference"`
+	StartToken SpecificationStartToken `json:"startToken,omitempty"`
+	ID         string                  `json:"id"`
+	Title      string                  `json:"title"`
+	Summary    string                  `json:"summary,omitempty"`
+	Path       string                  `json:"path,omitempty"` // deprecated: use StartToken
+	Kind       string                  `json:"kind"`
+	Column     string                  `json:"column"`
+	Total      int                     `json:"total"`
+	Done       int                     `json:"done"`
+	Specs      int                     `json:"specs"`
+	HasPlan    bool                    `json:"hasPlan"`
+	Updated    string                  `json:"updated,omitempty"`
+	Tasks      []BoardTask             `json:"tasks,omitempty"`
+	Agents     []string                `json:"agents,omitempty"`
+	Branches   []string                `json:"branches,omitempty"`
+	Problems   []string                `json:"problems,omitempty"`
 }
 
 type BoardSource struct {
 	Kind         string   `json:"kind"`
-	Root         string   `json:"root"`
+	Location     string   `json:"location"`
+	Root         string   `json:"root,omitempty"` // deprecated: use Location
 	Items        int      `json:"items"`
 	Archived     int      `json:"archived"`
 	Specs        int      `json:"specs"`
@@ -46,14 +49,15 @@ type BoardSource struct {
 }
 
 type Board struct {
-	Project  string        `json:"project"`
-	Kind     string        `json:"kind"`
-	Root     string        `json:"root,omitempty"`
-	Sources  []BoardSource `json:"sources,omitempty"`
-	Items    []BoardItem   `json:"items"`
-	Archived int           `json:"archived"`
-	Specs    int           `json:"specs"`
-	Err      string        `json:"err,omitempty"`
+	ProjectID ProjectID     `json:"projectId,omitempty"`
+	Project   string        `json:"project"`
+	Kind      string        `json:"kind"`
+	Root      string        `json:"root,omitempty"`
+	Sources   []BoardSource `json:"sources,omitempty"`
+	Items     []BoardItem   `json:"items"`
+	Archived  int           `json:"archived"`
+	Specs     int           `json:"specs"`
+	Err       string        `json:"err,omitempty"`
 }
 
 const (
@@ -70,6 +74,12 @@ var sectionRe = regexp.MustCompile(`^#{2,3}\s+(.*)$`)
 // transport. New callers consume Specifications.Discover and hand its opaque
 // start token to Specifications.ResolveStart before invoking Session Lifecycle.
 func BuildBoard(state *State, projectName string) Board {
+	return BuildBoardWithQuery(state, projectName, SpecificationQuery{})
+}
+
+// BuildBoardWithQuery permits the compatibility callers that intentionally
+// render bounded archives to opt in; BuildBoard itself remains current-only.
+func BuildBoardWithQuery(state *State, projectName string, query SpecificationQuery) Board {
 	board := Board{Project: projectName}
 	if state == nil {
 		board.Err = "Projekt nicht gefunden"
@@ -80,10 +90,11 @@ func BuildBoard(state *State, projectName string) Board {
 		board.Err = "Projekt nicht gefunden"
 		return board
 	}
+	board.ProjectID = project.ID
 
 	ctx := context.Background()
 	specifications := NewSpecifications()
-	discovery, err := specifications.Discover(ctx, *project, SpecificationQuery{})
+	discovery, err := specifications.Discover(ctx, *project, query)
 	if err != nil {
 		board.Kind = "none"
 		board.Err = err.Error()
@@ -94,12 +105,7 @@ func BuildBoard(state *State, projectName string) Board {
 
 	itemsBySource := make(map[SpecificationSourceKind]int)
 	for _, specification := range discovery.Specifications {
-		intent, resolveErr := specifications.ResolveStart(ctx, *project, specification.StartToken)
-		if resolveErr != nil {
-			problems = append(problems, fmt.Sprintf("%s/%s: %v", specification.Source, specification.ID, resolveErr))
-			continue
-		}
-		item := boardItemFromSpecification(specification, intent.SpecificationDirectory, agents)
+		item := boardItemFromSpecification(specification, agents)
 		board.Items = append(board.Items, item)
 		itemsBySource[specification.Source]++
 	}
@@ -109,10 +115,9 @@ func BuildBoard(state *State, projectName string) Board {
 		if source.Current == 0 && items == 0 {
 			continue
 		}
-		root := filepath.Join(project.Path, filepath.FromSlash(source.Location))
 		boardSource := BoardSource{
 			Kind:         string(source.Source),
-			Root:         root,
+			Location:     source.Location,
 			Items:        items,
 			Archived:     source.Archived,
 			Specs:        source.ReferenceSpecifications,
@@ -128,28 +133,28 @@ func BuildBoard(state *State, projectName string) Board {
 		board.Kind = "none"
 	} else {
 		board.Kind = board.Sources[0].Kind
-		board.Root = board.Sources[0].Root
 	}
 	sortBoardItems(board.Items)
 	board.Err = strings.Join(appendUniqueStrings(nil, problems...), "; ")
 	return board
 }
 
-func boardItemFromSpecification(specification Specification, directory string, agents []agentCtx) BoardItem {
+func boardItemFromSpecification(specification Specification, agents []agentCtx) BoardItem {
 	item := BoardItem{
-		Key:      string(specification.Reference),
-		ID:       specification.ID,
-		Title:    specification.Title,
-		Summary:  specification.Summary,
-		Path:     directory,
-		Kind:     string(specification.Source),
-		Column:   string(specification.Lifecycle.Stage),
-		Total:    specification.Progress.Total,
-		Done:     specification.Progress.Completed,
-		Specs:    specificationDocumentCount(specification),
-		HasPlan:  specificationHasPlan(specification),
-		Updated:  specificationUpdatedString(specification.UpdatedAt),
-		Problems: formatSpecificationProblems(specification.Problems),
+		Key:        string(specification.Reference),
+		Reference:  specification.Reference,
+		StartToken: specification.StartToken,
+		ID:         specification.ID,
+		Title:      specification.Title,
+		Summary:    specification.Summary,
+		Kind:       string(specification.Source),
+		Column:     string(specification.Lifecycle.Stage),
+		Total:      specification.Progress.Total,
+		Done:       specification.Progress.Completed,
+		Specs:      specificationDocumentCount(specification),
+		HasPlan:    specificationHasPlan(specification),
+		Updated:    specificationUpdatedString(specification.UpdatedAt),
+		Problems:   formatSpecificationProblems(specification.Problems),
 	}
 	if specification.Lifecycle.Stage == SpecificationStageUnknown {
 		item.Column = ColBacklog
@@ -162,7 +167,7 @@ func boardItemFromSpecification(specification Specification, directory string, a
 		})
 	}
 	for _, agent := range agents {
-		if !matchesItem(agent, specification.ID, directory) {
+		if specification.Lifecycle.Terminal || !matchesItem(agent, specification.ID, "") {
 			continue
 		}
 		item.Agents = append(item.Agents, agent.name)
@@ -213,16 +218,14 @@ func liveAgentContext(ctx context.Context, state *State, project Project) ([]age
 	var problems []string
 	for _, session := range sessions {
 		agent := agentCtx{name: session.Name, dir: session.Dir}
-		for _, worktree := range observed.Worktrees.Value {
-			if !sameRepositoryPath(worktree.Path, session.Dir) {
-				continue
-			}
+		if worktree, found := repositoryWorktreeForDirectory(observed.Worktrees.Value, session.Dir); found {
 			if worktree.Checkout.Known() && worktree.Checkout.Value.Kind == RepositoryBranchCheckout {
 				agent.branch = worktree.Checkout.Value.Branch
 			} else {
 				problems = append(problems, "Worktree-Zuordnung für "+session.Name+": Branch unbekannt")
 			}
-			break
+		} else {
+			problems = append(problems, "Worktree-Zuordnung für "+session.Name+": Worktree unbekannt")
 		}
 		result = append(result, agent)
 	}

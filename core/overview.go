@@ -1,58 +1,69 @@
 package core
 
 import (
+	"context"
 	"fmt"
-	"os"
-	"strconv"
 	"strings"
 	"time"
 )
 
 type OvAgent struct {
-	Name          string `json:"name"`
-	Tool          string `json:"tool,omitempty"`
-	Status        string `json:"status"`
-	Label         string `json:"label"`
-	Detail        string `json:"detail"`
-	Age           string `json:"age"`
-	Worktree      bool   `json:"worktree"`
-	Term          bool   `json:"term"`
-	Phase         string `json:"phase,omitempty"`
-	PhaseLabel    string `json:"phaseLabel,omitempty"`
-	Deployed      bool   `json:"deployed"`
-	Known         bool   `json:"known"`
-	OwnDirty      int    `json:"ownDirty"`
-	OwnCommits    int    `json:"ownCommits"`
-	Branch        string `json:"branch,omitempty"`
-	Unread        bool   `json:"unread"`
-	Dock          bool   `json:"dock"`
-	HandoffSource bool   `json:"handoffSource"`
-	HandoffTarget bool   `json:"handoffTarget"`
+	ID            SessionID `json:"id"`
+	Name          string    `json:"name"`
+	Tool          string    `json:"tool,omitempty"`
+	Status        string    `json:"status"`
+	Label         string    `json:"label"`
+	Detail        string    `json:"detail"`
+	Age           string    `json:"age"`
+	Worktree      bool      `json:"worktree"`
+	Term          bool      `json:"term"`
+	Phase         string    `json:"phase,omitempty"`
+	PhaseLabel    string    `json:"phaseLabel,omitempty"`
+	Deployed      bool      `json:"deployed"`
+	Known         bool      `json:"known"`
+	OwnDirty      int       `json:"ownDirty"`
+	OwnCommits    int       `json:"ownCommits"`
+	Branch        string    `json:"branch,omitempty"`
+	Unread        bool      `json:"unread"`
+	Dock          bool      `json:"dock"`
+	HandoffSource bool      `json:"handoffSource"`
+	HandoffTarget bool      `json:"handoffTarget"`
 }
 
 type OvWorktree struct {
-	Path      string    `json:"path"`
-	ShortPath string    `json:"ShortPath"`
-	Branch    string    `json:"branch"`
-	IsMain    bool      `json:"isMain"`
-	Ahead     int       `json:"ahead"`
-	Behind    int       `json:"behind"`
-	Staged    int       `json:"staged"`
-	Modified  int       `json:"modified"`
-	Untracked int       `json:"untracked"`
-	Clean     bool      `json:"clean"`
-	LastMsg   string    `json:"lastMsg"`
-	Agents    []OvAgent `json:"agents"`
-	Warnings  []string  `json:"warnings"`
+	Path            string              `json:"path"`
+	ShortPath       string              `json:"ShortPath"`
+	Branch          string              `json:"branch"`
+	IsMain          bool                `json:"isMain"`
+	Ahead           int                 `json:"ahead"`
+	Behind          int                 `json:"behind"`
+	Staged          int                 `json:"staged"`
+	Modified        int                 `json:"modified"`
+	Untracked       int                 `json:"untracked"`
+	Conflicted      int                 `json:"conflicted"`
+	Clean           bool                `json:"clean"`
+	LastMsg         string              `json:"lastMsg"`
+	CheckoutKnown   bool                `json:"checkoutKnown"`
+	ChangesKnown    bool                `json:"changesKnown"`
+	DivergenceKnown bool                `json:"divergenceKnown"`
+	Problems        []RepositoryProblem `json:"problems,omitempty"`
+	Agents          []OvAgent           `json:"agents"`
+	Warnings        []string            `json:"warnings"`
 }
 
 type OvProject struct {
-	Name           string       `json:"name"`
-	Path           string       `json:"path"`
-	MainBranch     string       `json:"mainBranch"`
-	HeadBranch     string       `json:"headBranch"`
-	MainConfigured bool         `json:"mainConfigured"`
-	Worktrees      []OvWorktree `json:"worktrees"`
+	ID                  ProjectID            `json:"id"`
+	Name                string               `json:"name"`
+	Path                string               `json:"path"`
+	MainBranch          string               `json:"mainBranch"`
+	HeadBranch          string               `json:"headBranch"`
+	MainConfigured      bool                 `json:"mainConfigured"`
+	RepositoryKnowledge RepositoryKnowledge  `json:"repositoryKnowledge"`
+	MainBranchKnown     bool                 `json:"mainBranchKnown"`
+	HeadBranchKnown     bool                 `json:"headBranchKnown"`
+	WorktreesKnown      bool                 `json:"worktreesKnown"`
+	Problems            []RepositoryProblem  `json:"problems,omitempty"`
+	Worktrees           []OvWorktree         `json:"worktrees"`
 }
 
 type OvUsage struct {
@@ -105,11 +116,13 @@ func agentAlive(s AgentStatus) bool {
 }
 
 func BuildOverview(s *State) Overview {
-	for _, a := range DiscoverNew(s) {
-		s.AddAgent(a)
+	if s == nil {
+		return buildOverviewFromObservation(&State{}, ObservationSnapshot{})
 	}
-	statuses, contents, activity := CollectStatuses(s.Agents)
-	return BuildOverviewWithToolsFrom(s, statuses, contents, activity, CollectAgentTools(s.Agents))
+	sessions := observationSessions(s.Agents)
+	copyOfState := *s
+	copyOfState.Agents = sessions
+	return buildOverviewFromObservation(&copyOfState, Observe(context.Background(), sessions))
 }
 
 func BuildOverviewFrom(s *State, statuses map[string]AgentStatus, contents map[string]string, activity map[string]time.Time) Overview {
@@ -117,24 +130,48 @@ func BuildOverviewFrom(s *State, statuses map[string]AgentStatus, contents map[s
 }
 
 func BuildOverviewWithToolsFrom(s *State, statuses map[string]AgentStatus, contents map[string]string, activity map[string]time.Time, tools map[string]string) Overview {
-	gitCache := map[string]GitInfo{}
-	kept := s.Agents[:0]
-	removed := false
-	for _, a := range s.Agents {
-		if statuses[a.Name] == StatusDead {
-			if info, err := os.Stat(a.Dir); err != nil || !info.IsDir() {
-				removed = true
-				continue
-			}
-		}
-		kept = append(kept, a)
+	if s == nil {
+		return buildOverviewFromObservation(&State{}, ObservationSnapshot{})
 	}
-	s.Agents = kept
-	if removed {
-		s.Save()
+	sessions, snapshot := legacyObservationSnapshot(s.Agents, statuses, contents, activity, tools)
+	copyOfState := *s
+	copyOfState.Agents = sessions
+	return buildOverviewFromObservation(&copyOfState, snapshot)
+}
+
+// BuildOverviewFromObservation projects one coherent runtime snapshot into the
+// Overview. It is read-only: Session discovery and Registry cleanup belong to
+// Lifecycle, not to an Overview read.
+func BuildOverviewFromObservation(s *State, snapshot ObservationSnapshot) Overview {
+	if s == nil {
+		s = &State{}
+	}
+	copyOfState := *s
+	copyOfState.Agents = observationSessions(s.Agents)
+	copyOfSnapshot := snapshot
+	copyOfSnapshot.Sessions = append([]SessionObservation(nil), snapshot.Sessions...)
+	for i := range s.Agents {
+		if s.Agents[i].ID == "" && i < len(copyOfSnapshot.Sessions) && copyOfSnapshot.Sessions[i].SessionID == "" {
+			copyOfSnapshot.Sessions[i].SessionID = copyOfState.Agents[i].ID
+		}
+	}
+	return buildOverviewFromObservation(&copyOfState, copyOfSnapshot)
+}
+
+func buildOverviewFromObservation(s *State, snapshot ObservationSnapshot) Overview {
+	gitCache := map[string]GitInfo{}
+	observations := make(map[SessionID]SessionObservation, len(snapshot.Sessions))
+	for _, observed := range snapshot.Sessions {
+		if observed.SessionID != "" {
+			observations[observed.SessionID] = observed
+		}
+	}
+	generatedAt := snapshot.ObservedAt
+	if generatedAt.IsZero() {
+		generatedAt = time.Now()
 	}
 	ov := Overview{
-		GeneratedAt: time.Now().Format("15:04:05"),
+		GeneratedAt: generatedAt.Local().Format("15:04:05"),
 		Counts:      map[string]int{},
 	}
 	if u := CachedUsage(); u.Err == "" && !u.FetchedAt.IsZero() {
@@ -145,35 +182,36 @@ func BuildOverviewWithToolsFrom(s *State, statuses map[string]AgentStatus, conte
 			SevenDayReset: ShortWeekday(u.SevenDayReset),
 		}
 	}
-	later := map[string]bool{}
+	later := map[SessionID]bool{}
 	for _, a := range s.Agents {
 		if a.LaterAt.IsZero() {
 			continue
 		}
-		later[a.Name] = true
-		ov.Later = append(ov.Later, OvLater{Name: a.Name, Project: a.Project, Age: FormatAge(a.LaterAt), Term: a.IsTerm(), Tool: overviewAgentTool(a, tools)})
+		later[a.ID] = true
+		observed := observationForSession(a, observations)
+		ov.Later = append(ov.Later, OvLater{Name: a.Name, Project: a.Project, Age: FormatAge(a.LaterAt), Term: a.IsTerm(), Tool: observed.Tool})
 	}
 	// Dock-Terminals bleiben aus den Zählern: sie sind Werkzeug, keine Sitzung,
 	// und tauchen deshalb auch in der Sitzungsliste nicht auf.
-	dock := map[string]bool{}
+	dock := map[SessionID]bool{}
 	for _, a := range s.Agents {
 		if a.IsDock() {
-			dock[a.Name] = true
+			dock[a.ID] = true
 		}
 	}
-	for name, st := range statuses {
-		if later[name] || dock[name] {
+	for _, a := range s.Agents {
+		if later[a.ID] || dock[a.ID] {
 			continue
 		}
-		ov.Counts[statusKey(st)]++
+		ov.Counts[statusKey(observationForSession(a, observations).Status)]++
 	}
-	assigned := map[string]bool{}
-	for name := range later {
-		assigned[name] = true
+	assigned := map[SessionID]bool{}
+	for id := range later {
+		assigned[id] = true
 	}
 
 	for _, p := range s.Projects {
-		proj := OvProject{Name: p.Name, Path: p.Path}
+		proj := OvProject{ID: p.ID, Name: p.Name, Path: p.Path}
 		wts := CollectWorktreesCached(p.Path)
 		if len(wts) == 0 {
 			wts = []WorktreeInfo{{Path: p.Path, Branch: ""}}
@@ -185,31 +223,31 @@ func BuildOverviewWithToolsFrom(s *State, statuses map[string]AgentStatus, conte
 			proj.MainConfigured = true
 		}
 		for i, wt := range wts {
-			owt := buildWorktree(s, statuses, activity, contents, tools, assigned, wt, i == 0, proj.MainBranch, gitCache)
+			owt := buildWorktree(s, observations, assigned, wt, i == 0, proj.MainBranch, gitCache)
 			proj.Worktrees = append(proj.Worktrees, owt)
 		}
 		for _, a := range s.AgentsFor(p.Name) {
-			if assigned[a.Name] {
+			if assigned[a.ID] {
 				continue
 			}
-			assigned[a.Name] = true
-			proj.Worktrees[0].Agents = append(proj.Worktrees[0].Agents, toOvAgent(a, statuses, activity, contents, tools, proj.MainBranch, gitCache))
+			assigned[a.ID] = true
+			proj.Worktrees[0].Agents = append(proj.Worktrees[0].Agents, toOvAgent(a, observationForSession(a, observations), proj.MainBranch, gitCache))
 		}
-		finishWarnings(&proj, statuses, s)
+		finishWarnings(&proj)
 		ov.Projects = append(ov.Projects, proj)
 	}
 
 	var orphanWt OvWorktree
 	hasOrphans := false
 	for _, a := range s.Agents {
-		if assigned[a.Name] {
+		if assigned[a.ID] {
 			continue
 		}
 		if a.Project != "" && s.ProjectByName(a.Project) != nil {
 			continue
 		}
 		hasOrphans = true
-		orphanWt.Agents = append(orphanWt.Agents, toOvAgent(a, statuses, activity, contents, tools, "", gitCache))
+		orphanWt.Agents = append(orphanWt.Agents, toOvAgent(a, observationForSession(a, observations), "", gitCache))
 	}
 	if hasOrphans {
 		orphanWt.Branch = "—"
@@ -236,6 +274,22 @@ func BuildOverviewWithToolsFrom(s *State, statuses map[string]AgentStatus, conte
 	return ov
 }
 
+func observationForSession(session Session, observations map[SessionID]SessionObservation) SessionObservation {
+	if observed, found := observations[session.ID]; found {
+		return observed
+	}
+	return SessionObservation{
+		SessionID:    session.ID,
+		Availability: ObservationUnavailable,
+		Presence:     SessionPresenceUnknown,
+		Status:       StatusUnknown,
+		Attention:    AttentionUnknown,
+		WorktreePath: session.Dir,
+		Worktree:     session.Worktree,
+		Occupancy:    OccupancyUnknown,
+	}
+}
+
 func cachedGit(cache map[string]GitInfo, dir string) GitInfo {
 	if gi, ok := cache[dir]; ok {
 		return gi
@@ -245,7 +299,7 @@ func cachedGit(cache map[string]GitInfo, dir string) GitInfo {
 	return gi
 }
 
-func buildWorktree(s *State, statuses map[string]AgentStatus, activity map[string]time.Time, contents map[string]string, tools map[string]string, assigned map[string]bool, wt WorktreeInfo, isMain bool, mainBranch string, gitCache map[string]GitInfo) OvWorktree {
+func buildWorktree(s *State, observations map[SessionID]SessionObservation, assigned map[SessionID]bool, wt WorktreeInfo, isMain bool, mainBranch string, gitCache map[string]GitInfo) OvWorktree {
 	git := cachedGit(gitCache, wt.Path)
 	owt := OvWorktree{
 		Path:      wt.Path,
@@ -270,28 +324,19 @@ func buildWorktree(s *State, statuses map[string]AgentStatus, activity map[strin
 		owt.Ahead, owt.Behind = AheadBehindCached(wt.Path, mainBranch)
 	}
 	for _, a := range s.Agents {
-		if a.Dir == wt.Path && !assigned[a.Name] {
-			assigned[a.Name] = true
-			owt.Agents = append(owt.Agents, toOvAgent(a, statuses, activity, contents, tools, mainBranch, gitCache))
+		if a.Dir == wt.Path && !assigned[a.ID] {
+			assigned[a.ID] = true
+			owt.Agents = append(owt.Agents, toOvAgent(a, observationForSession(a, observations), mainBranch, gitCache))
 		}
 	}
 	return owt
 }
 
-func toOvAgent(a Agent, statuses map[string]AgentStatus, activity map[string]time.Time, contents map[string]string, tools map[string]string, mainBranch string, gitCache map[string]GitInfo) OvAgent {
-	st := statuses[a.Name]
+func toOvAgent(a Agent, observed SessionObservation, mainBranch string, gitCache map[string]GitInfo) OvAgent {
+	st := observed.Status
 	lastActive := a.CreatedAt
-	if act, ok := activity[a.Name]; ok {
-		lastActive = act
-	}
-	detail := ""
-	switch st {
-	case StatusAgents:
-		detail = AgentsDetail(BackgroundAgentCount(LastLines(contents[a.Name], 25)))
-	case StatusShell:
-		detail = ShellDetail(BackgroundShellCount(LastLines(contents[a.Name], 25)))
-	case StatusBlocked:
-		detail = BlockedDetail(LastLines(contents[a.Name], 25))
+	if observed.ActivityKnown {
+		lastActive = observed.Activity
 	}
 	phase, phaseLabel := agentPhase(a, mainBranch, agentAlive(st))
 	var sc SessionChanges
@@ -300,14 +345,15 @@ func toOvAgent(a Agent, statuses map[string]AgentStatus, activity map[string]tim
 		sc = CollectSessionChangesCached(a, gi)
 		branch = gi.Branch
 	}
-	tool := overviewAgentTool(a, tools)
-	handoffCapable := strings.TrimSpace(a.SessionID) != "" || (tool != "" && tool != AgentToolBash)
+	tool := observed.Tool
+	handoffCapable := len(a.AgentRuns) > 0 || strings.TrimSpace(a.SessionID) != "" || (tool != "" && tool != AgentToolBash)
 	return OvAgent{
+		ID:            a.ID,
 		Name:          a.Name,
 		Tool:          tool,
 		Status:        statusKey(st),
 		Label:         st.Label(),
-		Detail:        detail,
+		Detail:        observed.Detail,
 		Age:           FormatAge(lastActive),
 		Worktree:      a.Worktree,
 		Term:          a.IsTerm(),
@@ -318,29 +364,15 @@ func toOvAgent(a Agent, statuses map[string]AgentStatus, activity map[string]tim
 		OwnDirty:      len(sc.Files),
 		OwnCommits:    sc.Commits,
 		Branch:        branch,
-		Unread:        unread(st, a.SeenAt, lastActive),
+		Unread:        observed.Unread,
 		Dock:          a.IsDock(),
 		HandoffSource: handoffCapable,
 		HandoffTarget: handoffCapable,
 	}
 }
 
-func overviewAgentTool(a Agent, tools map[string]string) string {
-	if tool := tools[a.Name]; tool != "" {
-		return tool
-	}
-	if a.IsTerm() {
-		return AgentToolBash
-	}
-	return ""
-}
-
 func unread(st AgentStatus, seenAt, lastActive time.Time) bool {
-	switch st {
-	case StatusIdle, StatusBlocked, StatusExited:
-		return lastActive.After(seenAt)
-	}
-	return false
+	return observationUnread(st, seenAt, lastActive, true)
 }
 
 var integrationBranches = map[string]bool{"dev": true, "main": true, "master": true, "develop": true}
@@ -396,19 +428,23 @@ func agentPhase(a Agent, mainBranch string, alive bool) (string, string) {
 	return "committed", branch
 }
 
-func finishWarnings(proj *OvProject, statuses map[string]AgentStatus, s *State) {
+func finishWarnings(proj *OvProject) {
 	for i := range proj.Worktrees {
 		wt := &proj.Worktrees[i]
 		alive := false
+		unknown := false
 		for _, a := range wt.Agents {
-			if a.Status == "running" || a.Status == "agents" || a.Status == "blocked" || a.Status == "idle" || a.Status == "term" {
+			if a.Status == "unknown" {
+				unknown = true
+			}
+			if a.Status == "running" || a.Status == "agents" || a.Status == "shell" || a.Status == "blocked" || a.Status == "idle" || a.Status == "term" {
 				alive = true
 			}
 		}
-		if !wt.Clean && !alive {
+		if !wt.Clean && !alive && !unknown {
 			wt.Warnings = append(wt.Warnings, "uncommitted Änderungen, keine aktive Session")
 		}
-		if wt.Ahead > 0 && !alive && wt.Branch != proj.MainBranch {
+		if wt.Ahead > 0 && !alive && !unknown && wt.Branch != proj.MainBranch {
 			word := "Commits"
 			if wt.Ahead == 1 {
 				word = "Commit"

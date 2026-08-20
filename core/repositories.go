@@ -649,17 +649,45 @@ func sameRepositoryPath(a, b string) bool {
 	if a == "" || b == "" {
 		return false
 	}
-	absA, errA := filepath.Abs(filepath.Clean(a))
-	absB, errB := filepath.Abs(filepath.Clean(b))
-	if errA == nil && errB == nil {
-		resolvedA, resolveErrA := filepath.EvalSymlinks(absA)
-		resolvedB, resolveErrB := filepath.EvalSymlinks(absB)
-		if resolveErrA == nil && resolveErrB == nil {
-			return resolvedA == resolvedB
-		}
-		return absA == absB
+	return repositoryComparablePath(a) == repositoryComparablePath(b)
+}
+
+func repositoryWorktreeForDirectory(worktrees []RepositoryWorktree, directory string) (RepositoryWorktree, bool) {
+	if strings.TrimSpace(directory) == "" {
+		return RepositoryWorktree{}, false
 	}
-	return filepath.Clean(a) == filepath.Clean(b)
+	directory = repositoryComparablePath(directory)
+	best := -1
+	bestRootLength := -1
+	for index, worktree := range worktrees {
+		if strings.TrimSpace(worktree.Path) == "" {
+			continue
+		}
+		root := repositoryComparablePath(worktree.Path)
+		relative, err := filepath.Rel(root, directory)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+			continue
+		}
+		if len(root) > bestRootLength {
+			best = index
+			bestRootLength = len(root)
+		}
+	}
+	if best < 0 {
+		return RepositoryWorktree{}, false
+	}
+	return worktrees[best], true
+}
+
+func repositoryComparablePath(path string) string {
+	absolute, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(absolute); resolveErr == nil {
+		return resolved
+	}
+	return absolute
 }
 
 func allZeroOID(oid string) bool {

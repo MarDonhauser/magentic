@@ -282,6 +282,31 @@ File-Watcher sofort mit.
 
 ## Wie es funktioniert
 
+### Architektur
+
+Die gemeinsame Logik in `core/` ist entlang weniger tiefer Module organisiert:
+
+- **Registry** hält Projects und Sessions unter stabilen IDs. Änderungen sind
+  semantisch, prozessübergreifend koordiniert und atomar.
+- **Session Lifecycle** schreibt DesiredState vor jeder Änderung an Worktree,
+  Dateisystem oder tmux und gleicht partielle Ausführung idempotent ab.
+- **Session Observation** liest tmux in einem zeitlich begrenzten Durchlauf und
+  unterscheidet bekannte, partielle und nicht verfügbare Beobachtungen.
+- **Repositories** besitzt die gemeinsame Bedeutung von Git- und
+  Worktree-Zustand; fehlgeschlagene Git-Abfragen gelten nie als „sauber“.
+- **WorkHistory** normalisiert lokale Verläufe von Claude Code, Codex, Gemini
+  CLI und GitHub Copilot einmal für Verlauf, Suche, Links und Statistik.
+- **Specifications** adaptiert die unterstützten Spec-Layouts, vergibt stabile
+  SpecificationRefs und liefert dem Board aktuelle Arbeit standardmäßig ohne
+  einen unbegrenzten Archiv-Scan.
+- **Attention** leitet Benachrichtigungen, Dock-Badge, native Aufmerksamkeit
+  und Pauseneskalation deterministisch aus einer Observation ab; der Watcher
+  führt nur noch diese Intents aus.
+
+Die Domain-Sprache steht in `CONTEXT.md`, dauerhafte Entscheidungen in
+`docs/adr/`. Alte mutable-State- und formatabhängige Funktionen sind nur noch
+Kompatibilitäts-Adapter; neue Implementierungen gehen über die Module.
+
 - Agents sind tmux-Sessions mit Prefix `mgt-`. Auch von Hand erstellte Sessions (`tmux new -s mgt-foo`) werden beim Start adoptiert und anhand des Verzeichnisses einem Projekt zugeordnet.
 - Terminal-Sessions (`kind: "term"` im State) starten nur die Shell. Sie werden
   beim Neustart als Shell wiederhergestellt (nicht mit `claude --continue`),

@@ -267,6 +267,61 @@ func TestGoodMomentIgnoresUnbekannteSessions(t *testing.T) {
 	}
 }
 
+func TestBreakStatusFromObservationUsesCoherentFacts(t *testing.T) {
+	useTempBreaks(t)
+	fakeNow(t, breakStart)
+	state := &State{Agents: []Session{
+		{ID: "session-1", Name: "one"},
+		{ID: "session-2", Name: "two"},
+	}}
+	snapshot := ObservationSnapshot{
+		Availability: ObservationAvailable,
+		Sessions: []SessionObservation{
+			{SessionID: "session-1", Status: StatusRunning, Attention: AttentionWorking},
+			{SessionID: "session-2", Status: StatusBlocked, Attention: AttentionNeedsInput},
+		},
+	}
+
+	got := BreakStatusFromObservation(state, snapshot)
+	if got.GoodMoment || got.Busy != 1 || got.Waiting != 1 {
+		t.Fatalf("coherent Observation facts were not preserved: %#v", got)
+	}
+
+	snapshot.Availability = ObservationUnavailable
+	for i := range snapshot.Sessions {
+		snapshot.Sessions[i].Availability = ObservationUnavailable
+		snapshot.Sessions[i].Presence = SessionPresenceUnknown
+		snapshot.Sessions[i].Status = StatusUnknown
+		snapshot.Sessions[i].Attention = AttentionUnknown
+	}
+	got = BreakStatusFromObservation(state, snapshot)
+	if got.GoodMoment || got.Busy != 0 || got.Waiting != 0 {
+		t.Fatalf("unavailable tmux was treated as live Session state: %#v", got)
+	}
+}
+
+func TestBreakObservationActivitySurvivesDisplayRename(t *testing.T) {
+	useTempBreaks(t)
+	clk := fakeNow(t, breakStart)
+	state := &State{Agents: []Session{{ID: "session-1", Name: "one"}}}
+	names := []string{"one", "two", "three", "four", "five", "six", "seven"}
+
+	*clk = breakStart
+	BreakHeartbeat(true)
+	var got BreakAdvice
+	for minute, name := range names {
+		*clk = breakStart.Add(time.Duration(minute+1) * time.Minute)
+		state.Agents[0].Name = name
+		got = BreakStatusFromObservation(state, ObservationSnapshot{Sessions: []SessionObservation{{
+			SessionID: "session-1", Status: StatusBlocked, Attention: AttentionNeedsInput,
+			Activity: *clk, ActivityKnown: true,
+		}}})
+	}
+	if got.Level == BreakLevelResting || got.WorkedSecs != 7*60 {
+		t.Fatalf("display rename broke stable Session activity: level=%s worked=%d", got.Level, got.WorkedSecs)
+	}
+}
+
 func TestAgentComputeIsNoUserActivity(t *testing.T) {
 	useTempBreaks(t)
 	clk := fakeNow(t, breakStart)

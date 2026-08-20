@@ -18,21 +18,19 @@ import (
 )
 
 type App struct {
-	ctx             context.Context
-	mu              sync.Mutex
-	terms           map[string]*ptyTerm
-	activeTerm      string
-	dsMu            sync.Mutex
-	dsPrev          *DeployStatus
-	statusMu        sync.Mutex
-	statusCache     map[string]core.AgentStatus
-	contentCache    map[string]string
-	activityCache   map[string]time.Time
-	statusAt        time.Time
-	breakNotified   string
-	breakReminders  int
-	breakRemindedAt time.Time
-	meetingQuiet    bool
+	ctx            context.Context
+	mu             sync.Mutex
+	terms          map[string]*ptyTerm
+	activeTerm     string
+	dsMu           sync.Mutex
+	dsPrev         *DeployStatus
+	deployments    []core.AttentionDeploymentOutcome
+	deploySequence uint64
+	attentionOnce  sync.Once
+	attention      *core.AttentionPlanner
+	observationMu  sync.Mutex
+	observation    core.ObservationSnapshot
+	observationAt  time.Time
 }
 
 type ptyTerm struct {
@@ -42,6 +40,13 @@ type ptyTerm struct {
 
 func NewApp() *App {
 	return &App{terms: map[string]*ptyTerm{}}
+}
+
+func (a *App) attentionPlanner() *core.AttentionPlanner {
+	a.attentionOnce.Do(func() {
+		a.attention = core.NewAttentionPlanner(core.AttentionPlannerConfig{})
+	})
+	return a.attention
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -110,25 +115,11 @@ func (a *App) Overview(fresh bool) (core.Overview, error) {
 	if err != nil {
 		return core.Overview{}, err
 	}
-	if discovered := core.DiscoverNew(st); len(discovered) > 0 {
-		changed, changeErr := core.OpenRegistry(core.StatePath()).Change(a.ctx, core.AddDiscoveredSessions(discovered))
-		if changeErr != nil {
-			return core.Overview{}, changeErr
-		}
-		st = changed.Snapshot.MutableState()
-	}
-	var statuses map[string]core.AgentStatus
-	var contents map[string]string
-	var activity map[string]time.Time
 	if fresh {
 		core.FlushGitMemo()
-		statuses, contents, activity = core.CollectStatuses(st.Agents)
-		a.storeStatuses(statuses, contents, activity)
-	} else {
-		statuses, contents, activity = a.statusesFor(st.Agents)
 	}
-	tools := core.CollectAgentTools(st.Agents)
-	return core.BuildOverviewWithToolsFrom(st, statuses, contents, activity, tools), nil
+	snapshot := a.observationFor(st.Agents, fresh)
+	return core.BuildOverviewFromObservation(st, snapshot), nil
 }
 
 func (a *App) Projects() ([]string, error) {
@@ -248,6 +239,19 @@ func (a *App) Board(project string) (core.Board, error) {
 	return core.BuildBoard(st, project), nil
 }
 
+// BoardArchive is an explicit, bounded archive query. Board remains the fast
+// current-work default used during normal navigation.
+func (a *App) BoardArchive(project string, limit int) (core.Board, error) {
+	st, err := core.LoadState()
+	if err != nil {
+		return core.Board{}, err
+	}
+	return core.BuildBoardWithQuery(st, project, core.SpecificationQuery{
+		IncludeArchived: true,
+		ArchiveLimit:    limit,
+	}), nil
+}
+
 func (a *App) Stats(days int) (core.Stats, error) {
 	st, err := core.LoadState()
 	if err != nil {
@@ -263,7 +267,7 @@ func (a *App) RevealPath(path string) error {
 	return exec.Command("open", "-R", path).Start()
 }
 
-func (a *App) StartBoardItem(project, id, path string) (string, error) {
+func (a *App) StartBoardItem(project, token string) (string, error) {
 	st, err := core.LoadState()
 	if err != nil {
 		return "", err
@@ -272,7 +276,15 @@ func (a *App) StartBoardItem(project, id, path string) (string, error) {
 	if proj == nil {
 		return "", fmt.Errorf("unbekanntes Projekt: %s", project)
 	}
-	name, err := core.StartBoardSession(st, proj.Path, id, path)
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	intent, err := core.NewSpecifications().ResolveStart(ctx, *proj, core.SpecificationStartToken(token))
+	if err != nil {
+		return "", fmt.Errorf("Specification kann nicht gestartet werden: %w", err)
+	}
+	name, err := core.StartSpecificationSession(st, intent)
 	if err != nil {
 		return "", err
 	}
@@ -284,8 +296,7 @@ func (a *App) Breaks() (core.BreakAdvice, error) {
 	if err != nil {
 		return core.BreakAdvice{}, err
 	}
-	statuses, _, activity := a.statusesFor(st.Agents)
-	return core.BreakStatus(st, statuses, activity), nil
+	return core.BreakStatusFromObservation(st, a.observationFor(st.Agents, false)), nil
 }
 
 func (a *App) BreakHeartbeat(active bool) core.BreakAdvice {
@@ -293,22 +304,16 @@ func (a *App) BreakHeartbeat(active bool) core.BreakAdvice {
 }
 
 func (a *App) TakeBreak() error {
-	a.breakNotified = ""
-	a.breakReminders = 0
 	cancelAttention()
 	return core.TakeBreak()
 }
 
 func (a *App) EndBreak() error {
-	a.breakNotified = ""
-	a.breakReminders = 0
 	cancelAttention()
 	return core.EndBreak()
 }
 
 func (a *App) SnoozeBreak() error {
-	a.breakNotified = ""
-	a.breakReminders = 0
 	cancelAttention()
 	return core.SnoozeBreak()
 }

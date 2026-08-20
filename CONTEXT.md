@@ -63,6 +63,16 @@ _Avoid_: Event, log entry, command
 The durable outcome sought for a Session independently of the currently observed runtime state.
 _Avoid_: Observation, phase, action
 
+## Attention
+
+**AttentionPlan**:
+A deterministic set of notification, Dock badge, native attention, and window intents derived from one Observation plus break, deployment, and quiet signals.
+_Avoid_: Notification side effect, status transition, watcher state
+
+**AttentionSuppression**:
+An explicit reason why a potential attention intent was deferred or consumed without notifying the developer.
+_Avoid_: Missing notification, silent return, debounce flag
+
 ## Work History
 
 **WorkHistory**:
