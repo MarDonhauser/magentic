@@ -646,11 +646,6 @@ func sendPromptLiteralValidated(session, prompt string, submit bool, expectedToo
 	return nil
 }
 
-func enqueuePromptForObservedTargetUsing(session, prompt string, observed promptTargetObservation, observe observationReader) error {
-	ready := observed.Tool != AgentToolClaude || observed.Input == promptInputReady
-	return enqueuePromptUsing(session, prompt, true, observed.Tool, !ready, false, ready, nil, observe)
-}
-
 func StartSkillAgent(st *State, projectID ProjectID, dir, prompt, kind, nameHint string) (string, error) {
 	return startSkillAgent(st, projectID, dir, prompt, kind, nameHint, "")
 }
@@ -735,17 +730,14 @@ func SendSkillByIDWithObserver(id SessionID, cmd string, observe func(context.Co
 	return sendSkillToSession(*session, cmd, observe)
 }
 
+// sendSkillToSession queues the skill durably. A busy or blocked Session keeps
+// the message in its Outbox instead of failing the action; the Outbox
+// dispatcher delivers it as soon as the Session is input-ready again.
 func sendSkillToSession(session Session, cmd string, observe observationReader) error {
-	name := session.Name
-	sn := session.TmuxName()
 	if session.IsTerm() {
-		return fmt.Errorf("%s ist eine Terminal-Session — dort läuft kein Claude", name)
+		return fmt.Errorf("%s ist eine Terminal-Session — dort läuft kein Claude", session.Name)
 	}
-	observed, err := inspectLivePromptTargetUsing(sn, AgentToolClaude, observe)
-	if err != nil {
-		return err
-	}
-	return enqueuePromptForObservedTargetUsing(sn, cmd, observed, observe)
+	return SendQueuedMessageWithObserver(session.ID, QueuedMessageKindSkill, cmd, observe)
 }
 
 func DoneSession(id SessionID) error {

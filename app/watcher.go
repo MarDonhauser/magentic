@@ -120,6 +120,7 @@ func (a *App) watchLoop() {
 		}
 		snapshot := core.Observe(context.Background(), st.Agents)
 		a.storeObservation(snapshot, st.Agents)
+		core.DispatchOutbox(context.Background(), st, snapshot)
 		if len(st.Agents) > 0 && snapshot.Availability == core.ObservationUnavailable && time.Since(lastErrLog) > time.Minute {
 			problem := "tmux unavailable"
 			if len(snapshot.Problems) > 0 {

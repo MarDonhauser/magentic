@@ -66,6 +66,10 @@ export function DeployStatus() {
   return window['go']['main']['App']['DeployStatus']();
 }
 
+export function DiscardQueuedMessage(arg1, arg2) {
+  return window['go']['main']['App']['DiscardQueuedMessage'](arg1, arg2);
+}
+
 export function DoneAgent(arg1) {
   return window['go']['main']['App']['DoneAgent'](arg1);
 }
@@ -156,6 +160,14 @@ export function SaveImage(arg1) {
 
 export function SearchTranscripts(arg1) {
   return window['go']['main']['App']['SearchTranscripts'](arg1);
+}
+
+export function RetryQueuedMessage(arg1, arg2) {
+  return window['go']['main']['App']['RetryQueuedMessage'](arg1, arg2);
+}
+
+export function SendMessage(arg1, arg2) {
+  return window['go']['main']['App']['SendMessage'](arg1, arg2);
 }
 
 export function SendSkill(arg1, arg2) {

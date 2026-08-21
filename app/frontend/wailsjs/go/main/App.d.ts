@@ -35,6 +35,8 @@ export function Deploy(arg1:string):Promise<string>;
 
 export function DeployStatus():Promise<main.DeployStatus>;
 
+export function DiscardQueuedMessage(arg1:string,arg2:string):Promise<void>;
+
 export function DoneAgent(arg1:string):Promise<void>;
 
 export function EndBreak():Promise<void>;
@@ -80,6 +82,10 @@ export function ResizeTerm(arg1:string,arg2:number,arg3:number):Promise<void>;
 export function SaveImage(arg1:string):Promise<string>;
 
 export function SearchTranscripts(arg1:string):Promise<main.SearchResult>;
+
+export function RetryQueuedMessage(arg1:string,arg2:string):Promise<void>;
+
+export function SendMessage(arg1:string,arg2:string):Promise<void>;
 
 export function SendSkill(arg1:string,arg2:string):Promise<void>;
 

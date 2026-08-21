@@ -324,8 +324,8 @@ func TestAppHandoffSessionUsesInjectedObserverForEveryLiveRevalidation(t *testin
 	if err := app.HandoffSession(string(source.ID), string(target.ID)); err != nil {
 		t.Fatal(err)
 	}
-	if got := observations.Load(); got != 3 {
-		t.Fatalf("Observation calls = %d, want initial plus pre-literal and pre-Enter revalidation", got)
+	if got := observations.Load(); got != 4 {
+		t.Fatalf("Observation calls = %d, want initial plus dispatch readiness, pre-literal and pre-Enter revalidation", got)
 	}
 	for _, call := range parseFakeTmuxCalls(t, logPath) {
 		if len(call) > 0 && (call[0] == "list-panes" || call[0] == "capture-pane") {
@@ -370,36 +370,64 @@ func TestAppHandoffSessionLiveCodexDoesNotLeakStaleClaudeRun(t *testing.T) {
 	}
 }
 
-func TestAppHandoffSessionWaitsSynchronouslyForWorkingClaude(t *testing.T) {
+// A target that is still working at enqueue time keeps the handoff in its
+// Outbox until the Session shows a ready composer again.
+func TestAppHandoffSessionQueuesForWorkingClaudeAndDeliversWhenReady(t *testing.T) {
 	logPath := installHandoffFakeTmux(t, "esc to interrupt", "claude", "claude")
 	t.Setenv("MAGENTIC_HANDOFF_PANE_CONTENT_AFTER", "Ready\nshift+tab to cycle")
 	t.Setenv("MAGENTIC_HANDOFF_CONTENT_SWITCH_AT", "1")
 	source, target := defaultHandoffSessions()
 	handoffTestState(t, source, target)
 
-	started := time.Now()
 	if err := newHandoffTestApp().HandoffSession(string(source.ID), string(target.ID)); err != nil {
 		t.Fatal(err)
-	}
-	if elapsed := time.Since(started); elapsed < time.Second {
-		t.Fatalf("Handoff returned before queued Claude delivery: %s", elapsed)
 	}
 	if literal, enter := handoffSendCounts(t, logPath); literal != 1 || enter != 1 {
 		t.Fatalf("send counts = literal %d Enter %d, want delivered once", literal, enter)
 	}
+	if queued := handoffQueuedMessages(t, target.ID); len(queued) != 0 {
+		t.Fatalf("delivered handoff stayed queued: %+v", queued)
+	}
+}
+
+// handoffQueuedMessages reads the durable Outbox of one registered Session.
+func handoffQueuedMessages(t *testing.T, sessionID core.SessionID) []core.QueuedMessage {
+	t.Helper()
+	st, err := core.LoadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := st.SessionByID(sessionID)
+	if session == nil {
+		t.Fatalf("Session %q ist nicht registriert", sessionID)
+	}
+	return session.Outbox
+}
+
+func assertHandoffQueued(t *testing.T, sessionID core.SessionID) {
+	t.Helper()
+	queued := handoffQueuedMessages(t, sessionID)
+	if len(queued) != 1 || queued[0].Kind != core.QueuedMessageKindHandoff {
+		t.Fatalf("Outbox = %+v, want one queued handoff", queued)
+	}
+	if !strings.Contains(queued[0].Text, "Kontextübergabe aus einer anderen magentic-Session") {
+		t.Fatalf("queued handoff text = %q", queued[0].Text)
+	}
 }
 
 func TestAppHandoffSessionRejectsUnavailableOrUnknownTargetWithoutSending(t *testing.T) {
-	t.Run("unavailable observation", func(t *testing.T) {
+	// An Observation that cannot see the target does not decide against it any
+	// more: the handoff waits durably until the runtime is observable again.
+	t.Run("unavailable observation queues", func(t *testing.T) {
 		logPath := installHandoffFakeTmux(t, "Ready\nshift+tab to cycle", "claude", "claude")
 		t.Setenv("MAGENTIC_HANDOFF_LIST_FAIL", "1")
 		source, target := defaultHandoffSessions()
 		handoffTestState(t, source, target)
-		err := newHandoffTestApp().HandoffSession(string(source.ID), string(target.ID))
-		if err == nil || !strings.Contains(err.Error(), "nicht vollständig verfügbar") {
+		if err := newHandoffTestApp().HandoffSession(string(source.ID), string(target.ID)); err != nil {
 			t.Fatalf("HandoffSession() error = %v", err)
 		}
 		assertNoHandoffSend(t, logPath)
+		assertHandoffQueued(t, target.ID)
 	})
 
 	t.Run("unknown Codex readiness", func(t *testing.T) {
@@ -416,15 +444,17 @@ func TestAppHandoffSessionRejectsUnavailableOrUnknownTargetWithoutSending(t *tes
 }
 
 func TestAppHandoffSessionRejectsBlockedAndPlainTerminalTargets(t *testing.T) {
-	t.Run("blocked", func(t *testing.T) {
+	// A blocked target keeps its open dialog untouched, but the handoff is no
+	// longer lost: it stays queued until the dialog is answered.
+	t.Run("blocked queues", func(t *testing.T) {
 		logPath := installHandoffFakeTmux(t, "Do you want to continue? (y/n)", "claude", "claude")
 		source, target := defaultHandoffSessions()
 		handoffTestState(t, source, target)
-		err := newHandoffTestApp().HandoffSession(string(source.ID), string(target.ID))
-		if err == nil || !strings.Contains(err.Error(), "wartet auf eine Antwort") {
+		if err := newHandoffTestApp().HandoffSession(string(source.ID), string(target.ID)); err != nil {
 			t.Fatalf("HandoffSession() error = %v", err)
 		}
 		assertNoHandoffSend(t, logPath)
+		assertHandoffQueued(t, target.ID)
 	})
 
 	t.Run("plain terminal", func(t *testing.T) {
@@ -459,8 +489,9 @@ func TestAppHandoffSessionRevalidatesLiveToolBeforeLiteralAndEnter(t *testing.T)
 		switchAt    string
 		wantLiteral int
 	}{
-		{name: "before literal", switchAt: "1", wantLiteral: 0},
-		{name: "before enter", switchAt: "2", wantLiteral: 1},
+		{name: "before dispatch", switchAt: "1", wantLiteral: 0},
+		{name: "before literal", switchAt: "2", wantLiteral: 0},
+		{name: "before enter", switchAt: "3", wantLiteral: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			logPath := installHandoffFakeTmux(t, "Ready\nshift+tab to cycle", "claude", "claude")
@@ -468,14 +499,16 @@ func TestAppHandoffSessionRevalidatesLiveToolBeforeLiteralAndEnter(t *testing.T)
 			t.Setenv("MAGENTIC_HANDOFF_TARGET_SWITCH_AT", test.switchAt)
 			source, target := defaultHandoffSessions()
 			handoffTestState(t, source, target)
-			err := newHandoffTestApp().HandoffSession(string(source.ID), string(target.ID))
-			if err == nil || !strings.Contains(err.Error(), "kein unterstütztes KI-Tool mehr") {
+			// Delivery is now dispatcher-owned: a tool switch does not fail the
+			// action, it holds the message in the Outbox for a later attempt.
+			if err := newHandoffTestApp().HandoffSession(string(source.ID), string(target.ID)); err != nil {
 				t.Fatalf("HandoffSession() error = %v", err)
 			}
 			literal, enter := handoffSendCounts(t, logPath)
 			if literal != test.wantLiteral || enter != 0 {
 				t.Fatalf("send counts = literal %d Enter %d, want %d and 0", literal, enter, test.wantLiteral)
 			}
+			assertHandoffQueued(t, target.ID)
 		})
 	}
 }
@@ -509,6 +542,65 @@ func TestAppHandoffSessionDeduplicatesPendingPromptPerTarget(t *testing.T) {
 	}
 	if literal, enter := handoffSendCounts(t, logPath); literal != 1 || enter != 1 {
 		t.Fatalf("send counts = literal %d Enter %d, want one deduplicated handoff", literal, enter)
+	}
+}
+
+func TestAppSendMessageQueuesForBusySessionAndSupportsDiscardAndRetry(t *testing.T) {
+	logPath := installHandoffFakeTmux(t, "esc to interrupt", "claude", "claude")
+	source, target := defaultHandoffSessions()
+	handoffTestState(t, source, target)
+	app := newHandoffTestApp()
+
+	if err := app.SendMessage(string(source.ID), "   "); err == nil || !strings.Contains(err.Error(), "leer") {
+		t.Fatalf("SendMessage() with blank text = %v", err)
+	}
+	if err := app.SendMessage(string(source.ID), "bitte weiter"); err != nil {
+		t.Fatalf("SendMessage() error = %v", err)
+	}
+	assertNoHandoffSend(t, logPath)
+	queued := handoffQueuedMessages(t, source.ID)
+	if len(queued) != 1 || queued[0].Kind != core.QueuedMessageKindMessage || queued[0].Text != "bitte weiter" {
+		t.Fatalf("Outbox = %+v, want one queued free-text message", queued)
+	}
+
+	registry := core.OpenRegistry(core.StatePath())
+	if _, err := registry.Change(context.Background(), core.MarkQueuedMessageAttempt(
+		source.ID, source.Name, queued[0].ID, time.Now(),
+	)); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.RetryQueuedMessage(string(source.ID), queued[0].ID); err != nil {
+		t.Fatalf("RetryQueuedMessage() error = %v", err)
+	}
+	if retried := handoffQueuedMessages(t, source.ID); len(retried) != 1 || !retried[0].AttemptedAt.IsZero() {
+		t.Fatalf("retried message = %+v, want a cleared attempt marker", retried)
+	}
+
+	if err := app.DiscardQueuedMessage(string(source.ID), queued[0].ID); err != nil {
+		t.Fatalf("DiscardQueuedMessage() error = %v", err)
+	}
+	if got := handoffQueuedMessages(t, source.ID); len(got) != 0 {
+		t.Fatalf("discarded message stayed queued: %+v", got)
+	}
+}
+
+// SendSkill keeps its slash guard, but a busy Session queues the skill now.
+func TestAppSendSkillQueuesForBusySession(t *testing.T) {
+	logPath := installHandoffFakeTmux(t, "esc to interrupt", "claude", "claude")
+	source, target := defaultHandoffSessions()
+	handoffTestState(t, source, target)
+	app := newHandoffTestApp()
+
+	if err := app.SendSkill(string(source.ID), "review"); err == nil || !strings.Contains(err.Error(), "Slash-Kommandos") {
+		t.Fatalf("SendSkill() without a slash = %v", err)
+	}
+	if err := app.SendSkill(string(source.ID), "/review "); err != nil {
+		t.Fatalf("SendSkill() error = %v", err)
+	}
+	assertNoHandoffSend(t, logPath)
+	queued := handoffQueuedMessages(t, source.ID)
+	if len(queued) != 1 || queued[0].Kind != core.QueuedMessageKindSkill || queued[0].Text != "/review " {
+		t.Fatalf("Outbox = %+v, want one queued skill", queued)
 	}
 }
 

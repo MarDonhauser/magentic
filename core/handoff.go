@@ -267,6 +267,40 @@ func validateHandoffTarget(session Session, observed SessionObservation) (string
 	}
 }
 
+// validateHandoffEnqueueTarget rejects only targets that can never accept a
+// handoff. A busy, blocked or currently absent target keeps the message in its
+// Outbox: the dispatcher revalidates readiness strictly at delivery time
+// through validateHandoffDeliveryReady.
+func validateHandoffEnqueueTarget(session Session, observed SessionObservation) error {
+	if session.ID == "" {
+		return fmt.Errorf("Ziel-Session %q besitzt keine stabile SessionID", session.Name)
+	}
+	if !validRuntimeIdentity(session.RuntimeName) {
+		return fmt.Errorf("Ziel-Session %q besitzt keinen exakten RuntimeName", session.Name)
+	}
+	tool := strings.TrimSpace(observed.Tool)
+	toolKnown := observed.Availability == ObservationAvailable &&
+		observed.Presence == SessionPresencePresent && observed.ContentKnown && tool != ""
+	if !toolKnown {
+		// The runtime is currently absent or not observable. A coding-agent
+		// Session may well be resumed later, so the message waits in the Outbox.
+		if session.IsTerm() {
+			return fmt.Errorf("Ziel-Session %q ist ein reines Terminal — kein laufender KI-Prozess erkannt", session.Name)
+		}
+		return nil
+	}
+	if tool == AgentToolBash && session.IsTerm() {
+		return fmt.Errorf("Ziel-Session %q ist ein reines Terminal — kein laufender KI-Prozess erkannt", session.Name)
+	}
+	if tool != AgentToolClaude {
+		if _, supported := handoffVendorForTool(tool); supported {
+			return fmt.Errorf("Eingabebereitschaft der Ziel-Session %q ist für %s unbekannt", session.Name, tool)
+		}
+		return fmt.Errorf("in Ziel-Session %q läuft kein unterstütztes KI-Tool", session.Name)
+	}
+	return nil
+}
+
 func handoffLiveTargetValidator(name string) promptTargetValidator {
 	return func(observed promptTargetObservation) error {
 		return validateHandoffDeliveryReady(name, observed)
@@ -278,9 +312,11 @@ func handoffSourceCapable(session Session, observed SessionObservation) bool {
 	return err == nil
 }
 
+// handoffTargetCapable mirrors the enqueue-time policy so the picker offers
+// exactly the targets that can accept a queued handoff. Readiness is checked
+// again strictly at delivery time.
 func handoffTargetCapable(session Session, observed SessionObservation) bool {
-	_, _, err := validateHandoffTarget(session, observed)
-	return err == nil
+	return validateHandoffEnqueueTarget(session, observed) == nil
 }
 
 func resolveHandoffSessions(st *State, sourceID, targetID SessionID) (Session, Session, error) {
@@ -326,13 +362,10 @@ func HandoffSessionWithObserver(st *State, snapshot ObservationSnapshot, sourceI
 		return err
 	}
 	targetObservation := handoffObservationForSession(snapshot, target)
-	targetTool, waitForReady, err := validateHandoffTarget(target, targetObservation)
-	if err != nil {
+	if err := validateHandoffEnqueueTarget(target, targetObservation); err != nil {
 		return err
 	}
+	// The source context is captured now; delivery may happen much later.
 	prompt := buildSessionHandoffPrompt(resolved)
-	return enqueuePromptUsing(
-		target.TmuxName(), prompt, true, targetTool,
-		waitForReady, false, true, handoffLiveTargetValidator(target.Name), observe,
-	)
+	return SendQueuedMessageWithObserver(target.ID, QueuedMessageKindHandoff, prompt, observe)
 }

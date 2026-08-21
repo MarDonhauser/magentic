@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 )
@@ -263,5 +264,44 @@ func TestOverviewPreservesPartialWorktreeKnowledge(t *testing.T) {
 	}
 	if len(worktree.Problems) != 2 {
 		t.Fatalf("partial Worktree problems missing: %#v", worktree.Problems)
+	}
+}
+
+func TestOverviewProjectsQueuedOutboxMessages(t *testing.T) {
+	session := Session{ID: "session-1", Name: "hera", RuntimeName: "mgt-hera"}
+	session.Outbox = []QueuedMessage{
+		{
+			ID: "m1", Kind: QueuedMessageKindMessage, Text: "bitte\nweiter   machen",
+			EnqueuedAt: time.Now().Add(-2 * time.Minute),
+		},
+		{
+			ID: "m2", Kind: QueuedMessageKindHandoff, Text: strings.Repeat("ü", 120),
+			EnqueuedAt: time.Now().Add(-time.Minute), AttemptedAt: time.Now().Add(-30 * time.Second),
+		},
+	}
+	observed := SessionObservation{
+		SessionID: session.ID, Availability: ObservationAvailable, Presence: SessionPresencePresent,
+		Status: StatusRunning, Tool: AgentToolClaude, Content: "arbeitet", ContentKnown: true,
+	}
+
+	queued := toOvAgent(session, observed, "").Queued
+	if len(queued) != 2 {
+		t.Fatalf("queued projection = %+v, want both Outbox messages in order", queued)
+	}
+	if queued[0].ID != "m1" || queued[0].Kind != string(QueuedMessageKindMessage) ||
+		queued[0].Preview != "bitte weiter machen" || queued[0].Stuck {
+		t.Fatalf("first queued message = %+v", queued[0])
+	}
+	if queued[0].Age == "" {
+		t.Fatalf("queued message lost its age: %+v", queued[0])
+	}
+	if !queued[1].Stuck || queued[1].Kind != string(QueuedMessageKindHandoff) {
+		t.Fatalf("attempted message is not reported as stuck: %+v", queued[1])
+	}
+	if want := strings.Repeat("ü", 80) + "…"; queued[1].Preview != want {
+		t.Fatalf("preview = %q, want %q", queued[1].Preview, want)
+	}
+	if len(toOvAgent(Session{ID: "session-2", Name: "leer"}, observed, "").Queued) != 0 {
+		t.Fatal("an empty Outbox produced a queued projection")
 	}
 }

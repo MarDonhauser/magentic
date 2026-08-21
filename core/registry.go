@@ -54,6 +54,10 @@ const (
 	registryMarkDeploy
 	registryRenameSession
 	registryAddDiscovered
+	registryEnqueueMessage
+	registryMarkMessageAttempt
+	registryDequeueMessage
+	registryResetMessageAttempt
 )
 
 // RegistryChange is intentionally constructed through semantic helpers. Its
@@ -73,6 +77,8 @@ type RegistryChange struct {
 	sessions    []Session
 	baseCommit  string
 	baseDirty   []string
+	message     QueuedMessage
+	messageID   string
 	at          time.Time
 }
 
@@ -131,6 +137,31 @@ func RenameRegisteredSessionRuntime(sessionID SessionID, oldName, newName, newRu
 		kind: registryRenameSession, sessionID: sessionID, sessionName: oldName,
 		newName: newName, newRuntime: newRuntime,
 	}
+}
+
+// EnqueueSessionMessage appends a message to the Session's durable Outbox. A
+// message with the same Kind and Text is treated as a repeated request (double
+// click) and is not queued twice.
+func EnqueueSessionMessage(sessionID SessionID, name string, message QueuedMessage) RegistryChange {
+	return RegistryChange{kind: registryEnqueueMessage, sessionID: sessionID, sessionName: name, message: message}
+}
+
+// MarkQueuedMessageAttempt records that delivery of a queued message was
+// started, so a crash mid-send leaves the outcome visibly unknown.
+func MarkQueuedMessageAttempt(sessionID SessionID, name, messageID string, at time.Time) RegistryChange {
+	return RegistryChange{kind: registryMarkMessageAttempt, sessionID: sessionID, sessionName: name, messageID: messageID, at: at}
+}
+
+// DequeueSessionMessage removes a queued message, either after delivery or
+// because the user discarded it.
+func DequeueSessionMessage(sessionID SessionID, name, messageID string) RegistryChange {
+	return RegistryChange{kind: registryDequeueMessage, sessionID: sessionID, sessionName: name, messageID: messageID}
+}
+
+// ResetQueuedMessageAttempt clears a recorded attempt so the message becomes
+// deliverable again.
+func ResetQueuedMessageAttempt(sessionID SessionID, name, messageID string) RegistryChange {
+	return RegistryChange{kind: registryResetMessageAttempt, sessionID: sessionID, sessionName: name, messageID: messageID}
 }
 
 func addDiscoveredSessionsChange(sessions []Session) RegistryChange {
@@ -350,6 +381,52 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 			} else if session.RuntimeName == "" || session.RuntimeName == oldDefaultRuntime {
 				session.RuntimeName = SessionName(change.newName)
 			}
+		}
+		return true, "", session.ID, nil
+	case registryEnqueueMessage, registryMarkMessageAttempt, registryDequeueMessage, registryResetMessageAttempt:
+		idx := sessionIndex(state, change.sessionID, change.sessionName)
+		if idx < 0 {
+			return false, "", "", fmt.Errorf("Session %q nicht gefunden", change.sessionName)
+		}
+		session := &state.Agents[idx]
+		if change.kind == registryEnqueueMessage {
+			message := change.message
+			if message.ID == "" {
+				return false, "", "", fmt.Errorf("Nachricht ohne ID")
+			}
+			for _, queued := range session.Outbox {
+				if queued.Kind == message.Kind && queued.Text == message.Text {
+					return false, "", session.ID, nil
+				}
+			}
+			session.Outbox = append(session.Outbox, message)
+			return true, "", session.ID, nil
+		}
+		msgIdx := queuedMessageIndex(session.Outbox, change.messageID)
+		if msgIdx < 0 {
+			// The message is already gone (delivered or discarded elsewhere).
+			return false, "", session.ID, nil
+		}
+		switch change.kind {
+		case registryMarkMessageAttempt:
+			at := change.at
+			if at.IsZero() {
+				at = time.Now()
+			}
+			if session.Outbox[msgIdx].AttemptedAt.Equal(at) {
+				return false, "", session.ID, nil
+			}
+			session.Outbox[msgIdx].AttemptedAt = at
+		case registryDequeueMessage:
+			session.Outbox = append(session.Outbox[:msgIdx], session.Outbox[msgIdx+1:]...)
+			if len(session.Outbox) == 0 {
+				session.Outbox = nil
+			}
+		case registryResetMessageAttempt:
+			if session.Outbox[msgIdx].AttemptedAt.IsZero() {
+				return false, "", session.ID, nil
+			}
+			session.Outbox[msgIdx].AttemptedAt = time.Time{}
 		}
 		return true, "", session.ID, nil
 	case registryAddDiscovered:
@@ -616,6 +693,7 @@ func cloneState(state *State) State {
 	for i := range clone.Agents {
 		clone.Agents[i].BaseDirty = append([]string(nil), clone.Agents[i].BaseDirty...)
 		clone.Agents[i].AgentRuns = append([]AgentRunRef(nil), clone.Agents[i].AgentRuns...)
+		clone.Agents[i].Outbox = append([]QueuedMessage(nil), clone.Agents[i].Outbox...)
 	}
 	return clone
 }
@@ -632,6 +710,15 @@ func projectIndex(state *State, id ProjectID, name string) int {
 func sessionIndex(state *State, id SessionID, name string) int {
 	for i := range state.Agents {
 		if (id != "" && state.Agents[i].ID == id) || (id == "" && state.Agents[i].Name == name) {
+			return i
+		}
+	}
+	return -1
+}
+
+func queuedMessageIndex(outbox []QueuedMessage, id string) int {
+	for i := range outbox {
+		if id != "" && outbox[i].ID == id {
 			return i
 		}
 	}

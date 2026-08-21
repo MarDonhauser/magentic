@@ -205,9 +205,12 @@ func TestOverviewHandoffCapabilitiesMatchModulePolicy(t *testing.T) {
 		SessionID: source.ID, Availability: ObservationAvailable,
 		Presence: SessionPresenceAbsent, Status: StatusDead,
 	}
+	// The runtime is gone, so the tool is unknown. A coding-agent Session may be
+	// resumed later, so the picker keeps it selectable and the message waits in
+	// the Outbox.
 	got := toOvAgent(source, stopped, "")
-	if !got.HandoffSource || got.HandoffTarget {
-		t.Fatalf("stopped Codex capabilities = source %v target %v", got.HandoffSource, got.HandoffTarget)
+	if !got.HandoffSource || !got.HandoffTarget {
+		t.Fatalf("stopped Session capabilities = source %v target %v", got.HandoffSource, got.HandoffTarget)
 	}
 
 	target := handoffTestSession("target-id", "target")
@@ -215,6 +218,12 @@ func TestOverviewHandoffCapabilitiesMatchModulePolicy(t *testing.T) {
 	got = toOvAgent(target, working, "")
 	if !got.HandoffSource || !got.HandoffTarget {
 		t.Fatalf("working Claude capabilities = source %v target %v", got.HandoffSource, got.HandoffTarget)
+	}
+
+	blocked := handoffObservation(target, AgentToolClaude, StatusBlocked, "Do you want to proceed?")
+	got = toOvAgent(target, blocked, "")
+	if !got.HandoffTarget {
+		t.Fatalf("blockierte Claude-Session muss als Ziel wählbar bleiben: %#v", got)
 	}
 
 	unknown := handoffObservation(target, AgentToolCodex, StatusUnknown, "Codex ready")

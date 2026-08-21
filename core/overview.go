@@ -28,6 +28,19 @@ type OvAgent struct {
 	Dock          bool      `json:"dock"`
 	HandoffSource bool      `json:"handoffSource"`
 	HandoffTarget bool      `json:"handoffTarget"`
+
+	Queued []OvQueuedMessage `json:"queued,omitempty"`
+}
+
+// OvQueuedMessage projects one durably queued Outbox message for the UI. Stuck
+// reports an attempt that is still queued: a delivered message is dequeued
+// right away, so a lingering attempt marker means the outcome is unknown.
+type OvQueuedMessage struct {
+	ID      string `json:"id"`
+	Kind    string `json:"kind"`
+	Preview string `json:"preview"`
+	Age     string `json:"age"`
+	Stuck   bool   `json:"stuck"`
 }
 
 type OvWorktree struct {
@@ -517,7 +530,37 @@ func toOvAgent(a Agent, observed SessionObservation, branch string) OvAgent {
 		Dock:          a.IsDock(),
 		HandoffSource: handoffSource,
 		HandoffTarget: handoffTarget,
+		Queued:        queuedMessagesOverview(a.Outbox),
 	}
+}
+
+const queuedMessagePreviewLimit = 80
+
+func queuedMessagesOverview(outbox []QueuedMessage) []OvQueuedMessage {
+	if len(outbox) == 0 {
+		return nil
+	}
+	queued := make([]OvQueuedMessage, 0, len(outbox))
+	for _, message := range outbox {
+		queued = append(queued, OvQueuedMessage{
+			ID:      message.ID,
+			Kind:    string(message.Kind),
+			Preview: queuedMessagePreview(message.Text),
+			Age:     FormatAge(message.EnqueuedAt),
+			Stuck:   !message.AttemptedAt.IsZero(),
+		})
+	}
+	return queued
+}
+
+// queuedMessagePreview keeps the queue readable in one line per message.
+func queuedMessagePreview(text string) string {
+	preview := strings.Join(strings.Fields(text), " ")
+	runes := []rune(preview)
+	if len(runes) > queuedMessagePreviewLimit {
+		preview = strings.TrimRight(string(runes[:queuedMessagePreviewLimit]), " ") + "…"
+	}
+	return preview
 }
 
 func unread(st AgentStatus, seenAt, lastActive time.Time) bool {

@@ -46,6 +46,26 @@ const (
 	SessionPurposeDeploy  SessionPurpose = "deploy"
 )
 
+// QueuedMessageKind distinguishes what a durably queued message carries, so
+// delivery can apply the rules that belong to that kind.
+type QueuedMessageKind string
+
+const (
+	QueuedMessageKindMessage QueuedMessageKind = "message"
+	QueuedMessageKindSkill   QueuedMessageKind = "skill"
+	QueuedMessageKindHandoff QueuedMessageKind = "handoff"
+)
+
+// QueuedMessage is one message waiting in a Session's Outbox. AttemptedAt is
+// set right before a send so a crash cannot silently duplicate a delivery.
+type QueuedMessage struct {
+	ID          string            `json:"id"`
+	Kind        QueuedMessageKind `json:"kind"`
+	Text        string            `json:"text"`
+	EnqueuedAt  time.Time         `json:"enqueued_at"`
+	AttemptedAt time.Time         `json:"attempted_at,omitzero"`
+}
+
 type Project struct {
 	ID         ProjectID `json:"id,omitempty"`
 	Name       string    `json:"name"`
@@ -81,6 +101,7 @@ type Session struct {
 	DeployAt         time.Time           `json:"deploy_at,omitzero"`
 	LaterAt          time.Time           `json:"later_at,omitzero"`
 	SeenAt           time.Time           `json:"seen_at,omitzero"`
+	Outbox           []QueuedMessage     `json:"outbox,omitempty"`
 }
 
 // Agent remains as a source-compatible name while callers migrate to Session.

@@ -509,6 +509,26 @@ func (a *App) SendSkill(sessionID, cmd string) error {
 	return nil
 }
 
+// SendMessage queues free text for a Session. It is delivered as soon as the
+// Session is input-ready; a busy Session keeps it in its Outbox.
+func (a *App) SendMessage(sessionID, text string) error {
+	if strings.TrimSpace(text) == "" {
+		return fmt.Errorf("Nachricht ist leer")
+	}
+	id := core.SessionID(strings.TrimSpace(sessionID))
+	return core.SendQueuedMessageWithObserver(id, core.QueuedMessageKindMessage, text, a.observeSessions)
+}
+
+// DiscardQueuedMessage removes a queued message the user no longer wants.
+func (a *App) DiscardQueuedMessage(sessionID, messageID string) error {
+	return core.DiscardQueuedMessage(core.SessionID(strings.TrimSpace(sessionID)), strings.TrimSpace(messageID))
+}
+
+// RetryQueuedMessage releases a stuck message for another delivery attempt.
+func (a *App) RetryQueuedMessage(sessionID, messageID string) error {
+	return core.RetryQueuedMessage(core.SessionID(strings.TrimSpace(sessionID)), strings.TrimSpace(messageID))
+}
+
 func (a *App) Cleanup(projectID, reference string) (string, error) {
 	st, target, err := resolveWorktreeTarget(a.ctx, projectID, reference)
 	if err != nil {

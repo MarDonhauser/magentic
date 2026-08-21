@@ -9,6 +9,7 @@ import {
   Overview,
   NewSession, NewTermSession, NewTermSessionFor, DoneAgent, Cleanup, Merge, Deploy, RemoveWorktree, SetMainBranch,
   OpenTerm, WriteTerm, ResizeTerm, CloseTerm, KillSession, LaterSession, ReopenSession, SendSkill, HandoffSession,
+  SendMessage, DiscardQueuedMessage, RetryQueuedMessage,
   DeployStatus, AzLogin, ArgoLogin, AzAccounts, AzSetSubscription,
   WorktreeDiff, SessionPreview, SearchTranscripts, SessionLinks, SetActiveTerm,
   PickFolder, AddProject, RemoveProject, ReorderProjects, SaveImage, Timeline,
@@ -33,6 +34,7 @@ import { mountDock, toggleDock, isDockOpen, closeDockTab, dockTabs, refitDock } 
 import { mountBreaks, updateBreaks, openBreak, openBreakSettings, isBreakOpen } from './breaks.js';
 import { initThemeToggle, onThemeChange, terminalTheme } from './theme.js';
 import { createHydraHandoff } from './hydra-handoff.js';
+import { queuedMessages, queuedHeadline } from './queued-state.js';
 mountDeveloperIcons();
 
 const STATUS = {
@@ -106,6 +108,7 @@ let overviewSync = { kind: 'loading', error: '', lastOkAt: '' };
 let confirmRemove = null;
 let confirmRemoveProject = null;
 let editingMain = null;
+let composingSession = null;
 let sidebarSessions = [];
 let hydraProject = null;
 let pdrag = null;
@@ -1356,12 +1359,55 @@ function agentPill(a, project) {
   const open = a.status !== 'dead'
     ? `<button class="btn tiny" data-act="open" data-session-id="${esc(a.id)}" data-agent="${esc(a.name)}" title="Terminal öffnen">${developerIcon('bash')}</button>`
     : '';
+  const compose = a.id && !a.term && a.status !== 'dead'
+    ? `<button class="btn tiny" data-act="compose" data-session-id="${esc(a.id)}" data-agent="${esc(a.name)}" ` +
+      `title="Nachricht an „${esc(a.name)}“ schreiben — arbeitet die Session gerade, wartet die Nachricht in der Warteschlange">${icon('pencil')}</button>`
+    : '';
   return `<span class="pill${a.status === 'blocked' ? ' waiting' : ''}${a.unread ? ' unread' : ''}">` +
     `<span class="pill-avatar">${agentPortrait(a.name, 18, a)}</span>` +
     `<span class="dot" style="background:${v.color}"></span>` +
     `<span class="name">${esc(a.name)}</span>` +
     `<span class="st">${visHtml(v)}</span>` +
-    `<span class="age">${esc(a.age)}</span>${open}${done}</span>`;
+    `<span class="age">${esc(a.age)}</span>${compose}${open}${done}</span>`;
+}
+
+// queuedBlock lists the durably queued messages of one Session under its row.
+// A message whose delivery outcome is unknown after a crash is never resent on
+// its own — it waits for an explicit retry or discard.
+function queuedBlock(a) {
+  const messages = queuedMessages(a);
+  if (!messages.length) return '';
+  const items = messages.map(message => {
+    const age = message.age ? `<span class="queued-age">${esc(message.age)}</span>` : '';
+    const note = message.stuck
+      ? `<span class="queued-note">Zustellung ungewiss</span>`
+      : '';
+    const retry = message.stuck
+      ? `<button class="btn tiny" data-act="requeue" data-session-id="${esc(a.id)}" data-message-id="${esc(message.id)}" ` +
+        `title="Die Nachricht noch einmal zustellen — die Session könnte sie dann doppelt erhalten">Erneut senden</button>`
+      : '';
+    return `<li class="queued-item${message.stuck ? ' is-stuck' : ''}">` +
+      `<span class="queued-text">${esc(message.text)}</span>${age}${note}` +
+      `<span class="queued-actions">${retry}` +
+      `<button class="btn tiny danger" data-act="dropqueued" data-session-id="${esc(a.id)}" data-message-id="${esc(message.id)}" ` +
+      `title="Die Nachricht aus der Warteschlange entfernen">Verwerfen</button></span></li>`;
+  }).join('');
+  return `<div class="queued">` +
+    `<p class="queued-head">${esc(queuedHeadline(a.name, messages))}</p>` +
+    `<ul class="queued-list">${items}</ul></div>`;
+}
+
+// composeBlock opens the free-text composer for exactly one Session at a time.
+function composeBlock(a) {
+  if (!a.id || composingSession !== a.id) return '';
+  return `<div class="session-compose">` +
+    `<label class="session-compose-label" for="compose-input">Was soll „${esc(a.name)}“ als Nächstes tun?</label>` +
+    `<textarea id="compose-input" class="session-compose-input" rows="2" ` +
+    `placeholder="Nachricht an ${esc(a.name)} …"></textarea>` +
+    `<span class="session-compose-actions">` +
+    `<button class="btn tiny" data-act="cancelcompose">Abbrechen</button>` +
+    `<button class="btn tiny primary" data-act="sendcompose" data-session-id="${esc(a.id)}" data-agent="${esc(a.name)}">Senden</button>` +
+    `</span></div>`;
 }
 
 function attentionOverview() {
@@ -1460,7 +1506,9 @@ function worktreeRow(p, wt, idx, total) {
   } else if (p.mainBranchKnown && !wt.ahead && wt.branch !== p.mainBranch && wt.branch !== '(kein git)' && wt.branch !== '—' && p.path) {
     abHtml += `<span class="git-state" style="color:var(--good)" title="alle Commits sind in ${esc(p.mainBranch)}">${icon('check')} in ${esc(p.mainBranch)}</span>`;
   }
-  const agents = (wt.agents || []).filter(a => !a.dock).map(a => agentPill(a, p.name)).join('');
+  const rowAgents = (wt.agents || []).filter(a => !a.dock);
+  const agents = rowAgents.map(a => agentPill(a, p.name)).join('');
+  const sessionPanels = rowAgents.map(a => queuedBlock(a) + composeBlock(a)).join('');
   const warns = (wt.warnings || []).map(w => `<span class="warn"><span class="ic">${icon('warn')}</span>${esc(w)}</span>`).join('');
   const problemText = (wt.problems || []).map(problem => problem?.message).filter(Boolean).join('; ');
   const problem = problemText
@@ -1470,7 +1518,8 @@ function worktreeRow(p, wt, idx, total) {
   const last = wt.lastMsg ? `<span class="lastmsg" title="letzter Commit">„${esc(wt.lastMsg)}“</span>` : '';
   const branch = wt.checkoutKnown ? wt.branch : 'Branch unbekannt';
   return `<div class="${cls.join(' ')}">` +
-    `<span class="branch${wt.checkoutKnown ? '' : ' unknown'}">${esc(branch)}</span>${abHtml}${gitState(p, wt)}${agents}${warns}${problem}${pathHtml}${last}${worktreeActions(p, wt)}</div>`;
+    `<span class="branch${wt.checkoutKnown ? '' : ' unknown'}">${esc(branch)}</span>${abHtml}${gitState(p, wt)}${agents}${warns}${problem}${pathHtml}${last}${worktreeActions(p, wt)}</div>` +
+    sessionPanels;
 }
 
 function projectCard(p) {
@@ -1767,6 +1816,36 @@ function renderAll() {
   if (view === 'hydra') { updateHydraBar(); syncHydra(); }
 }
 
+// sendSessionMessage hands the text to the durable Outbox. A busy Session
+// simply keeps the message queued, so the queue list below the row is the
+// confirmation — only a real failure needs a toast.
+async function sendSessionMessage(sessionID, sessionName) {
+  const input = $('compose-input');
+  const text = input?.value.trim();
+  if (!sessionID || !text) return;
+  try {
+    await SendMessage(sessionID, text);
+    composingSession = null;
+    await refresh(true);
+  } catch (err) {
+    toast(`Nachricht an „${sessionName}“ konnte nicht übernommen werden: ` + errorText(err), true);
+  }
+}
+
+overviewEl.addEventListener('keydown', e => {
+  const input = e.target.closest('.session-compose-input');
+  if (!input) return;
+  if (e.key === 'Escape') {
+    composingSession = null;
+    renderOverview();
+    return;
+  }
+  if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+  e.preventDefault();
+  const send = input.closest('.session-compose')?.querySelector('[data-act="sendcompose"]');
+  if (send) sendSessionMessage(send.dataset.sessionId, send.dataset.agent);
+});
+
 overviewEl.addEventListener('click', async e => {
   const gs = e.target.closest('.git-state[data-worktree]');
   if (gs) {
@@ -1835,6 +1914,19 @@ overviewEl.addEventListener('click', async e => {
         await act(SetMainBranch(d.projectId, v), v ? `Hauptbranch: ${v}` : 'Hauptbranch: automatisch');
         break;
       }
+      case 'compose':
+        composingSession = composingSession === d.sessionId ? null : d.sessionId;
+        renderOverview();
+        $('compose-input')?.focus();
+        break;
+      case 'cancelcompose': composingSession = null; renderOverview(); break;
+      case 'sendcompose': await sendSessionMessage(d.sessionId, d.agent); break;
+      case 'dropqueued':
+        await act(DiscardQueuedMessage(d.sessionId, d.messageId), 'Die wartende Nachricht wurde verworfen.');
+        break;
+      case 'requeue':
+        await act(RetryQueuedMessage(d.sessionId, d.messageId), 'Die Nachricht wird erneut zugestellt.');
+        break;
       case 'dsrefresh': await refreshDeployStatus(); break;
       case 'azsub': await openSubPicker(b); break;
       case 'azlogin': AzLogin(); toast('Browser öffnet sich für den Azure-Login…'); break;
