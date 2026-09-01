@@ -14,8 +14,8 @@
   align-items: center;
   gap: 5px;
   color: var(--ink-2);
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 11.5px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
   white-space: nowrap;
 }
 
@@ -43,12 +43,6 @@
   margin-left: auto;
 }
 
-.project-tools-label {
-  margin-right: 2px;
-  color: var(--muted);
-  font-size: 10.5px;
-}
-
 .project-lens {
   min-height: 28px;
   display: inline-flex;
@@ -60,7 +54,7 @@
   background: transparent;
   color: var(--ink-2);
   font: inherit;
-  font-size: 11.5px;
+  font-size: var(--fs-label);
   cursor: pointer;
 }
 
@@ -83,7 +77,7 @@
   border-color: var(--term-action-hover);
   background: var(--term-action-hover);
   color: var(--term-action-text);
-  font-weight: 650;
+  font-weight: var(--fw-semibold);
 }
 
 .btn.primary:hover:not(:disabled) {
@@ -105,7 +99,7 @@
   border-radius: 999px;
   background: var(--surface);
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: var(--fs-label);
   cursor: pointer;
   list-style: none;
 }
@@ -160,7 +154,7 @@
   background: transparent;
   color: var(--ink-2);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-label);
   text-align: left;
   cursor: pointer;
 }
@@ -174,9 +168,9 @@
 .project-menu-item > b {
   margin-left: auto;
   color: var(--muted);
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 11px;
-  font-weight: 500;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-medium);
 }
 
 .project-menu-item:hover {
@@ -190,7 +184,7 @@
 
 .project-menu-item.confirm {
   background: color-mix(in srgb, var(--critical) 10%, transparent);
-  font-weight: 650;
+  font-weight: var(--fw-semibold);
 }
 
 .project-menu-separator {
@@ -208,7 +202,7 @@
 
 .project-menu-config > label {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 
 .project-menu-config .maincfg {
@@ -267,14 +261,14 @@
 }
 
 .overview-sync-copy strong {
-  font-size: 12.5px;
-  font-weight: 650;
+  font-size: var(--fs-label);
+  font-weight: var(--fw-semibold);
 }
 
 .overview-sync-copy span {
   overflow: hidden;
   color: var(--ink-2);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -326,7 +320,7 @@
 
 .queued-head {
   margin: 0 0 6px;
-  font-size: 12px;
+  font-size: var(--fs-label);
   color: var(--ink-2);
 }
 
@@ -344,7 +338,7 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 5px 9px;
-  font-size: 12px;
+  font-size: var(--fs-label);
 }
 
 .queued-text {
@@ -384,13 +378,13 @@
 }
 
 .session-compose-label {
-  font-size: 12px;
+  font-size: var(--fs-label);
   color: var(--ink-2);
 }
 
 .session-compose-input {
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   color: var(--ink);
   background: var(--surface);
   border: 1px solid var(--border);
@@ -420,10 +414,6 @@
 
 @media (max-width: 760px) {
   .project-lenses {
-    width: 100%;
-  }
-
-  .project-tools-label {
     width: 100%;
   }
 

@@ -1538,7 +1538,7 @@ function projectCard(p) {
       : `<button class="project-menu-item danger" data-act="rmproj1" data-project-id="${esc(p.id)}" data-project-name="${esc(p.name)}" title="Repository aus magentic entfernen — löscht keine Dateien">${icon('x')} Repository entfernen</button>`;
     const menuOpen = editingMain === p.id || confirmRemoveProject === p.id ? ' open' : '';
     projectTools = `<div class="project-tools">` +
-      `<div class="project-lenses"><span class="project-tools-label">Ansichten</span>` +
+      `<div class="project-lenses">` +
       `<button class="project-lens" data-act="showgraph" data-project="${esc(p.id)}" title="Git-Graph dieses Projekts — wo Worktrees abzweigen und zusammenlaufen">${developerIcon('git')} Graph</button>` +
       `<button class="project-lens" data-act="showboard" data-project="${esc(p.id)}" title="Board aus allen Spec-Ordnern — Plan, Tasks und was gerade läuft">${developerIcon('markdown')} Board</button>` +
       `<button class="project-lens" data-act="showstats" data-project="${esc(p.name)}" title="Statistik mit Fokus auf dieses Projekt">${icon('chart')} Statistik</button></div>` +

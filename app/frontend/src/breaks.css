@@ -11,7 +11,7 @@
   background: var(--panel);
   border: 1px solid var(--border);
   box-shadow: 0 6px 20px var(--shadow);
-  font-size: 12px;
+  font-size: var(--fs-label);
   color: var(--ink-2);
   user-select: none;
 }
@@ -52,13 +52,13 @@
   border-radius: 999px;
   background: var(--raise-2);
   color: var(--ink);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   white-space: nowrap;
 }
 
 .br-ind-good {
   color: var(--accent);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   white-space: nowrap;
 }
 
@@ -81,7 +81,7 @@
   border-radius: 50%;
   background: transparent;
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--fs-subhead);
   line-height: 1;
   cursor: pointer;
 }
@@ -162,8 +162,8 @@
 
 .br-kicker {
   color: var(--muted);
-  font-size: 11px;
-  letter-spacing: .16em;
+  font-size: var(--fs-meta);
+  letter-spacing: var(--tracking-caps);
   text-transform: uppercase;
 }
 
@@ -233,9 +233,9 @@
   position: relative;
   z-index: 1;
   color: var(--ink);
-  font-size: 21px;
-  font-weight: 300;
-  letter-spacing: .05em;
+  font-size: var(--fs-display);
+  font-weight: var(--fw-regular);
+  letter-spacing: var(--tracking-wide);
   font-variant-numeric: tabular-nums;
 }
 
@@ -246,9 +246,9 @@
   margin: 30px 0 0;
   max-width: 22em;
   color: var(--ink);
-  font-size: 21px;
-  font-weight: 500;
-  line-height: 1.5;
+  font-size: var(--fs-display);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-text);
 }
 
 .br-timer {
@@ -287,7 +287,7 @@
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   cursor: pointer;
 }
 
@@ -303,7 +303,7 @@
   display: none;
   margin-top: 20px;
   color: var(--ink);
-  font-size: 14.5px;
+  font-size: var(--fs-subhead);
   animation: br-fade .8s ease both;
 }
 
@@ -323,8 +323,8 @@
   gap: 10px;
   margin-top: 26px;
   color: var(--muted);
-  font-size: 12.5px;
-  line-height: 1.5;
+  font-size: var(--fs-label);
+  line-height: var(--lh-text);
 }
 
 .br-agents.br-waiting { color: var(--warning); }
@@ -336,7 +336,7 @@
   background: transparent;
   color: var(--warning);
   font: inherit;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   cursor: pointer;
 }
 
@@ -351,7 +351,7 @@
   background: var(--raise);
   color: var(--ink-2);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-body);
   cursor: pointer;
   transition: color .18s ease, border-color .18s ease, background .18s ease;
 }
@@ -385,7 +385,7 @@
   display: flex;
   align-items: center;
   gap: 9px;
-  font-size: 12px;
+  font-size: var(--fs-label);
   color: var(--ink-2);
 }
 
@@ -404,7 +404,7 @@
   background: var(--surface);
   color: var(--ink);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-label);
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
@@ -415,7 +415,7 @@
   width: 26px;
   flex: none;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 
 @keyframes br-fade {
@@ -434,7 +434,7 @@
 
 @media (max-width: 620px), (max-height: 760px) {
   .br-orb { width: 168px; height: 168px; margin: 18px 0 4px; }
-  .br-phase { font-size: 19px; }
+  .br-phase { font-size: var(--fs-title); }
   .br-impulse { margin-top: 20px; }
   .br-timer { margin-top: 22px; }
   .br-agents { margin-top: 20px; }
@@ -450,7 +450,6 @@
   }
   .br-scrim, .br-sheet, .br-done-line { animation: none; }
   .br-bar-fill { transition: none; }
-  .br-phase { font-size: 24px; }
 }
 
 /* Nach den ersten Sekunden bleibt nur der Atem — nichts mehr zu lesen. */
@@ -486,11 +485,11 @@
 .br-shead {
   display: flex; align-items: baseline; gap: 8px;
   margin-bottom: 6px;
-  font-size: 11px; font-weight: 700;
-  letter-spacing: .08em; text-transform: uppercase;
+  font-size: var(--fs-meta); font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-caps); text-transform: uppercase;
   color: var(--muted);
 }
-.br-shint { font-size: 10.5px; font-weight: 400; letter-spacing: 0; text-transform: none; opacity: .8; }
+.br-shint { font-size: var(--fs-micro); font-weight: var(--fw-regular); letter-spacing: 0; text-transform: none; opacity: .8; }
 
 /* Ohne laufende Pause fällt der Atemkreis weg — dann stünde der Knopf über
    den Feldern. */

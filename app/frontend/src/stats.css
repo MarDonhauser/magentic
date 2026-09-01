@@ -1,6 +1,6 @@
 .st-root {
   padding: 18px 22px 40px;
-  font-size: 13px;
+  font-size: var(--fs-body);
   color: var(--ink);
 }
 
@@ -15,20 +15,20 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-size: 19px;
-  font-weight: 650;
+  font-size: var(--fs-title);
+  font-weight: var(--fw-semibold);
   margin: 0;
-  letter-spacing: -0.01em;
+  letter-spacing: var(--tracking-tight);
 }
 .st-head h1 .dev-icon { width: 18px; height: 18px; }
 .st-sub {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-label);
   margin-top: 3px;
 }
 .st-sub b {
   color: var(--ink-2);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 .st-head-r { margin-left: auto; }
 
@@ -41,7 +41,7 @@
 }
 .st-range button {
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-label);
   color: var(--ink-2);
   background: transparent;
   border: 0;
@@ -53,7 +53,7 @@
 .st-range button.on {
   background: var(--accent-soft);
   color: var(--accent);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 .st-err {
@@ -80,8 +80,8 @@
   flex: none;
   padding-top: 1px;
   color: var(--muted);
-  font-size: 11.5px;
-  font-weight: 600;
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-semibold);
 }
 
 .st-coverage ul {
@@ -101,7 +101,7 @@
   gap: 5px;
   min-width: 0;
   color: var(--ink-2);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
 }
 
 .st-source > i {
@@ -113,7 +113,7 @@
   background: var(--muted);
 }
 
-.st-source-name { color: var(--ink); font-weight: 600; }
+.st-source-name { color: var(--ink); font-weight: var(--fw-semibold); }
 .st-source-state { color: var(--muted); white-space: nowrap; }
 .st-source-problem {
   max-width: 260px;
@@ -140,8 +140,8 @@
 .st-empty b {
   display: block;
   color: var(--ink);
-  font-size: 15px;
-  font-weight: 600;
+  font-size: var(--fs-subhead);
+  font-weight: var(--fw-semibold);
   margin-bottom: 6px;
 }
 
@@ -149,7 +149,7 @@
   margin: 3px 0 2px;
   max-width: 72ch;
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: var(--fs-label);
 }
 
 .st-project-focus {
@@ -174,15 +174,15 @@
 .st-project-focus h2 {
   margin: 0;
   color: var(--ink);
-  font-size: 15px;
-  font-weight: 700;
+  font-size: var(--fs-subhead);
+  font-weight: var(--fw-bold);
 }
 
 .st-project-focus p {
   max-width: 78ch;
   margin: 3px 0 0;
   color: var(--ink-2);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
 }
 
 .st-project-focus button {
@@ -193,7 +193,7 @@
   background: transparent;
   color: var(--accent);
   font: inherit;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   text-decoration: underline;
   text-underline-offset: 3px;
   cursor: pointer;
@@ -213,7 +213,7 @@
   padding-top: 10px;
   border-top: 1px solid var(--border);
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
 }
 
 .st-project-metrics span {
@@ -224,7 +224,7 @@
 
 .st-project-metrics b {
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--fs-subhead);
   font-variant-numeric: tabular-nums;
 }
 
@@ -236,12 +236,12 @@
   padding-top: 10px;
   border-top: 1px solid var(--border);
   color: var(--ink-2);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
 }
 
 .st-project-empty strong {
   color: var(--ink);
-  font-size: 12.5px;
+  font-size: var(--fs-label);
 }
 
 .st-tiles {
@@ -259,25 +259,25 @@
 }
 .st-tile .k {
   color: var(--ink-2);
-  font-size: 11.5px;
-  letter-spacing: 0.01em;
+  font-size: var(--fs-meta);
+  letter-spacing: var(--tracking-wide);
 }
 .st-tile .v {
-  font-size: 25px;
-  font-weight: 600;
-  line-height: 1.15;
+  font-size: var(--fs-display);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
   margin-top: 3px;
   white-space: nowrap;
 }
 .st-tile .v small {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
   color: var(--ink-2);
   margin-left: 3px;
 }
 .st-tile .n {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   margin-top: 2px;
 }
 .st-tile.wide { grid-column: 1 / -1; display: flex; gap: 16px; align-items: stretch; }
@@ -304,14 +304,14 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 14px;
-  font-weight: 650;
+  font-size: var(--fs-subhead);
+  font-weight: var(--fw-semibold);
   margin: 0;
 }
 .st-card-head h2 .dev-icon { width: 14px; height: 14px; }
 .st-card-head .st-note {
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
 }
 .st-card-head .r { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 
@@ -336,7 +336,7 @@
   align-items: center;
   gap: 6px;
   color: var(--ink-2);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   white-space: nowrap;
 }
 .st-sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
@@ -351,7 +351,7 @@
 }
 .st-seg button {
   font: inherit;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--ink-2);
   background: transparent;
   border: 0;
@@ -361,12 +361,12 @@
 }
 .st-seg button + button { border-left: 1px solid var(--border); }
 .st-seg button:hover { background: var(--raise); color: var(--ink); }
-.st-seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.st-seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: var(--fw-semibold); }
 
 .st-plot { width: 100%; min-width: 0; }
 .st-plot svg { display: block; width: 100%; height: auto; overflow: visible; }
-.st-ax { fill: var(--muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
-.st-ax-s { fill: var(--ink-2); font-size: 11px; }
+.st-ax { fill: var(--muted); font-size: var(--fs-micro); font-variant-numeric: tabular-nums; }
+.st-ax-s { fill: var(--ink-2); font-size: var(--fs-meta); }
 .st-gl { stroke: var(--grid); stroke-width: 1; shape-rendering: crispEdges; }
 .st-base { stroke: var(--border); stroke-width: 1; shape-rendering: crispEdges; }
 .st-band { fill: var(--raise); opacity: 0; pointer-events: none; }
@@ -381,7 +381,7 @@
   align-items: center;
   gap: 6px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   font-variant-numeric: tabular-nums;
 }
 .st-scale i { width: 15px; height: 10px; border-radius: 2px; display: block; }
@@ -394,9 +394,9 @@
 }
 .st-table th {
   text-align: right;
-  font-weight: 500;
+  font-weight: var(--fw-medium);
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   padding: 0 0 5px;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
@@ -411,19 +411,19 @@
 }
 .st-table tr:last-child td { border-bottom: 0; }
 .st-table td:first-child { color: var(--ink); }
-.st-table td.num-strong { color: var(--ink); font-weight: 600; }
+.st-table td.num-strong { color: var(--ink); font-weight: var(--fw-semibold); }
 .st-table th + th, .st-table td + td { padding-left: 12px; }
 .st-mn { display: inline-flex; align-items: center; gap: 7px; }
 .st-mn > span {
   display: inline-flex;
   flex-direction: column;
   align-items: flex-start;
-  line-height: 1.2;
+  line-height: var(--lh-tight);
 }
 .st-mn small {
   color: var(--muted);
-  font-size: 10px;
-  font-weight: 400;
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-regular);
 }
 
 .st-pill {
@@ -431,7 +431,7 @@
   border: 1px solid var(--accent);
   color: var(--accent);
   border-radius: 999px;
-  font-size: 10px;
+  font-size: var(--fs-micro);
   padding: 0 6px;
   line-height: 15px;
   vertical-align: 1px;
@@ -451,14 +451,14 @@
   border-radius: 8px;
   box-shadow: 0 6px 22px var(--shadow);
   padding: 7px 9px;
-  font-size: 12px;
+  font-size: var(--fs-label);
   font-variant-numeric: tabular-nums;
 }
 .st-tip.on { opacity: 1; }
 .st-tip-t {
   color: var(--ink);
-  font-weight: 600;
-  font-size: 11.5px;
+  font-weight: var(--fw-semibold);
+  font-size: var(--fs-meta);
   margin-bottom: 5px;
   white-space: nowrap;
 }
@@ -466,12 +466,12 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  line-height: 1.5;
+  line-height: var(--lh-text);
   white-space: nowrap;
 }
 .st-tip-k { width: 11px; height: 2px; border-radius: 2px; flex: none; }
-.st-tip-n { color: var(--ink-2); font-size: 11.5px; }
-.st-tip-v { margin-left: auto; color: var(--ink); font-weight: 600; padding-left: 10px; }
+.st-tip-n { color: var(--ink-2); font-size: var(--fs-meta); }
+.st-tip-v { margin-left: auto; color: var(--ink); font-weight: var(--fw-semibold); padding-left: 10px; }
 .st-tip-sep { height: 1px; background: var(--border); margin: 5px 0; }
 
 .st-q {
@@ -482,7 +482,7 @@
   border-radius: 50%;
   border: 1px solid var(--border);
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--fs-micro);
   line-height: 10px;
   text-align: center;
   vertical-align: 1px;

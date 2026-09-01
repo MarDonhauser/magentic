@@ -1,5 +1,5 @@
 .gg {
-  font-size: 13px;
+  font-size: var(--fs-body);
   color: var(--ink);
 }
 
@@ -14,8 +14,8 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-weight: 650;
-  font-size: 14px;
+  font-weight: var(--fw-semibold);
+  font-size: var(--fs-subhead);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -25,7 +25,7 @@
   margin-left: auto;
   flex: none;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   font-variant-numeric: tabular-nums;
 }
 
@@ -57,8 +57,8 @@
 }
 .gg-err .gg-ico { width: 15px; height: 15px; }
 .gg-err-msg {
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 11.5px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
   color: var(--ink-2);
 }
 .gg-partial {
@@ -93,9 +93,9 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--gg-c) 18%, transparent);
 }
 .gg-leg-name {
-  font-family: ui-monospace, Menlo, monospace;
-  font-weight: 600;
-  font-size: 12.5px;
+  font-family: var(--font-mono);
+  font-weight: var(--fw-semibold);
+  font-size: var(--fs-label);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -107,7 +107,7 @@
   display: inline-flex;
   gap: 7px;
   flex: none;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   font-variant-numeric: tabular-nums;
   color: var(--muted);
 }
@@ -119,10 +119,10 @@
   flex: none;
   padding: 0 7px;
   border-radius: 999px;
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
   line-height: 16px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-wide);
   border: 1px solid var(--border);
   color: var(--ink-2);
 }
@@ -138,9 +138,9 @@
   gap: 4px;
   flex: none;
   max-width: 190px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--ink-2);
-  font-family: ui-monospace, Menlo, monospace;
+  font-family: var(--font-mono);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -156,9 +156,9 @@
   max-width: 150px;
   padding: 1px 7px 1px 3px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   line-height: 16px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--accent);
   border: 1px solid rgba(55,207,189,0.45);
   background: rgba(55,207,189,0.13);
@@ -234,7 +234,7 @@
   max-width: 210px;
   padding: 1px 7px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   line-height: 16px;
   border: 1px solid var(--border);
   background: var(--raise-2);
@@ -247,24 +247,24 @@
   text-overflow: ellipsis;
 }
 .gg-branch {
-  font-family: ui-monospace, Menlo, monospace;
+  font-family: var(--font-mono);
   color: var(--ink);
 }
 .gg-branch.is-main {
-  font-weight: 650;
+  font-weight: var(--fw-semibold);
   color: var(--gg-c);
   border-color: color-mix(in srgb, var(--gg-c) 55%, transparent);
   background: color-mix(in srgb, var(--gg-c) 14%, transparent);
 }
 .gg-branch.is-wt {
-  font-weight: 650;
+  font-weight: var(--fw-semibold);
   color: var(--gg-c);
   border-color: color-mix(in srgb, var(--gg-c) 70%, transparent);
   background: color-mix(in srgb, var(--gg-c) 16%, transparent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--gg-c) 22%, transparent);
 }
 .gg-remote {
-  font-family: ui-monospace, Menlo, monospace;
+  font-family: var(--font-mono);
   color: var(--muted);
   background: none;
   border-style: dashed;
@@ -273,12 +273,12 @@
   color: var(--warning);
   border-color: rgba(224,178,94,0.45);
   background: rgba(224,178,94,0.10);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 .gg-headref {
-  font-weight: 700;
-  font-size: 10px;
-  letter-spacing: 0.06em;
+  font-weight: var(--fw-bold);
+  font-size: var(--fs-micro);
+  letter-spacing: var(--tracking-caps);
   color: var(--muted);
   background: none;
   border-color: var(--border);
@@ -288,8 +288,8 @@
   color: var(--gg-c);
   border-color: transparent;
   background: none;
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 10.5px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
   opacity: 0.9;
 }
 .gg-mergein .gg-ico { width: 12px; height: 12px; }
@@ -298,7 +298,7 @@
 .gg-msg {
   flex: 1;
   min-width: 40px;
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
@@ -311,7 +311,7 @@
   align-items: center;
   gap: 10px;
   flex: none;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--muted);
 }
 .gg-author {
@@ -326,7 +326,7 @@
   font-variant-numeric: tabular-nums;
 }
 .gg-hash {
-  font-family: ui-monospace, Menlo, monospace;
+  font-family: var(--font-mono);
   color: var(--ink-2);
   opacity: 0.7;
 }
@@ -338,7 +338,7 @@
   padding: 7px 12px 2px;
   padding-left: calc(var(--gg-w, 0px) + 6px);
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
 }
 .gg-more::before {
   content: "";

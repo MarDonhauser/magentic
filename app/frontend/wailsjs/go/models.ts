@@ -444,6 +444,26 @@ export namespace core {
 		    return a;
 		}
 	}
+	export class OvQueuedMessage {
+	    id: string;
+	    kind: string;
+	    preview: string;
+	    age: string;
+	    stuck: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new OvQueuedMessage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.kind = source["kind"];
+	        this.preview = source["preview"];
+	        this.age = source["age"];
+	        this.stuck = source["stuck"];
+	    }
+	}
 	export class OvAgent {
 	    id: string;
 	    name: string;
@@ -465,6 +485,7 @@ export namespace core {
 	    dock: boolean;
 	    handoffSource: boolean;
 	    handoffTarget: boolean;
+	    queued?: OvQueuedMessage[];
 	
 	    static createFrom(source: any = {}) {
 	        return new OvAgent(source);
@@ -492,7 +513,26 @@ export namespace core {
 	        this.dock = source["dock"];
 	        this.handoffSource = source["handoffSource"];
 	        this.handoffTarget = source["handoffTarget"];
+	        this.queued = this.convertValues(source["queued"], OvQueuedMessage);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class OvLater {
 	    id: string;
@@ -632,6 +672,7 @@ export namespace core {
 		    return a;
 		}
 	}
+	
 	export class OvUsage {
 	    fiveHour: number;
 	    fiveHourReset: string;
@@ -1233,11 +1274,11 @@ export namespace main {
 	export class DockSessionRef {
 	    id: string;
 	    name: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new DockSessionRef(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -1462,3 +1503,4 @@ export namespace main {
 	}
 
 }
+

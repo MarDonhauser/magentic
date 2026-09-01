@@ -3,7 +3,7 @@
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  font-size: 13px;
+  font-size: var(--fs-body);
   color: var(--ink);
 }
 
@@ -31,9 +31,9 @@
 
 .bd-project {
   margin: 0;
-  font-size: 17px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
+  font-size: var(--fs-title);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-tight);
 }
 
 .bd-kind {
@@ -44,9 +44,9 @@
   border-radius: 999px;
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-wide);
 }
 .bd-kind .dev-icon { width: 12px; height: 12px; }
 .bd-kind.is-problem {
@@ -71,8 +71,8 @@
   text-decoration: line-through;
 }
 .bd-kind-n {
-  font-size: 10px;
-  font-weight: 700;
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-bold);
   opacity: 0.75;
   font-variant-numeric: tabular-nums;
 }
@@ -80,13 +80,13 @@
 .bd-badge-kind {
   background: var(--accent-soft);
   color: var(--accent);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 .bd-root {
   color: var(--muted);
-  font-size: 11.5px;
-  font-family: ui-monospace, Menlo, monospace;
+  font-size: var(--fs-meta);
+  font-family: var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -111,9 +111,9 @@
 .bd-stat-wide { min-width: 200px; }
 
 .bd-stat-val {
-  font-size: 19px;
-  font-weight: 620;
-  line-height: 1.15;
+  font-size: var(--fs-title);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
   font-variant-numeric: tabular-nums;
   display: flex;
   align-items: baseline;
@@ -121,21 +121,21 @@
 }
 
 .bd-stat-sub {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
   color: var(--muted);
 }
 
 .bd-stat-pct {
   margin-left: auto;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--fs-label);
+  font-weight: var(--fw-semibold);
   color: var(--accent);
 }
 
 .bd-stat-lbl {
   color: var(--ink-2);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   margin-top: 2px;
 }
 
@@ -171,7 +171,7 @@
   border-radius: 8px;
   background: rgba(224, 108, 117, 0.10);
   color: var(--critical);
-  font-size: 12.5px;
+  font-size: var(--fs-label);
 }
 .bd-err.is-partial {
   border-color: var(--warning);
@@ -213,9 +213,9 @@
 
 .bd-col-label {
   margin: 0;
-  font-size: 12.5px;
-  font-weight: 650;
-  letter-spacing: 0.02em;
+  font-size: var(--fs-label);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-wide);
 }
 
 .bd-col-count {
@@ -225,8 +225,8 @@
   border-radius: 999px;
   background: var(--raise);
   color: var(--ink-2);
-  font-size: 11.5px;
-  font-weight: 600;
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-semibold);
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
@@ -265,7 +265,7 @@
   padding: 14px 4px;
   text-align: center;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-label);
 }
 
 .bd-card {
@@ -305,8 +305,8 @@
 
 .bd-caret {
   color: var(--muted);
-  font-size: 12px;
-  line-height: 1.35;
+  font-size: var(--fs-label);
+  line-height: var(--lh-snug);
   margin-top: 1px;
   transition: transform 0.15s ease;
 }
@@ -316,9 +316,9 @@
 
 .bd-card-title {
   margin: 0;
-  font-size: 13px;
-  font-weight: 620;
-  line-height: 1.35;
+  font-size: var(--fs-body);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-snug);
   overflow-wrap: anywhere;
   display: -webkit-box;
   -webkit-line-clamp: 3;
@@ -330,8 +330,8 @@
 .bd-card-id {
   margin-top: 2px;
   color: var(--muted);
-  font-size: 10.5px;
-  font-family: ui-monospace, Menlo, monospace;
+  font-size: var(--fs-micro);
+  font-family: var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -340,8 +340,8 @@
 .bd-card-sum {
   margin: 6px 0 0;
   color: var(--ink-2);
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: var(--fs-label);
+  line-height: var(--lh-snug);
   overflow-wrap: anywhere;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -356,8 +356,8 @@
   gap: 6px;
   margin-top: 7px;
   color: var(--warning);
-  font-size: 11.5px;
-  line-height: 1.4;
+  font-size: var(--fs-meta);
+  line-height: var(--lh-snug);
 }
 .bd-card-problem .bd-ico { margin-top: 2px; }
 
@@ -392,8 +392,8 @@
   background-color: transparent;
   color: var(--accent);
   font: inherit;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-semibold);
   cursor: pointer;
 }
 button.bd-agent:hover { background-image: linear-gradient(var(--raise-2), var(--raise-2)), linear-gradient(var(--accent-soft), var(--accent-soft)); }
@@ -432,7 +432,7 @@ span.bd-agent { cursor: inherit; }
   align-items: baseline;
   gap: 5px;
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   font-variant-numeric: tabular-nums;
 }
 .bd-progress-pct { color: var(--muted); }
@@ -440,7 +440,7 @@ span.bd-agent { cursor: inherit; }
 .bd-progress-none {
   margin-top: 8px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   font-style: italic;
 }
 
@@ -468,8 +468,8 @@ span.bd-agent { cursor: inherit; }
   border-radius: 5px;
   background: var(--raise);
   color: var(--ink-2);
-  font-size: 10.5px;
-  font-weight: 500;
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-medium);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -500,8 +500,8 @@ span.bd-agent { cursor: inherit; }
   background: transparent;
   color: var(--ink-2);
   font: inherit;
-  font-size: 10.5px;
-  font-weight: 600;
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
   cursor: pointer;
   white-space: nowrap;
 }
@@ -523,9 +523,9 @@ span.bd-agent { cursor: inherit; }
 .bd-task-sec {
   margin: 8px 0 4px;
   color: var(--ink-2);
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.02em;
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-wide);
   overflow-wrap: anywhere;
 }
 .bd-task-sec:first-child { margin-top: 0; }
@@ -542,8 +542,8 @@ span.bd-agent { cursor: inherit; }
 .bd-task {
   display: flex;
   gap: 6px;
-  font-size: 11.5px;
-  line-height: 1.45;
+  font-size: var(--fs-meta);
+  line-height: var(--lh-snug);
   color: var(--ink);
 }
 
@@ -573,12 +573,12 @@ span.bd-agent { cursor: inherit; }
 .bd-tasks-empty {
   margin-top: 8px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 .bd-tasks-more code,
 .bd-tasks-empty code {
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 10.5px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
 }
 
 .bd-none {
@@ -614,18 +614,18 @@ span.bd-agent { cursor: inherit; }
 
 .bd-none-box h2 {
   margin: 0 0 8px;
-  font-size: 15px;
-  font-weight: 650;
+  font-size: var(--fs-subhead);
+  font-weight: var(--fw-semibold);
 }
 
 .bd-none-box p {
   margin: 0 0 8px;
   color: var(--ink-2);
-  font-size: 12.5px;
-  line-height: 1.55;
+  font-size: var(--fs-label);
+  line-height: var(--lh-text);
 }
 
-.bd-none-hint { color: var(--muted) !important; font-size: 12px !important; }
+.bd-none-hint { color: var(--muted) !important; font-size: var(--fs-label) !important; }
 
 .bd-none-problem .bd-none-ico {
   background: color-mix(in srgb, var(--warning) 12%, transparent);
@@ -636,7 +636,7 @@ span.bd-agent { cursor: inherit; }
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 .bd-none-paths {
@@ -648,8 +648,8 @@ span.bd-agent { cursor: inherit; }
 }
 
 .bd-none-box code {
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 11.5px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
   padding: 1px 5px;
   border-radius: 4px;
   background: var(--surface);

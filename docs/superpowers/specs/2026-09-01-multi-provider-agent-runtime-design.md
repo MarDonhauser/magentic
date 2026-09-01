@@ -157,15 +157,15 @@ Teilprojekt unverändert.
 
 ## Vendor beim Anlegen
 
-`SessionProvision` bekommt ein Feld `Vendor AgentVendor`. Leer bedeutet: den
-konfigurierten Standard verwenden.
+`SessionProvision` bekommt ein Feld `Vendor AgentVendor`. Leer bedeutet Claude.
 
-Der Standard liegt in der bestehenden Magentic-Konfiguration neben
-`StatePath()`, als einzelnes Feld `default_vendor`. Fehlt es, ist der Standard
-Claude. Damit bleibt das Verhalten für alle bestehenden Aufrufer
-unverändert — insbesondere für `startSkillAgent` und die
-Cleanup-/Merge-/Deploy-Sessions in `core/actions.go`, die weiterhin keinen
-Vendor übergeben.
+Magentic hat heute keine Konfigurationsdatei, sondern nur `state.json`. Dieses
+Teilprojekt führt auch keine ein: ein global einstellbarer Standardvendor wäre
+eine eigene Oberfläche für einen Wert, den der Dialog ohnehin bei jeder Session
+abfragt. Damit bleibt das Verhalten für alle bestehenden Aufrufer unverändert —
+insbesondere für `startSkillAgent` und die Cleanup-, Merge- und
+Deploy-Sessions in `core/actions.go`, die weiterhin keinen Vendor übergeben und
+deshalb Claude bekommen.
 
 `CreateAgentSession` bekommt einen Vendor-Parameter und reicht ihn durch.
 Ein unbekannter Vendor wird abgelehnt, nicht stillschweigend auf Claude
@@ -194,8 +194,8 @@ Fall einer beendeten Session, den die Rekonvergenz aufgreift.
 ## Oberfläche
 
 - Der Neue-Session-Dialog bekommt eine Vendor-Auswahl mit vier Einträgen,
-  vorbelegt mit `default_vendor`. Vendors, deren Binary nicht im PATH liegt,
-  erscheinen deaktiviert mit dem Hinweis, dass sie nicht installiert sind.
+  vorbelegt mit Claude. Vendors, deren Binary nicht im PATH liegt, erscheinen
+  deaktiviert mit dem Hinweis, dass sie nicht installiert sind.
 - Die Session-Kopfzeile bekommt neben den bestehenden Aktionen einen Wechsel
   auf einen anderen Agenten, mit Rückfrage, weil er den laufenden Prozess
   beendet.
