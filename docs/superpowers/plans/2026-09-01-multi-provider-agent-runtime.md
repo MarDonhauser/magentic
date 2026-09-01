@@ -524,8 +524,11 @@ func TestProvisionRecordsVendorAndRun(t *testing.T) {
 }
 
 func TestProvisionRejectsUnknownVendor(t *testing.T) {
-	if _, err := newTestLifecycle(t).Provision(context.Background(), SessionProvision{
-		Name: "navi", Directory: t.TempDir(), Kind: SessionKindCodingAgent, Vendor: AgentVendor("cursor"),
+	lifecycle, _, registry, _ := lifecycleHarness(t)
+	project := registerLifecycleProject(t, registry)
+	if _, err := lifecycle.Provision(context.Background(), SessionProvision{
+		ProjectID: project.ID, Name: "navi", Directory: project.Path,
+		Kind: SessionKindCodingAgent, Vendor: AgentVendor("cursor"),
 	}); err == nil {
 		t.Fatal("unbekannter Vendor muss abgelehnt werden")
 	}
@@ -547,18 +550,18 @@ func TestRegistryMigrationDefaultsVendor(t *testing.T) {
 }
 ```
 
-Die beiden Helfer `provisionedCodingSession` und `newTestLifecycle` gehören in
-dieselbe Testdatei. `newTestLifecycle` muss dem Muster folgen, das die
-vorhandenen Lifecycle-Tests bereits verwenden — vor dem Schreiben
-`core/lifecycle_test.go` (oder die Datei, die `SessionLifecycle` konstruiert)
-lesen und denselben Aufbau übernehmen, inklusive gesetztem `MAGENTIC_STATE`
-auf ein `t.TempDir()` und der dort verwendeten Test-Runtime-Attrappe:
+Der Helfer `provisionedCodingSession` gehört in dieselbe Testdatei und baut auf
+den bereits vorhandenen Lifecycle-Testhelfern `lifecycleHarness` und
+`registerLifecycleProject` aus `core/lifecycle_test.go:116-130` auf:
 
 ```go
 func provisionedCodingSession(t *testing.T, vendor AgentVendor) Session {
 	t.Helper()
-	result, err := newTestLifecycle(t).Provision(context.Background(), SessionProvision{
-		Name: "navi", Directory: t.TempDir(), Kind: SessionKindCodingAgent, Vendor: vendor,
+	lifecycle, _, registry, _ := lifecycleHarness(t)
+	project := registerLifecycleProject(t, registry)
+	result, err := lifecycle.Provision(context.Background(), SessionProvision{
+		ProjectID: project.ID, Name: "navi", Directory: project.Path,
+		Kind: SessionKindCodingAgent, Vendor: vendor,
 	})
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
@@ -567,10 +570,9 @@ func provisionedCodingSession(t *testing.T, vendor AgentVendor) Session {
 }
 ```
 
-Der Name der Migrationsfunktion in `core/registry.go` ist beim Schreiben aus
-der Datei zu übernehmen; im Test oben steht `normalizeRegistryState`
-stellvertretend für die Funktion, die den Block bei `core/registry.go:531`
-enthält.
+`normalizeRegistryState` ist der tatsächliche Name der Migrationsfunktion
+(`core/registry.go:477`); sie ruft `normalizeSession` (`core/registry.go:512`)
+auf, in der der zu ergänzende Block steht.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -1122,8 +1124,8 @@ git commit -m "feat: Run-Identität aus dem Vendor-Verlauf ermitteln"
 
 ```go
 func TestSwitchVendorRestartsAndKeepsRuns(t *testing.T) {
-	lifecycle, runtime := newRecordingLifecycle(t)
-	session := provisionedCodingSession(t, AgentVendorClaude)
+	lifecycle, runtime, registry, project := newRecordingLifecycle(t)
+	session := provisionSessionFor(t, lifecycle, project, AgentVendorClaude)
 	runtime.reset()
 
 	switched, err := lifecycle.SwitchVendor(context.Background(), session.ID, AgentVendorCodex)
@@ -1136,8 +1138,8 @@ func TestSwitchVendorRestartsAndKeepsRuns(t *testing.T) {
 	if _, ok := switched.AgentRun(AgentVendorClaude); !ok {
 		t.Fatal("die Claude-Run-Ref muss erhalten bleiben")
 	}
-	if runtime.stops != 1 || runtime.starts != 1 {
-		t.Fatalf("Stop/Start = %d/%d, want 1/1", runtime.stops, runtime.starts)
+	if runtime.stopCalls != 1 || runtime.startCalls != 1 {
+		t.Fatalf("Stop/Start = %d/%d, want 1/1", runtime.stopCalls, runtime.startCalls)
 	}
 	if runtime.lastStartMode != "new" {
 		t.Fatalf("StartMode = %q, want \"new\"", runtime.lastStartMode)
@@ -1145,9 +1147,9 @@ func TestSwitchVendorRestartsAndKeepsRuns(t *testing.T) {
 }
 
 func TestSwitchVendorToKnownRunResumes(t *testing.T) {
-	lifecycle, runtime := newRecordingLifecycle(t)
-	session := provisionedCodingSession(t, AgentVendorClaude)
-	if _, err := OpenRegistry(StatePath()).Change(context.Background(), RecordAgentRun(
+	lifecycle, runtime, registry, project := newRecordingLifecycle(t)
+	session := provisionSessionFor(t, lifecycle, project, AgentVendorClaude)
+	if _, err := registry.Change(context.Background(), RecordAgentRun(
 		session.ID, session.Name, AgentRunRef{Vendor: AgentVendorCodex, ExternalID: "run-9"},
 	)); err != nil {
 		t.Fatalf("RecordAgentRun: %v", err)
@@ -1162,21 +1164,21 @@ func TestSwitchVendorToKnownRunResumes(t *testing.T) {
 }
 
 func TestSwitchVendorToSameVendorIsNoop(t *testing.T) {
-	lifecycle, runtime := newRecordingLifecycle(t)
-	session := provisionedCodingSession(t, AgentVendorClaude)
+	lifecycle, runtime, registry, project := newRecordingLifecycle(t)
+	session := provisionSessionFor(t, lifecycle, project, AgentVendorClaude)
 	runtime.reset()
 	if _, err := lifecycle.SwitchVendor(context.Background(), session.ID, AgentVendorClaude); err != nil {
 		t.Fatalf("SwitchVendor: %v", err)
 	}
-	if runtime.stops != 0 || runtime.starts != 0 {
-		t.Fatalf("Stop/Start = %d/%d, want 0/0", runtime.stops, runtime.starts)
+	if runtime.stopCalls != 0 || runtime.startCalls != 0 {
+		t.Fatalf("Stop/Start = %d/%d, want 0/0", runtime.stopCalls, runtime.startCalls)
 	}
 }
 
 func TestSwitchVendorRejectsTerminal(t *testing.T) {
-	lifecycle, _ := newRecordingLifecycle(t)
+	lifecycle, _, _, project := newRecordingLifecycle(t)
 	result, err := lifecycle.Provision(context.Background(), SessionProvision{
-		Name: "term-navi", Directory: t.TempDir(), Kind: SessionKindTerminal,
+		ProjectID: project.ID, Name: "term-navi", Directory: project.Path, Kind: SessionKindTerminal,
 	})
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
@@ -1187,23 +1189,71 @@ func TestSwitchVendorRejectsTerminal(t *testing.T) {
 }
 
 func TestSwitchVendorRejectsUnknownVendor(t *testing.T) {
-	lifecycle, runtime := newRecordingLifecycle(t)
-	session := provisionedCodingSession(t, AgentVendorClaude)
+	lifecycle, runtime, registry, project := newRecordingLifecycle(t)
+	session := provisionSessionFor(t, lifecycle, project, AgentVendorClaude)
 	runtime.reset()
 	if _, err := lifecycle.SwitchVendor(context.Background(), session.ID, AgentVendor("cursor")); err == nil {
 		t.Fatal("unbekannter Vendor muss abgelehnt werden")
 	}
-	if runtime.stops != 0 {
+	if runtime.stopCalls != 0 {
 		t.Fatal("bei einem abgelehnten Wechsel darf nichts beendet werden")
 	}
 }
 ```
 
-`newRecordingLifecycle` baut denselben `SessionLifecycle` wie
-`newTestLifecycle` aus Task 3, mit einer Runtime-Attrappe, die `stops`,
-`starts` und `lastStartMode` zählt und `reset()` anbietet. Vor dem Schreiben
-die vorhandene Lifecycle-Testattrappe lesen und deren Struktur übernehmen,
-statt eine zweite Bauform einzuführen.
+`newRecordingLifecycle` ist keine neue Bauform, sondern eine dünne Hülle um
+`lifecycleHarness` aus `core/lifecycle_test.go:116`. Dafür bekommt
+`fakeLifecycleRuntime` (`core/lifecycle_test.go:14-29`) drei zusätzliche
+Felder, die es heute nicht führt:
+
+```go
+	startCalls    int
+	stopCalls     int
+	lastStartMode string
+```
+
+`Start` zählt `f.startCalls++` und merkt sich `f.lastStartMode = mode` — der
+Modus-Parameter heißt dort bisher `_` und wird auf `mode` benannt. `Stop`
+zählt `f.stopCalls++`. Dazu ein Rücksetzer:
+
+```go
+func (f *fakeLifecycleRuntime) reset() {
+	f.startCalls, f.stopCalls, f.lastStartMode = 0, 0, ""
+	f.existsCalls = nil
+}
+```
+
+Und die Hülle in der neuen Testdatei:
+
+```go
+func newRecordingLifecycle(t *testing.T) (*SessionLifecycle, *fakeLifecycleRuntime, *Registry, Project) {
+	t.Helper()
+	lifecycle, runtime, registry, _ := lifecycleHarness(t)
+	project := registerLifecycleProject(t, registry)
+	return lifecycle, runtime, registry, project
+}
+```
+
+Die Tests verwenden entsprechend `lifecycle, runtime, registry, project :=
+newRecordingLifecycle(t)` und provisionieren ihre Session über dieselbe
+`lifecycle`-Instanz, damit Registry und Runtime zusammenpassen:
+
+```go
+func provisionSessionFor(t *testing.T, lifecycle *SessionLifecycle, project Project, vendor AgentVendor) Session {
+	t.Helper()
+	result, err := lifecycle.Provision(context.Background(), SessionProvision{
+		ProjectID: project.ID, Name: "navi", Directory: project.Path,
+		Kind: SessionKindCodingAgent, Vendor: vendor,
+	})
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	return result.Session
+}
+```
+
+`provisionedCodingSession` aus Task 3 bleibt daneben bestehen; es baut sich
+seine eigene Harness und wird von den Vendor-Tests dort weiterverwendet.
 
 Die Binary-Prüfung wird in diesen Tests nicht ausgelöst, weil die
 Runtime-Attrappe `Start` ersetzt. Der fail-closed Pfad des Wechsels bekommt
@@ -1218,13 +1268,13 @@ func TestSwitchVendorRequiresBinary(t *testing.T) {
 	if providerBinaryAvailable(provider) {
 		t.Skip("gemini ist auf dieser Maschine installiert")
 	}
-	lifecycle, runtime := newRecordingLifecycle(t)
-	session := provisionedCodingSession(t, AgentVendorClaude)
+	lifecycle, runtime, registry, project := newRecordingLifecycle(t)
+	session := provisionSessionFor(t, lifecycle, project, AgentVendorClaude)
 	runtime.reset()
 	if _, err := lifecycle.SwitchVendor(context.Background(), session.ID, AgentVendorGemini); err == nil {
 		t.Fatal("ein Vendor ohne Binary darf nicht übernommen werden")
 	}
-	if runtime.stops != 0 {
+	if runtime.stopCalls != 0 {
 		t.Fatal("die laufende Session muss unberührt bleiben")
 	}
 }

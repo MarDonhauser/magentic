@@ -154,10 +154,11 @@ Die Startzeilen leben ausschließlich im jeweiligen Adapter.
 1. Terminal-Sessions verhalten sich unverändert — tmux-Session anlegen, kein
    Agent starten.
 2. Vendor der Session auflösen; ohne passenden Provider schlägt der Start mit
-   einer benannten Meldung fehl, statt eine leere tmux-Session zu hinterlassen.
-3. `exec.LookPath(provider.Binary())`. Fehlt das Binary, wird die eben
-   angelegte tmux-Session wieder beendet und der Start scheitert mit
-   `„<vendor> ist nicht installiert (<binary> nicht im PATH)"`.
+   einer benannten Meldung fehl.
+3. `exec.LookPath(provider.Binary())`, und zwar bevor die tmux-Session
+   angelegt wird. Fehlt das Binary, scheitert der Start mit
+   `„<vendor> ist nicht installiert (<binary> nicht im PATH)"`, und es bleibt
+   nichts zurück, das aufgeräumt werden müsste.
 4. `provider.StartCommand(session, run, mode)` liefert die Zeile; das Senden
    über `send-keys` literal plus `Enter` bleibt unverändert.
 
