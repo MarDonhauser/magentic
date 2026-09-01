@@ -129,9 +129,23 @@ Daraus folgen zwei Wege:
   dann auf den Fortsetzungsbefehl des Vendors ohne Identität zurück, und wenn
   es auch den nicht gibt, auf einen frischen Start.
 
-Welcher Vendor welchen Weg geht, entscheidet der erste Umsetzungsschritt
-(siehe unten) anhand der tatsächlichen `--help`-Ausgaben. Die Startzeilen
-selbst leben ausschließlich im jeweiligen Adapter.
+Belegt am 2026-09-01 gegen die lokal installierten CLIs:
+
+| Vendor | Neu | Fortsetzen | Run-Identität |
+| --- | --- | --- | --- |
+| claude | `claude --name <runtime>` | `--resume <id>`, sonst `--continue` | vorgegeben über `--session-id <uuid>` |
+| codex | `codex` | `codex resume <uuid>`, sonst `codex resume --last` | ermittelt |
+| copilot | `copilot --name <runtime>` | `--resume=<id>`, sonst `--continue` | vorgegeben über `--session-id=<uuid>` |
+| gemini | `gemini` | keins | ermittelt |
+
+Gemini CLI ist auf der Entwicklungsmaschine nicht installiert; seine Zeile ist
+deshalb nicht am laufenden Programm belegt, sondern bewusst auf den
+konservativen Fall gesetzt: frischer Start, keine Fortsetzung, Run-Identität
+aus dem Verlauf. Da der Dialog jeden Vendor ohne Binary im PATH deaktiviert,
+ist der Adapter auf dieser Maschine ohnehin unerreichbar. Sobald das Binary
+vorliegt, ist die Korrektur eine Änderung an genau einem Adapter.
+
+Die Startzeilen leben ausschließlich im jeweiligen Adapter.
 
 ## Start und Resume
 
@@ -207,12 +221,9 @@ Fall einer beendeten Session, den die Rekonvergenz aufgreift.
 
 ## Umsetzungsschritte
 
-**Schritt 0 — Capture-Runde.** Gemeinsam, vor dem ersten Adapter. Für Codex,
-Gemini und Copilot je einmal `--help` aufnehmen und die Frage beantworten:
-Gibt es einen Resume-Befehl, nimmt er eine Run-ID entgegen, und akzeptiert der
-Vendor eine vom Aufrufer vorgegebene Identität? Das Ergebnis legt für jeden
-Adapter Startzeile und `NewRunID` fest. Dieselbe Runde nimmt Pane-Inhalte je
-Zustand auf; die dienen Teilprojekt 2 und werden hier nur abgelegt.
+**Schritt 0 — Capture-Runde.** Am 2026-09-01 durchgeführt; das Ergebnis steht
+in der Tabelle oben. Die Aufnahme der Pane-Inhalte je Zustand gehört zu
+Teilprojekt 2 und ist hier nicht nötig.
 
 Danach: Provider-Modul mit Claude-Adapter und unverändertem Verhalten, dann
 die drei weiteren Adapter, dann `Vendor` an der Session samt Migration, dann
