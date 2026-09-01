@@ -29,7 +29,10 @@ func TestRealPollCost(t *testing.T) {
 	t.Logf("Repositories.Survey(%d projects): %v (results=%d, err=%v)", len(st.Projects), time.Since(start), len(survey.Projects), surveyErr)
 
 	start = time.Now()
-	res := pollCmd(*st, nil)()
-	_ = res
-	t.Logf("GESAMTER pollCmd: %v", time.Since(start))
+	_ = observeCmd(*st)()
+	observeElapsed := time.Since(start)
+	start = time.Now()
+	_ = repositoryCmd(*st, nil)()
+	t.Logf("observeCmd: %v (alle %v) / repositoryCmd: %v (alle %v)",
+		observeElapsed, observationInterval, time.Since(start), repositoryInterval)
 }

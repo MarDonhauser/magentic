@@ -298,7 +298,10 @@ type repositoriesCommandRunner interface {
 type repositoriesGitRunner struct{}
 
 func (repositoriesGitRunner) Run(ctx context.Context, dir string, args ...string) (string, error) {
-	full := append([]string{"-C", dir}, args...)
+	// --no-optional-locks: Statusabfragen dürfen den Index nicht refreshen und
+	// zurückschreiben, sonst kostet jeder Poll Platten-I/O und kollidiert mit
+	// parallelen Git-Befehlen des Nutzers.
+	full := append([]string{"--no-optional-locks", "-C", dir}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Env = append(os.Environ(), "LC_ALL=C", "LANG=C")
 	out, err := cmd.CombinedOutput()
@@ -377,21 +380,53 @@ func repositoryContextError(ctx context.Context, err error) error {
 	return nil
 }
 
+// repositoriesInParallel runs one independent git observation per index. Each
+// call writes only its own slice element, so the survey keeps its sequential
+// result order while the process spawns overlap.
+const repositoriesParallelism = 8
+
+func repositoriesInParallel(count int, observe func(index int)) {
+	if count <= 0 {
+		return
+	}
+	if count == 1 {
+		observe(0)
+		return
+	}
+	slots := make(chan struct{}, repositoriesParallelism)
+	var wg sync.WaitGroup
+	for index := 0; index < count; index++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			observe(index)
+		}(index)
+	}
+	wg.Wait()
+}
+
 // Survey takes one coherent, uncached pass over every Project. It enumerates
 // topology once per Project and status once per Worktree; history and diffs are
 // deliberately left to Inspect.
 func (r *Repositories) Survey(ctx context.Context, projects []Project) (RepositoriesSurvey, error) {
 	survey := RepositoriesSurvey{ObservedAt: r.now()}
 	projects = append([]Project(nil), projects...)
-	for _, project := range projects {
+	observed := make([]RepositoryProjectSurvey, len(projects))
+	failures := make([]error, len(projects))
+	repositoriesInParallel(len(projects), func(index int) {
 		if err := ctx.Err(); err != nil {
-			return RepositoriesSurvey{}, err
+			failures[index] = err
+			return
 		}
-		observed, err := r.surveyProject(ctx, project)
-		if err != nil {
-			return RepositoriesSurvey{}, err
+		observed[index], failures[index] = r.surveyProject(ctx, projects[index])
+	})
+	for index := range projects {
+		if failures[index] != nil {
+			return RepositoriesSurvey{}, failures[index]
 		}
-		survey.Projects = append(survey.Projects, observed)
+		survey.Projects = append(survey.Projects, observed[index])
 	}
 	return survey, nil
 }
@@ -415,32 +450,43 @@ func (r *Repositories) surveyProject(ctx context.Context, project Project) (Repo
 	}
 
 	result.Presence = RepositoryKnown
-	worktrees := make([]RepositoryWorktree, 0, len(topology))
-	for _, raw := range topology {
+	worktrees := make([]RepositoryWorktree, len(topology))
+	statusFailures := make([]error, len(topology))
+	for index, raw := range topology {
 		wt := repositoryWorktreeFromTopology(project.Path, raw)
 		wt.Reference = repositoryWorktreeReference(project, wt.Path)
 		wt.Location = repositoryWorktreeLocation(project.Path, wt.Path)
-		status, statusErr := r.loadStatus(ctx, raw.Path)
+		worktrees[index] = wt
+	}
+	repositoriesInParallel(len(topology), func(index int) {
+		status, statusErr := r.loadStatus(ctx, topology[index].Path)
 		if statusErr != nil {
-			if ctxErr := repositoryContextError(ctx, statusErr); ctxErr != nil {
-				return result, ctxErr
-			}
-			wt.Changes = repositoryFactForError[RepositoryWorkingChanges]("status", statusErr)
-		} else {
-			wt.Changes = repositoryKnownFact(status.Changes)
-			if status.Checkout.Kind != "" {
-				wt.Checkout = repositoryKnownFact(status.Checkout)
-			}
-			if status.Head != "" {
-				wt.Head = repositoryKnownFact(status.Head)
-			}
+			statusFailures[index] = statusErr
+			worktrees[index].Changes = repositoryFactForError[RepositoryWorkingChanges]("status", statusErr)
+			return
 		}
-		worktrees = append(worktrees, wt)
+		worktrees[index].Changes = repositoryKnownFact(status.Changes)
+		if status.Checkout.Kind != "" {
+			worktrees[index].Checkout = repositoryKnownFact(status.Checkout)
+		}
+		if status.Head != "" {
+			worktrees[index].Head = repositoryKnownFact(status.Head)
+		}
+	})
+	for _, statusErr := range statusFailures {
+		if statusErr == nil {
+			continue
+		}
+		if ctxErr := repositoryContextError(ctx, statusErr); ctxErr != nil {
+			return result, ctxErr
+		}
 	}
 
 	result.MainBranch = resolveRepositoryMainBranch(project, worktrees)
+	repositoriesInParallel(len(worktrees), func(index int) {
+		worktrees[index].Divergence = r.divergence(ctx, worktrees[index], result.MainBranch)
+	})
 	for i := range worktrees {
-		worktrees[i].Divergence = r.divergence(ctx, worktrees[i], result.MainBranch)
 		if problem := worktrees[i].Divergence.Problem; problem != nil {
 			if err := ctx.Err(); err != nil {
 				return result, err

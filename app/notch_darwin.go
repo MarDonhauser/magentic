@@ -44,6 +44,12 @@ func nativeClearNotch(id string) error {
 	return nil
 }
 
+func nativeAcknowledgeNotch(id string) {
+	value := C.CString(id)
+	defer C.free(unsafe.Pointer(value))
+	C.acknowledgeNotchEventC(value)
+}
+
 //export magenticNotchResponse
 func magenticNotchResponse(payload *C.char) {
 	value := C.GoString(payload)

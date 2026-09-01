@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -22,27 +23,38 @@ type repositoriesRunnerStep struct {
 type repositoriesRecordingRunner struct {
 	t     *testing.T
 	steps []repositoriesRunnerStep
+	mu    sync.Mutex
+	used  []bool
 	calls int
 }
 
+// Run consumes the first expected step that matches the directory and
+// arguments. A Survey observes independent Worktrees concurrently, so the
+// recorded commands form a multiset rather than a fixed sequence; repeated
+// identical commands are still consumed in their recorded order.
 func (r *repositoriesRecordingRunner) Run(_ context.Context, dir string, args ...string) (string, error) {
-	r.t.Helper()
-	if r.calls >= len(r.steps) {
-		r.t.Fatalf("unexpected repository command %q in %q", args, dir)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.used == nil {
+		r.used = make([]bool, len(r.steps))
 	}
-	step := r.steps[r.calls]
-	r.calls++
-	if dir != step.dir {
-		r.t.Fatalf("repository command %d directory = %q, want %q", r.calls, dir, step.dir)
+	for index, step := range r.steps {
+		if r.used[index] || dir != step.dir || !reflect.DeepEqual(args, step.args) {
+			continue
+		}
+		r.used[index] = true
+		r.calls++
+		return step.output, step.err
 	}
-	if !reflect.DeepEqual(args, step.args) {
-		r.t.Fatalf("repository command %d args = %q, want %q", r.calls, args, step.args)
-	}
-	return step.output, step.err
+	// Reporting instead of failing keeps the message on a worker goroutine legal.
+	r.t.Errorf("unexpected repository command %q in %q", args, dir)
+	return "", fmt.Errorf("unexpected repository command %q in %q", args, dir)
 }
 
 func (r *repositoriesRecordingRunner) assertDone() {
 	r.t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.calls != len(r.steps) {
 		r.t.Fatalf("repository command budget used %d of %d commands", r.calls, len(r.steps))
 	}

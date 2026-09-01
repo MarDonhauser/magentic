@@ -199,6 +199,12 @@ func (a *App) RespondToNotch(response NotchResponse) error {
 	if a.ctx != nil {
 		runtime.EventsEmit(a.ctx, notchResponseName, response)
 	}
+	a.notchMu.Lock()
+	if a.notchEvent != nil && a.notchEvent.ID == event.ID {
+		a.notchEvent = nil
+	}
+	a.notchMu.Unlock()
+	nativeAcknowledgeNotch(event.ID)
 
 	var actionErr error
 	switch response.OptionID {
@@ -211,7 +217,6 @@ func (a *App) RespondToNotch(response NotchResponse) error {
 	default:
 		actionErr = fmt.Errorf("Notch-Option %q hat keine angebundene Aktion", response.OptionID)
 	}
-	_ = a.ClearNotch(event.ID)
 	if actionErr != nil && a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "notch://error", actionErr.Error())
 	}
@@ -237,11 +242,16 @@ func (a *App) answerPermissionEvent(event NotchEvent, optionID string) error {
 	if observed == nil || observed.Attention != core.AttentionNeedsInput || observed.Detail == "" {
 		return fmt.Errorf("Freigabe ist nicht mehr aktuell; Session wird nicht automatisch bedient")
 	}
-	key := "Enter"
+	keys := []string{"send-keys", "-t", core.TargetPane(session.TmuxName())}
 	if optionID == "deny" {
-		key = "Escape"
+		keys = append(keys, "Escape")
+	} else {
+		// Permission menus put the least-persistent allow choice first. Repeated
+		// Up makes that choice deterministic even if the terminal selection was
+		// moved after the Notch event was emitted.
+		keys = append(keys, "Up", "Up", "Up", "Up", "Up", "Up", "Enter")
 	}
-	if _, err := core.Tmux("send-keys", "-t", core.TargetPane(session.TmuxName()), key); err != nil {
+	if _, err := core.Tmux(keys...); err != nil {
 		return fmt.Errorf("Antwort an %s fehlgeschlagen: %w", session.Name, err)
 	}
 	return nil
