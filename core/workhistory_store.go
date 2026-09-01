@@ -1,11 +1,14 @@
 package core
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
+	"unicode"
 
 	_ "modernc.org/sqlite"
 )
@@ -493,4 +496,131 @@ func (s *historyStore) recordsBySource(sourceID string) ([]historyRecord, error)
 		out = append(out, record)
 	}
 	return out, rows.Err()
+}
+
+// historyRecordFilter grenzt eine Leseabfrage über records ein. Die
+// Attributionsfilter ProjectKeys und SessionKeys bleiben bewusst außen vor:
+// sie hängen an HistoryAssociations und werden nach dem Lesen in Go aufgelöst.
+type historyRecordFilter struct {
+	Since, Before      time.Time
+	IncludeUnknownTime bool
+	Providers          []HistoryProvider
+	Roles              []HistoryRole
+	Kinds              []HistoryEventKind
+	Lineages           []HistoryLineage
+	Text               string
+	SourceIDs          []string
+}
+
+// historyFTSExpression baut aus einer Nutzeranfrage einen FTS5-Präfixausdruck.
+// Er dient nur der Vorauswahl; die genaue Trefferentscheidung fällt danach über
+// einen Teilstringvergleich, damit sich die Suche wie bisher verhält.
+func historyFTSExpression(query string) (string, bool) {
+	fields := strings.Fields(query)
+	terms := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if !strings.ContainsFunc(field, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
+			// Ein Feld ohne Buchstaben oder Ziffern (z. B. reine Satzzeichen)
+			// trägt nichts zur Vorauswahl bei.
+			continue
+		}
+		terms = append(terms, `"`+strings.ReplaceAll(field, `"`, `""`)+`"*`)
+	}
+	if len(terms) == 0 {
+		return "", false
+	}
+	return strings.Join(terms, " "), true
+}
+
+// records liest Ereignisse anhand des übergebenen Filters. Sortierung und
+// Paginierung bleiben in Go, weil die Sortierreihenfolge von Tatsachen
+// abhängt, die erst nach dem Lesen aufgelöst werden.
+func (s *historyStore) records(ctx context.Context, filter historyRecordFilter) ([]historyRecord, error) {
+	where := []string{"1 = 1"}
+	var args []any
+
+	appendIn := func(column string, values []string) {
+		if len(values) == 0 {
+			return
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(values)), ",")
+		where = append(where, column+" IN ("+placeholders+")")
+		for _, value := range values {
+			args = append(args, value)
+		}
+	}
+	appendIn("provider", historyStrings(filter.Providers))
+	appendIn("role", historyStrings(filter.Roles))
+	appendIn("kind", historyStrings(filter.Kinds))
+	appendIn("lineage", historyStrings(filter.Lineages))
+	appendIn("source_id", filter.SourceIDs)
+
+	if !filter.Since.IsZero() || !filter.Before.IsZero() {
+		var window []string
+		if !filter.Since.IsZero() {
+			window = append(window, "occurred_at >= ?")
+			args = append(args, filter.Since.UTC().UnixNano())
+		}
+		if !filter.Before.IsZero() {
+			window = append(window, "occurred_at < ?")
+			args = append(args, filter.Before.UTC().UnixNano())
+		}
+		clause := "(" + strings.Join(window, " AND ") + ")"
+		if filter.IncludeUnknownTime {
+			clause = "(" + clause + " OR occurred_at IS NULL)"
+		} else {
+			clause = "(occurred_at IS NOT NULL AND " + clause + ")"
+		}
+		where = append(where, clause)
+	}
+
+	needle := strings.TrimSpace(filter.Text)
+	if needle != "" {
+		expression, usable := historyFTSExpression(needle)
+		if !usable {
+			// Aus reinen Satzzeichen entsteht kein FTS-Ausdruck; ein MATCH mit
+			// leerem Ausdruck würde die Abfrage scheitern lassen. Der
+			// Teilstringvergleich unten bleibt ohnehin verbindlich, deshalb
+			// wird hier nur über instr() vorausgewählt.
+			where = append(where, "instr(lower(text), lower(?)) > 0")
+			args = append(args, needle)
+		} else {
+			// FTS matcht nur ganze Wörter bzw. Wortanfänge und würde einen
+			// Treffer wie "bernet" in "Kubernetes" verpassen. instr() bleibt
+			// deshalb als zweiter Zweig bestehen; der Teilstringvergleich in Go
+			// entscheidet ohnehin über jeden Treffer verbindlich.
+			where = append(where, "(rowid IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ?) OR instr(lower(text), lower(?)) > 0)")
+			args = append(args, expression, needle)
+		}
+	}
+
+	query := `SELECT ` + historyRecordColumns + ` FROM events WHERE ` + strings.Join(where, " AND ")
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("read events: %w", err)
+	}
+	defer rows.Close()
+	lowered := strings.ToLower(needle)
+	var out []historyRecord
+	for rows.Next() {
+		record, err := scanHistoryRecord(rows.Scan)
+		if err != nil {
+			return nil, fmt.Errorf("read events: %w", err)
+		}
+		if lowered != "" && !strings.Contains(strings.ToLower(record.Text), lowered) {
+			continue
+		}
+		out = append(out, record)
+	}
+	return out, rows.Err()
+}
+
+// historyStrings wandelt eine Slice benannter Stringtypen in reine Strings um,
+// damit sie als IN-Parameter an SQLite gehen können.
+func historyStrings[T ~string](values []T) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, string(value))
+	}
+	return out
 }

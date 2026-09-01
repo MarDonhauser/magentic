@@ -1,9 +1,11 @@
 package core
 
 import (
+	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestHistoryStoreCreatesSchemaAndReopens(t *testing.T) {
@@ -204,6 +206,85 @@ func TestHistoryStoreReplaceSourceRemovesVanishedEvents(t *testing.T) {
 	}
 	if len(records) != 1 || records[0].Text != "neu" {
 		t.Fatalf("records = %#v", records)
+	}
+}
+
+func TestHistoryFTSExpression(t *testing.T) {
+	cases := []struct {
+		in     string
+		want   string
+		usable bool
+	}{
+		{in: "hallo welt", want: `"hallo"* "welt"*`, usable: true},
+		{in: "  Fehler ", want: `"Fehler"*`, usable: true},
+		{in: `such"e`, want: `"such""e"*`, usable: true},
+		{in: "...", want: "", usable: false},
+		{in: "", want: "", usable: false},
+	}
+	for _, c := range cases {
+		got, usable := historyFTSExpression(c.in)
+		if got != c.want || usable != c.usable {
+			t.Fatalf("historyFTSExpression(%q) = (%q, %v), want (%q, %v)", c.in, got, usable, c.want, c.usable)
+		}
+	}
+}
+
+func TestHistoryStoreRecordsFilterAndSubstringSearch(t *testing.T) {
+	store := openTestHistoryStore(t)
+	base := historySourceRow{SourceID: "claude:a", Provider: HistoryProviderClaude, Path: "/a.jsonl", ModTime: 10}
+	records := []historyRecord{
+		{ID: "e1", SourceID: "claude:a", Provider: HistoryProviderClaude, Timestamp: "2026-08-30T10:00:00Z",
+			Role: HistoryRoleDeveloper, Kind: HistoryEventPrompt, Lineage: HistoryLineagePrimary, Text: "Kubernetes aufsetzen"},
+		{ID: "e2", SourceID: "claude:a", Provider: HistoryProviderClaude, Timestamp: "2026-08-20T10:00:00Z",
+			Role: HistoryRoleAssistant, Kind: HistoryEventOutput, Lineage: HistoryLineagePrimary, Text: "fertig"},
+		{ID: "e3", SourceID: "claude:a", Provider: HistoryProviderClaude, Timestamp: "",
+			Role: HistoryRoleDeveloper, Kind: HistoryEventPrompt, Lineage: HistoryLineagePrimary, Text: "ohne Zeit"},
+	}
+	if err := store.replaceSource(base, records); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	got, err := store.records(ctx, historyRecordFilter{Kinds: []HistoryEventKind{HistoryEventPrompt}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("prompts = %d, want 2", len(got))
+	}
+
+	since := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+	got, err = store.records(ctx, historyRecordFilter{Since: since})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "e1" {
+		t.Fatalf("since = %#v", got)
+	}
+
+	got, err = store.records(ctx, historyRecordFilter{Since: since, IncludeUnknownTime: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("since with unknown time = %d, want 2", len(got))
+	}
+
+	// Teilstring innerhalb eines Wortes: FTS allein fände das nicht.
+	got, err = store.records(ctx, historyRecordFilter{Text: "bernet"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "e1" {
+		t.Fatalf("substring search = %#v", got)
+	}
+
+	got, err = store.records(ctx, historyRecordFilter{Text: "..."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("punctuation-only search = %#v, want none", got)
 	}
 }
 
