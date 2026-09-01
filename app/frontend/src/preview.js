@@ -5,7 +5,7 @@ import '@xterm/xterm/css/xterm.css';
 import './style.css';
 import { terminalTheme, applyTheme } from './theme.js';
 import { TERMINAL_OPTIONS, setUpTerminal } from './terminal-setup.js';
-import { CLAUDE_SAMPLE, DEMO_SAMPLE } from './preview-sample.js';
+import { CLAUDE_SAMPLE, DEMO_SAMPLE, BOX_SAMPLE } from './preview-sample.js';
 
 const OLD_THEME = {
   dark: {
@@ -41,7 +41,7 @@ function mount(hostId, variant) {
       });
   term.open(host);
   if (variant === 'neu') { term.options.cursorBlink = false; setUpTerminal(term, () => {}); }
-  term.write(CLAUDE_SAMPLE + DEMO_SAMPLE);
+  term.write(CLAUDE_SAMPLE + DEMO_SAMPLE + BOX_SAMPLE);
   return term;
 }
 

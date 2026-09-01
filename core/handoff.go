@@ -24,18 +24,11 @@ type resolvedHandoffSource struct {
 }
 
 func handoffVendorForTool(tool string) (AgentVendor, bool) {
-	switch strings.TrimSpace(tool) {
-	case AgentToolClaude:
-		return AgentVendorClaude, true
-	case AgentToolCodex:
-		return AgentVendorCodex, true
-	case AgentToolGemini:
-		return AgentVendorGemini, true
-	case AgentToolCopilot:
-		return AgentVendorCopilot, true
-	default:
+	provider, known := providerForPaneCommand(tool)
+	if !known {
 		return "", false
 	}
+	return provider.Vendor(), true
 }
 
 // handoffRunsForVendor goes through Session.AgentRun when no canonical entry
@@ -191,16 +184,24 @@ func handoffObservationForSession(snapshot ObservationSnapshot, session Session)
 	}
 }
 
-func validateHandoffDeliveryReady(name string, observed promptTargetObservation) error {
-	if observed.Tool != AgentToolClaude {
-		// Presence is not a safe composer-readiness signal. Standalone Codex and
-		// Copilot sessions also guard against concurrent writers/resumes. They
-		// need lifecycle-owned app-server/ACP Adapters before this live-TUI
-		// delivery Interface can accept them as targets.
-		if _, supported := handoffVendorForTool(observed.Tool); supported {
-			return fmt.Errorf("Eingabebereitschaft der Ziel-Session %q ist für %s unbekannt", name, observed.Tool)
-		}
+// handoffTargetToolSupported decides whether a handoff may aim at this tool at
+// all. Only a vendor whose screens were recorded can prove composer readiness;
+// for the others the live-TUI delivery Interface has no truthful signal and
+// would have to guess.
+func handoffTargetToolSupported(name, tool string) error {
+	provider, known := providerForPaneCommand(tool)
+	if !known {
 		return fmt.Errorf("in Ziel-Session %q läuft kein unterstütztes KI-Tool", name)
+	}
+	if !provider.ScreensRecorded() {
+		return fmt.Errorf("Eingabebereitschaft der Ziel-Session %q ist für %s unbekannt", name, tool)
+	}
+	return nil
+}
+
+func validateHandoffDeliveryReady(name string, observed promptTargetObservation) error {
+	if err := handoffTargetToolSupported(name, observed.Tool); err != nil {
+		return err
 	}
 	switch observed.Status {
 	case StatusIdle:
@@ -217,7 +218,7 @@ func validateHandoffDeliveryReady(name string, observed promptTargetObservation)
 		return fmt.Errorf("Eingabebereitschaft der Ziel-Session %q ist unbekannt", name)
 	}
 	if observed.Input != promptInputReady {
-		return fmt.Errorf("Ziel-Session %q zeigt keinen sicher eingabebereiten Claude-Composer", name)
+		return fmt.Errorf("Ziel-Session %q zeigt keinen sicher eingabebereiten Composer", name)
 	}
 	return nil
 }
@@ -245,11 +246,8 @@ func validateHandoffTarget(session Session, observed SessionObservation) (string
 	if tool == AgentToolBash && session.IsTerm() {
 		return "", false, fmt.Errorf("Ziel-Session %q ist ein reines Terminal — kein laufender KI-Prozess erkannt", session.Name)
 	}
-	if tool != AgentToolClaude {
-		if _, supported := handoffVendorForTool(tool); supported {
-			return "", false, fmt.Errorf("Eingabebereitschaft der Ziel-Session %q ist für %s unbekannt", session.Name, tool)
-		}
-		return "", false, fmt.Errorf("in Ziel-Session %q läuft kein unterstütztes KI-Tool", session.Name)
+	if err := handoffTargetToolSupported(session.Name, tool); err != nil {
+		return "", false, err
 	}
 	promptTarget := promptTargetObservationFromSession(observed)
 	switch observed.Status {
@@ -292,11 +290,8 @@ func validateHandoffEnqueueTarget(session Session, observed SessionObservation) 
 	if tool == AgentToolBash && session.IsTerm() {
 		return fmt.Errorf("Ziel-Session %q ist ein reines Terminal — kein laufender KI-Prozess erkannt", session.Name)
 	}
-	if tool != AgentToolClaude {
-		if _, supported := handoffVendorForTool(tool); supported {
-			return fmt.Errorf("Eingabebereitschaft der Ziel-Session %q ist für %s unbekannt", session.Name, tool)
-		}
-		return fmt.Errorf("in Ziel-Session %q läuft kein unterstütztes KI-Tool", session.Name)
+	if err := handoffTargetToolSupported(session.Name, tool); err != nil {
+		return err
 	}
 	return nil
 }
