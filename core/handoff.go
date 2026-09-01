@@ -193,13 +193,20 @@ func BuildVendorSwitchHandoffPrompt(st *State, snapshot ObservationSnapshot, ses
 	if session.IsTerm() {
 		return "", fmt.Errorf("Session %q ist ein reines Terminal", session.Name)
 	}
-	sourceVendor := session.SessionVendor()
-	if sourceVendor == targetVendor {
-		return "", fmt.Errorf("Session %q läuft bereits mit %s", session.Name, targetVendor)
+	prepared := *session
+	if resolvedSession, resolveErr := resolveMissingAgentRun(context.Background(), prepared); resolveErr == nil {
+		prepared = resolvedSession
 	}
-	resolved, err := resolveHandoffSource(*session, handoffObservationForSession(snapshot, *session))
+	sourceVendor := prepared.SessionVendor()
+	if sourceVendor == targetVendor {
+		return "", fmt.Errorf("Session %q läuft bereits mit %s", prepared.Name, targetVendor)
+	}
+	resolved, err := resolveHandoffSource(prepared, handoffObservationForSession(snapshot, prepared))
 	if err != nil {
 		return "", err
+	}
+	if resolved.run == nil {
+		return "", fmt.Errorf("exakter %s-Verlauf von Session %q konnte noch nicht ermittelt werden", sourceVendor, prepared.Name)
 	}
 	return fmt.Sprintf(
 		"Providerwechsel von %s zu %s in derselben magentic-Session. Der folgende kompakte Handoff wird vor dem Wechsel aus dem bisherigen Run abgeleitet.\n\n%s",
