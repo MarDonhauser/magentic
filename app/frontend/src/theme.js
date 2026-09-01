@@ -69,6 +69,36 @@ const TERMINAL_THEMES = {
   },
 };
 
+// Claude Code zeichnet seine Oberfläche nicht aus den sechzehn ANSI-Farben,
+// sondern aus dem festen 256er-Würfel: in rund 2900 Zeichen aus vier laufenden
+// Sitzungen stammte jede einzelne Farbe aus dem Bereich 16-255. Die Palette oben
+// trägt damit die Shell im Dock und alles, was einfaches ANSI schreibt; für die
+// Agentenansicht entscheidet der Würfel.
+//
+// Der Farbwürfel 16-231 bleibt unverändert, das sind fremde Produktfarben. Nur
+// die Graustufenrampe 232-255 läuft neu auf der Neutralachse dieser Oberfläche
+// (OKLCH-Farbton -103°, gemittelt über --page bis --ink). Die Helligkeit jeder
+// Stufe bleibt exakt erhalten, der Kontrast also auch; die Rahmen und der
+// gedämpfte Text der Agenten stehen danach im selben Blaugrau wie die Anwendung
+// statt in einem neutralen Grau, das zu nichts im Fenster gehört.
+const GREY_RAMP = [
+  '#06080b', '#0f1217', '#181c22', '#22262d', '#2b3138', '#343b43',
+  '#3e454e', '#484f59', '#515963', '#5b636d', '#656d78', '#6f7782',
+  '#79818b', '#838b95', '#8e959f', '#989fa8', '#a2a9b1', '#adb3bb',
+  '#b7bdc4', '#c2c7cd', '#cdd0d6', '#d7dadf', '#e2e4e7', '#edeef0',
+];
+
+const EXTENDED_ANSI = (() => {
+  const step = v => (v === 0 ? 0 : 55 + 40 * v);
+  const hex = v => v.toString(16).padStart(2, '0');
+  const cube = [];
+  for (let r = 0; r < 6; r++)
+    for (let g = 0; g < 6; g++)
+      for (let b = 0; b < 6; b++)
+        cube.push('#' + hex(step(r)) + hex(step(g)) + hex(step(b)));
+  return [...cube, ...GREY_RAMP];
+})();
+
 let initialised = false;
 
 function storedTheme() {
@@ -110,7 +140,7 @@ export function currentTheme() {
 }
 
 export function terminalTheme(theme = currentTheme()) {
-  return { ...TERMINAL_THEMES[normaliseTheme(theme)] };
+  return { ...TERMINAL_THEMES[normaliseTheme(theme)], extendedAnsi: [...EXTENDED_ANSI] };
 }
 
 export function applyTheme(theme, { persist = false, notify = true } = {}) {

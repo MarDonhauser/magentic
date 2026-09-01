@@ -244,12 +244,22 @@ func TestPromptTerminalInputUsesBracketedPasteForMultilinePrompt(t *testing.T) {
 }
 
 func TestPromptTargetRuntimeKeepsProviderSemanticsSeparate(t *testing.T) {
+	// Gemini's screens were never recorded, so an unknown status is the truth
+	// about Magentic's knowledge and the literal queued path stays open.
+	gemini := promptTargetObservation{
+		Availability: ObservationAvailable, Presence: SessionPresencePresent,
+		Tool: AgentToolGemini, Status: StatusUnknown, ContentKnown: true, Input: promptInputUnknown,
+	}
+	if err := validatePromptTargetObservation("gemini", gemini); err != nil {
+		t.Fatalf("unbeobachteter Anbieter wurde an Claude-Semantik gemessen: %v", err)
+	}
+	// Codex was recorded, so an unfamiliar screen must not receive a prompt.
 	codex := promptTargetObservation{
 		Availability: ObservationAvailable, Presence: SessionPresencePresent,
 		Tool: AgentToolCodex, Status: StatusUnknown, ContentKnown: true, Input: promptInputUnknown,
 	}
-	if err := validatePromptTargetObservation("codex", codex); err != nil {
-		t.Fatalf("generic Codex prompt transport reused Claude status semantics: %v", err)
+	if err := validatePromptTargetObservation("codex", codex); err == nil {
+		t.Fatal("ein fremder Codex-Bildschirm darf keinen Prompt bekommen")
 	}
 	claude := promptTargetObservation{
 		Availability: ObservationAvailable, Presence: SessionPresencePresent,

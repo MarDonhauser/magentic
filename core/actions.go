@@ -783,10 +783,13 @@ func validatePromptTargetObservation(name string, observed promptTargetObservati
 	default:
 		return fmt.Errorf("in Ziel-Session %q läuft kein unterstütztes KI-Tool mehr", name)
 	}
-	if observed.Status == StatusUnknown && observed.Tool != AgentToolClaude {
-		// The non-Claude prompt Adapters support literal queued input, but do not
-		// claim UI-phase semantics that Observation cannot establish.
-		return nil
+	if observed.Status == StatusUnknown {
+		// A vendor whose screens were never recorded cannot report a phase; its
+		// Adapter still supports literal queued input. For a recorded vendor an
+		// unknown status means an unfamiliar screen, and nothing goes into it.
+		if provider, known := providerForPaneCommand(observed.Tool); known && !provider.ScreensRecorded() {
+			return nil
+		}
 	}
 	return validatePromptTargetStatus(name, observed.Status)
 }

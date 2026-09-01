@@ -330,12 +330,15 @@ func TestObserveNormalizesPaneFactsAndDoesNotMutateSessions(t *testing.T) {
 func TestObserveDoesNotFabricateStatusForUnfamiliarScreens(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	cases := []struct {
-		tool    string
-		content string
+		tool string
+		// deliverable says whether the literal queued path may still be used.
+		// It stays open only for a vendor whose screens were never recorded.
+		deliverable bool
+		content     string
 	}{
 		{tool: AgentToolCodex, content: "irgendein fremder Bildschirm\nohne bekannte Merkmale\n"},
 		{tool: AgentToolCopilot, content: "irgendein fremder Bildschirm\nohne bekannte Merkmale\n"},
-		{tool: AgentToolGemini, content: "Do you want to run this command?\n❯ 1. Yes\n"},
+		{tool: AgentToolGemini, deliverable: true, content: "Do you want to run this command?\n❯ 1. Yes\n"},
 	}
 	for _, tt := range cases {
 		t.Run(tt.tool, func(t *testing.T) {
@@ -356,8 +359,12 @@ func TestObserveDoesNotFabricateStatusForUnfamiliarScreens(t *testing.T) {
 			if promptTarget.Input != promptInputUnknown {
 				t.Fatalf("unsupported %s input readiness was fabricated: %#v", tt.tool, promptTarget)
 			}
-			if err := validatePromptTargetObservation("one", promptTarget); err != nil {
+			err := validatePromptTargetObservation("one", promptTarget)
+			if tt.deliverable && err != nil {
 				t.Fatalf("known queued-input transport rejected truthful %s observation: %v", tt.tool, err)
+			}
+			if !tt.deliverable && err == nil {
+				t.Fatalf("ein fremder %s-Bildschirm darf keinen Prompt bekommen", tt.tool)
 			}
 		})
 	}

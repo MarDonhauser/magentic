@@ -32,6 +32,11 @@ type AgentProvider interface {
 	// ComposerReady reports whether the vendor's own input line is visible, so
 	// a queued prompt typed now would land in it instead of in a dialog.
 	ComposerReady(paneContent string) bool
+	// ScreensRecorded reports whether this vendor's UI was ever observed. For a
+	// vendor that was not, an unknown status means "never looked at" and the
+	// literal queued-input path stays open; for one that was, unknown means
+	// "unfamiliar screen" and nothing may be typed into it.
+	ScreensRecorded() bool
 }
 
 // vendorStatus applies one vendor's markers in the only order that is safe:
@@ -133,6 +138,8 @@ func (claudeProvider) Tool() string        { return AgentToolClaude }
 func (claudeProvider) Binary() string      { return "claude" }
 func (claudeProvider) NewRunID() string    { return NewUUID() }
 
+func (claudeProvider) ScreensRecorded() bool { return true }
+
 func (claudeProvider) Matches(paneCommand string) bool {
 	return paneCommandMatches(paneCommand, "claude")
 }
@@ -172,6 +179,8 @@ func (codexProvider) Binary() string      { return "codex" }
 // discovered from its rollout files after the fact.
 func (codexProvider) NewRunID() string { return "" }
 
+func (codexProvider) ScreensRecorded() bool { return true }
+
 func (codexProvider) Matches(paneCommand string) bool {
 	return paneCommandMatches(paneCommand, "codex")
 }
@@ -209,6 +218,8 @@ func (copilotProvider) Vendor() AgentVendor { return AgentVendorCopilot }
 func (copilotProvider) Tool() string        { return AgentToolCopilot }
 func (copilotProvider) Binary() string      { return "copilot" }
 func (copilotProvider) NewRunID() string    { return NewUUID() }
+
+func (copilotProvider) ScreensRecorded() bool { return true }
 
 func (copilotProvider) Matches(paneCommand string) bool {
 	return paneCommandMatches(paneCommand, "copilot") || paneCommand == "github-copilot"
@@ -255,6 +266,8 @@ func (geminiProvider) Vendor() AgentVendor { return AgentVendorGemini }
 func (geminiProvider) Tool() string        { return AgentToolGemini }
 func (geminiProvider) Binary() string      { return "gemini" }
 func (geminiProvider) NewRunID() string    { return "" }
+
+func (geminiProvider) ScreensRecorded() bool { return false }
 
 func (geminiProvider) Matches(paneCommand string) bool {
 	return paneCommandMatches(paneCommand, "gemini")
