@@ -57,6 +57,8 @@ export function GitGraph(arg1:string,arg2:number):Promise<core.GitGraph>;
 
 export function HandoffSession(arg1:string,arg2:string):Promise<void>;
 
+export function Inbox():Promise<core.OvInbox>;
+
 export function KillSession(arg1:string,arg2:string):Promise<void>;
 
 export function LaterSession(arg1:string):Promise<void>;

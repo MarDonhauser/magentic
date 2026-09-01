@@ -110,6 +110,10 @@ export function HandoffSession(arg1, arg2) {
   return window['go']['main']['App']['HandoffSession'](arg1, arg2);
 }
 
+export function Inbox() {
+  return window['go']['main']['App']['Inbox']();
+}
+
 export function KillSession(arg1, arg2) {
   return window['go']['main']['App']['KillSession'](arg1, arg2);
 }

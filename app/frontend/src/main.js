@@ -6,7 +6,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import {
-  Overview,
+  Overview, Inbox,
   NewSession, NewSessionWithVendor, AgentVendors, SwitchSessionVendor, NewTermSession, NewTermSessionFor, DoneAgent, Cleanup, Merge, Deploy, RemoveWorktree, SetMainBranch,
   OpenTerm, WriteTerm, ResizeTerm, CloseTerm, KillSession, LaterSession, ReopenSession, SendSkill, HandoffSession,
   SendMessage, DiscardQueuedMessage, RetryQueuedMessage,
@@ -44,6 +44,15 @@ import { TERMINAL_OPTIONS, setUpTerminal } from './terminal-setup.js';
 import { createHydraHandoff } from './hydra-handoff.js';
 import { createVendorSwitchCoordinator } from './vendor-switch.js';
 import { queuedMessages, queuedHeadline } from './queued-state.js';
+import {
+  deliveryLabel,
+  excerptLabel,
+  inboxEntries,
+  inboxHeadline,
+  inboxState,
+  waitingKindLabel,
+  waitingTimeLabel,
+} from './inbox-state.js';
 mountDeveloperIcons();
 
 const STATUS = {
@@ -939,8 +948,8 @@ async function openSession(sessionID, name) {
   updateTermBar();
 }
 
-const PANELS = ['overview', 'search-view', 'terms', 'graph-view', 'board-view', 'stats-view'];
-const NAV_FOR = { overview: 'nav-overview', 'search-view': 'nav-search', 'graph-view': 'nav-graph', 'board-view': 'nav-board', 'stats-view': 'nav-stats' };
+const PANELS = ['overview', 'search-view', 'terms', 'inbox-view', 'graph-view', 'board-view', 'stats-view'];
+const NAV_FOR = { overview: 'nav-overview', 'search-view': 'nav-search', 'inbox-view': 'nav-inbox', 'graph-view': 'nav-graph', 'board-view': 'nav-board', 'stats-view': 'nav-stats' };
 
 function showPanel(id) {
   for (const p of PANELS) {
@@ -981,6 +990,121 @@ function showSearch() {
   $('search-input').focus();
   renderSidebar();
 }
+
+// Der Posteingang zeigt genau die Liste, die die Aufmerksamkeits-Planung
+// erzeugt hat: eine Zeile je wartender Session, längste Wartezeit zuerst. Hier
+// wird nichts neu sortiert und nichts neu abgeleitet.
+let inboxData = null, inboxBusy = false, inboxComposing = null;
+
+async function showInbox() {
+  view = 'inbox';
+  leaveTerm();
+  showPanel('inbox-view');
+  renderSidebar();
+  await loadInbox();
+}
+
+async function loadInbox() {
+  if (inboxBusy) return;
+  inboxBusy = true;
+  try { inboxData = await Inbox(); }
+  catch { inboxData = { state: 'unavailable', entries: [] }; }
+  inboxBusy = false;
+  if (view !== 'inbox') return;
+  renderInbox();
+}
+
+function inboxComposeBlock(entry) {
+  if (inboxComposing !== entry.sessionId) return '';
+  return `<div class="session-compose">` +
+    `<label class="session-compose-label" for="inbox-compose-input">Deine Antwort an „${esc(entry.session)}“</label>` +
+    `<textarea id="inbox-compose-input" class="session-compose-input" rows="2" ` +
+    `placeholder="Antwort an ${esc(entry.session)} …"></textarea>` +
+    `<span class="session-compose-actions">` +
+    `<button class="btn tiny" data-act="inboxcancel">Abbrechen</button>` +
+    `<button class="btn tiny primary" data-act="inboxsend" data-session-id="${esc(entry.sessionId)}" data-agent="${esc(entry.session)}">Senden</button>` +
+    `</span></div>`;
+}
+
+function inboxEntryHtml(entry) {
+  const session = agentInfo(entry.session);
+  const meta = [entry.project, waitingKindLabel(entry.kind), waitingTimeLabel(entry)].filter(Boolean).join(' · ');
+  const reason = excerptLabel(entry);
+  const delivery = deliveryLabel(entry);
+  return `<article class="inbox-entry">` +
+    `<div class="inbox-entry-head">` +
+    `<span class="inbox-entry-avatar">${agentPortrait(entry.session, 24, session)}</span>` +
+    `<div class="inbox-entry-title"><strong>${esc(entry.session)}</strong>` +
+    `<span class="inbox-entry-meta">${esc(meta)}</span></div>` +
+    `<span class="inbox-entry-actions">` +
+    `<button class="btn tiny" data-act="inboxreply" data-session-id="${esc(entry.sessionId)}">Antworten</button>` +
+    `<button class="btn tiny" data-act="inboxopen" data-session-id="${esc(entry.sessionId)}" data-agent="${esc(entry.session)}">Session öffnen</button>` +
+    `</span></div>` +
+    (reason.known
+      ? `<pre class="inbox-entry-reason">${esc(reason.text)}</pre>`
+      : `<p class="inbox-entry-reason unknown">${esc(reason.text)}</p>`) +
+    (delivery ? `<p class="inbox-entry-delivery">${esc(delivery)}</p>` : '') +
+    inboxComposeBlock(entry) +
+    `</article>`;
+}
+
+function renderInbox() {
+  const el = $('inbox-view');
+  const head = `<div class="view-head"><h2>${icon('lock')} Posteingang</h2>` +
+    `<button class="btn tiny" data-act="inboxreload" title="Wartende Sessions neu laden">↻</button></div>`;
+  const entries = inboxEntries(inboxData);
+  const state = inboxState(inboxData);
+  const headline = `<p class="inbox-headline${state === 'complete' ? '' : ' unknown'}">${esc(inboxHeadline(inboxData))}</p>`;
+  el.innerHTML = head + `<div class="inbox-body">` + headline +
+    entries.map(inboxEntryHtml).join('') + `</div>`;
+}
+
+// answerInboxEntry gibt die Antwort an den Outbox-Versand weiter. Der Eintrag
+// bleibt stehen: Ob die Session weiter wartet, entscheidet erst die nächste
+// Beobachtung.
+async function answerInboxEntry(sessionID, sessionName) {
+  const input = $('inbox-compose-input');
+  const text = input?.value.trim();
+  if (!sessionID || !text) return;
+  try {
+    await SendMessage(sessionID, text);
+    inboxComposing = null;
+    await loadInbox();
+  } catch (err) {
+    toast(`Antwort an „${sessionName}“ konnte nicht übernommen werden: ` + errorText(err), true);
+  }
+}
+
+$('inbox-view').addEventListener('keydown', e => {
+  const input = e.target.closest('.session-compose-input');
+  if (!input) return;
+  if (e.key === 'Escape') {
+    inboxComposing = null;
+    renderInbox();
+    return;
+  }
+  if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+  e.preventDefault();
+  const send = input.closest('.session-compose')?.querySelector('[data-act="inboxsend"]');
+  if (send) answerInboxEntry(send.dataset.sessionId, send.dataset.agent);
+});
+
+$('inbox-view').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-act]');
+  if (!b) return;
+  const d = b.dataset;
+  switch (d.act) {
+    case 'inboxreload': await loadInbox(); break;
+    case 'inboxopen': await openSession(d.sessionId, d.agent); break;
+    case 'inboxreply':
+      inboxComposing = inboxComposing === d.sessionId ? null : d.sessionId;
+      renderInbox();
+      $('inbox-compose-input')?.focus();
+      break;
+    case 'inboxcancel': inboxComposing = null; renderInbox(); break;
+    case 'inboxsend': await answerInboxEntry(d.sessionId, d.agent); break;
+  }
+});
 
 let graphProject = null, boardProject = null, boardArchive = false, statsProject = '', statsRange = 30;
 let graphBusy = false, boardBusy = false, statsBusy = false;
@@ -1138,6 +1262,7 @@ AgentVendors()
 $('nav-overview').onclick = showOverview;
 $('sidebar-head').onclick = showOverview;
 $('nav-search').onclick = showSearch;
+$('nav-inbox').onclick = () => showInbox();
 $('nav-graph').onclick = () => showGraph();
 $('nav-board').onclick = () => showBoard();
 $('nav-stats').onclick = () => showStats();
@@ -3349,6 +3474,7 @@ new ResizeObserver(() => {
 
 refresh(true);
 setInterval(() => { if (!document.hidden) refresh(false); }, 3000);
+setInterval(() => { if (!document.hidden && view === 'inbox') loadInbox(); }, 3000);
 refreshZg();
 setInterval(() => { if (!document.hidden) refreshZg(); }, 5000);
 setInterval(() => {

@@ -5,12 +5,14 @@ import {
   Board,
   BoardArchive,
   GitGraph,
+  Inbox,
   KillSession,
   MigrateDockSessions,
   NewDockSession,
   OpenTerm,
   RemoveProject,
   MoveSidebarItem,
+  SendMessage,
   SendSkill,
   SetMainBranch,
   SwitchSessionVendor,
@@ -110,4 +112,34 @@ test('project queries and Dock restoration forward stable IDs at the bridge', as
     ['NewDockSession', 'project-id'],
     ['MigrateDockSessions', ['legacy dock']],
   ]);
+});
+
+test('the inbox reads its entries and answers a Session through the bridge', async (t) => {
+  const calls = [];
+  const previousWindow = globalThis.window;
+  t.after(() => { globalThis.window = previousWindow; });
+  const planned = {
+    state: 'complete',
+    entries: [{
+      sessionId: 'session-id', session: 'auth-fix', project: 'magentic',
+      kind: 'needs-input', age: '12m', waitingSinceKnown: true,
+      excerpt: 'Darf ich die Datei schreiben?', excerptKnown: true, awaitingDelivery: false,
+    }],
+  };
+  globalThis.window = {
+    go: {
+      main: {
+        App: {
+          Inbox: () => planned,
+          SendMessage: (...args) => { calls.push(['SendMessage', ...args]); },
+        },
+      },
+    },
+  };
+
+  const inbox = await Inbox();
+  assert.equal(inbox.state, 'complete');
+  assert.equal(inbox.entries[0].sessionId, 'session-id');
+  await SendMessage(inbox.entries[0].sessionId, 'ja, bitte');
+  assert.deepEqual(calls, [['SendMessage', 'session-id', 'ja, bitte']]);
 });

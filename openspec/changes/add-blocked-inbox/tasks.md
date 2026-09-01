@@ -11,9 +11,9 @@
 
 ## 2. Desktop app wiring
 
-- [ ] 2.1 Carry the planned inbox out of the watcher cycle alongside the plan it already applies, and add a bound accessor returning the last planned inbox for a first paint; verify `go build ./...` in `app/` and that the accessor returns the unavailable state before the first cycle
-- [ ] 2.2 Enrich each entry for the UI with its Project name, Session name, and the Session's queued messages (including the stuck marker) taken from the existing Overview projection; verify with a test that a Session with a pending queued message is marked as awaiting delivery
-- [ ] 2.3 Regenerate the Wails bindings and verify the frontend can call the inbox accessor and `SendMessage` with the types it receives
+- [x] 2.1 Carry the planned inbox out of the watcher cycle alongside the plan it already applies, and add a bound accessor returning the last planned inbox for a first paint; verify `go build ./...` in `app/` and that the accessor returns the unavailable state before the first cycle
+- [x] 2.2 Enrich each entry for the UI with its Project name, Session name, and the Session's queued messages (including the stuck marker) taken from the existing Overview projection; verify with a test that a Session with a pending queued message is marked as awaiting delivery
+- [x] 2.3 Regenerate the Wails bindings and verify the frontend can call the inbox accessor and `SendMessage` with the types it receives
 
 ## 3. Desktop inbox view
 
