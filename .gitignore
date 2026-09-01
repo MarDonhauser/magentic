@@ -1,3 +1,5 @@
 magentic
 app/app
 .DS_Store
+.claude/worktrees/
+.superpowers/
