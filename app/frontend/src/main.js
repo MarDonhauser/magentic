@@ -415,7 +415,7 @@ function setComposerHint(message, reset = true) {
   termComposeHintEl.textContent = message;
   if (!reset) return;
   composerHintTimer = setTimeout(() => {
-    termComposeHintEl.textContent = '⌘/Strg + ↵ senden · Bilder einfügen';
+    termComposeHintEl.textContent = '↵ senden · ⇧↵ Zeilenumbruch · Bilder einfügen';
   }, 2600);
 }
 
@@ -520,7 +520,7 @@ termPromptEl.addEventListener('input', () => {
   updateComposerControls(!a || ['exited', 'dead'].includes(a.status));
 });
 termPromptEl.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
     termComposerEl.requestSubmit();
   }
