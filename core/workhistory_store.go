@@ -65,6 +65,12 @@ CREATE INDEX IF NOT EXISTS events_conversation ON events(provider, conversation_
 
 DROP TABLE IF EXISTS events_fts;
 
+-- Die Spalten der Abdeckungszähler haben sich während der Entwicklung von
+-- einem Zählerpaar je Ereignis auf ein Zählerpaar je Tokenfeld geändert. Eine
+-- Datenbank aus einem Zwischenstand wird verworfen statt migriert, weil die
+-- Aggregate ohnehin vollständig aus den Transkripten neu entstehen.
+DROP TABLE IF EXISTS activity;
+
 CREATE TABLE IF NOT EXISTS activity (
 	agg_key         TEXT NOT NULL,
 	day             TEXT NOT NULL,
@@ -85,8 +91,14 @@ CREATE TABLE IF NOT EXISTS activity (
 	cost            REAL NOT NULL DEFAULT 0,
 	priced_events   INTEGER NOT NULL DEFAULT 0,
 	unpriced_events INTEGER NOT NULL DEFAULT 0,
-	known_usage_events   INTEGER NOT NULL DEFAULT 0,
-	unknown_usage_events INTEGER NOT NULL DEFAULT 0,
+	known_input_events         INTEGER NOT NULL DEFAULT 0,
+	unknown_input_events       INTEGER NOT NULL DEFAULT 0,
+	known_output_events        INTEGER NOT NULL DEFAULT 0,
+	unknown_output_events      INTEGER NOT NULL DEFAULT 0,
+	known_cache_read_events    INTEGER NOT NULL DEFAULT 0,
+	unknown_cache_read_events  INTEGER NOT NULL DEFAULT 0,
+	known_cache_write_events   INTEGER NOT NULL DEFAULT 0,
+	unknown_cache_write_events INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY (agg_key, day, hour, provider, model)
 );
 CREATE INDEX IF NOT EXISTS activity_day ON activity(day);
@@ -621,21 +633,30 @@ type historyActivityRow struct {
 	Cost               float64
 	PricedEvents       int
 	UnpricedEvents     int
-	// Trägt HistoryMeasure.Coverage: wie viele Ereignisse Tokenwerte kannten.
-	KnownUsageEvents   int
-	UnknownUsageEvents int
+	// Trägt HistoryMeasure.KnownEvents/UnknownEvents je Tokenfeld: gezählt wird
+	// wie in historyMeasureAcc.add, ein Paar je Feld, weil ein einzelnes
+	// Ereignis für verschiedene Felder unterschiedliche Abdeckung haben kann.
+	KnownInputEvents        int
+	UnknownInputEvents      int
+	KnownOutputEvents       int
+	UnknownOutputEvents     int
+	KnownCacheReadEvents    int
+	UnknownCacheReadEvents  int
+	KnownCacheWriteEvents   int
+	UnknownCacheWriteEvents int
 }
 
-// historyActivityKey identifiziert eine Aggregatzeile innerhalb einer Quelle.
-// Anders als der Primärschlüssel der Tabelle activity trägt sie kein Modell:
-// eine Stunde einer Conversation hat praktisch ein Modell, aber Prompts (ohne
-// Modellangabe) und die zugehörigen Assistant-Ausgaben müssen in dieselbe
-// Zeile fallen, sonst zählt derselbe Turn doppelt.
+// historyActivityKey identifiziert eine Aggregatzeile eindeutig; sie
+// entspricht dem Primärschlüssel der Tabelle activity. Ein Prompt (ohne
+// Modellangabe) und die Ausgabe derselben Conversation-Stunde (mit Modell)
+// fallen deshalb bewusst in unterschiedliche Zeilen; addBucket (Task 9/10)
+// summiert Prompts und Turns ohnehin über alle Zeilen eines Tages.
 type historyActivityKey struct {
 	aggKey   string
 	day      string
 	hour     int
 	provider HistoryProvider
+	model    string
 }
 
 // historyActivityRowsFor verdichtet die Datensätze einer Quelle zu dauerhaften
@@ -662,13 +683,13 @@ func historyActivityRowsFor(records []historyRecord, sourceID string, modTime in
 		}
 		key := historyActivityKey{
 			aggKey: aggKey, day: local.Format(statsDateLayout), hour: local.Hour(),
-			provider: record.Provider,
+			provider: record.Provider, model: record.Model,
 		}
 		row := byKey[key]
 		if row == nil {
 			row = &historyActivityRow{
 				AggKey: aggKey, Day: key.day, Hour: key.hour, Provider: record.Provider,
-				SourceID: sourceID, WrittenFromModTime: modTime,
+				Model: record.Model, SourceID: sourceID, WrittenFromModTime: modTime,
 				ConversationID: record.ConversationID, CWD: record.CWD, ProjectAlias: record.ProjectAlias,
 			}
 			byKey[key] = row
@@ -679,9 +700,6 @@ func historyActivityRowsFor(records []historyRecord, sourceID string, modTime in
 		}
 		if row.ProjectAlias == "" {
 			row.ProjectAlias = record.ProjectAlias
-		}
-		if row.Model == "" {
-			row.Model = record.Model
 		}
 		switch record.Kind {
 		case HistoryEventPrompt:
@@ -707,15 +725,13 @@ func historyActivityRowsFor(records []historyRecord, sourceID string, modTime in
 			row.Cost += cost
 			priced = ok
 		}
-		// Gezählt wird je Ereignis, nicht je Tokenfeld: kennt das Ereignis
-		// irgendeinen Tokenwert, zählt es als bekannt, auch wenn andere Felder
-		// (z. B. Cache) unbekannt bleiben.
-		switch {
-		case known:
-			row.KnownUsageEvents++
-		case unknown:
-			row.UnknownUsageEvents++
-		}
+		// Gezählt wird je Tokenfeld, genau wie historyMeasureAcc.add: known++ bei
+		// HistoryFactKnown, unknown++ bei HistoryFactUnknown, sonst nichts. Ein
+		// Ereignis kann so für ein Feld bekannt und für ein anderes unbekannt sein.
+		countHistoryFactCoverage(usage.InputTokens, &row.KnownInputEvents, &row.UnknownInputEvents)
+		countHistoryFactCoverage(usage.OutputTokens, &row.KnownOutputEvents, &row.UnknownOutputEvents)
+		countHistoryFactCoverage(usage.CacheReadTokens, &row.KnownCacheReadEvents, &row.UnknownCacheReadEvents)
+		countHistoryFactCoverage(usage.CacheWriteTokens, &row.KnownCacheWriteEvents, &row.UnknownCacheWriteEvents)
 		if priced {
 			row.PricedEvents++
 		}
@@ -729,6 +745,19 @@ func historyActivityRowsFor(records []historyRecord, sourceID string, modTime in
 		out = append(out, *byKey[key])
 	}
 	return out
+}
+
+// countHistoryFactCoverage zählt ein einzelnes Tokenfeld in known oder unknown
+// ein, exakt wie historyMeasureAcc.add (core/workhistory.go:1165): bekannt
+// erhöht known, unbekannt erhöht unknown, ein nicht anwendbares Feld (z. B. bei
+// Prompts) erhöht keins von beiden.
+func countHistoryFactCoverage(fact HistoryFact[int64], known, unknown *int) {
+	switch fact.State {
+	case HistoryFactKnown:
+		*known++
+	case HistoryFactUnknown:
+		*unknown++
+	}
 }
 
 // writeActivity schreibt Aktivitätszeilen dauerhaft fest. Damit dieselbe
@@ -775,13 +804,20 @@ func (s *historyStore) writeActivity(ctx context.Context, rows []historyActivity
 				(agg_key, day, hour, provider, model, source_id, written_from_mod_time,
 				 conversation_id, cwd, project_alias, prompts, turns,
 				 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-				 cost, priced_events, unpriced_events, known_usage_events, unknown_usage_events)
-				VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+				 cost, priced_events, unpriced_events,
+				 known_input_events, unknown_input_events,
+				 known_output_events, unknown_output_events,
+				 known_cache_read_events, unknown_cache_read_events,
+				 known_cache_write_events, unknown_cache_write_events)
+				VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 				row.AggKey, row.Day, row.Hour, string(row.Provider), row.Model, row.SourceID,
 				row.WrittenFromModTime, row.ConversationID, row.CWD, row.ProjectAlias,
 				row.Prompts, row.Turns, row.Input, row.Output, row.CacheRead, row.CacheWrite,
 				row.Cost, row.PricedEvents, row.UnpricedEvents,
-				row.KnownUsageEvents, row.UnknownUsageEvents); err != nil {
+				row.KnownInputEvents, row.UnknownInputEvents,
+				row.KnownOutputEvents, row.UnknownOutputEvents,
+				row.KnownCacheReadEvents, row.UnknownCacheReadEvents,
+				row.KnownCacheWriteEvents, row.UnknownCacheWriteEvents); err != nil {
 				return fmt.Errorf("write activity: %w", err)
 			}
 		}

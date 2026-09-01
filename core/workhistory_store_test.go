@@ -340,25 +340,42 @@ func TestHistoryActivityRowsAggregateByHourAndModel(t *testing.T) {
 			Model: "claude-opus-4-8", CWD: "/work/demo"},
 	}
 	rows := historyActivityRowsFor(records, "claude:a", 500, time.UTC)
-	if len(rows) != 2 {
-		t.Fatalf("rows = %d, want 2 (zwei Stunden): %#v", len(rows), rows)
+	// Drei Zeilen: der Prompt in Stunde 10 hat kein Modell und liegt deshalb in
+	// einer eigenen Zeile neben der Ausgabe derselben Stunde; Stunde 11 hat nur
+	// die Ausgabe. Der Primärschlüssel der Tabelle (agg_key, day, hour,
+	// provider, model) verlangt genau diese Aufschlüsselung.
+	if len(rows) != 3 {
+		t.Fatalf("rows = %d, want 3: %#v", len(rows), rows)
 	}
-	byHour := map[int]historyActivityRow{}
+	type rowKey struct {
+		hour  int
+		model string
+	}
+	byRow := map[rowKey]historyActivityRow{}
 	for _, row := range rows {
-		byHour[row.Hour] = row
+		byRow[rowKey{row.Hour, row.Model}] = row
 		if row.AggKey != "conv-1" || row.WrittenFromModTime != 500 || row.Day != "2026-08-30" {
 			t.Fatalf("row = %#v", row)
 		}
 	}
-	if byHour[10].KnownUsageEvents != 1 || byHour[10].UnknownUsageEvents != 0 {
-		t.Fatalf("hour 10 usage coverage = %#v", byHour[10])
+	prompt := byRow[rowKey{10, ""}]
+	if prompt.Prompts != 1 || prompt.Turns != 0 {
+		t.Fatalf("hour 10 prompt row = %#v", prompt)
 	}
-	if byHour[10].Prompts != 1 || byHour[10].Turns != 1 || byHour[10].Input != 10 || byHour[10].PricedEvents != 1 {
-		t.Fatalf("hour 10 = %#v", byHour[10])
+	output := byRow[rowKey{10, "claude-opus-4-8"}]
+	if output.Turns != 1 || output.Input != 10 || output.PricedEvents != 1 {
+		t.Fatalf("hour 10 output row = %#v", output)
+	}
+	// Input und Output sind bekannt, Cache-Werte wurden nicht gemeldet: die
+	// Abdeckung wird je Tokenfeld gezählt, nicht als Alles-oder-nichts je Ereignis.
+	if output.KnownInputEvents != 1 || output.KnownOutputEvents != 1 ||
+		output.UnknownCacheReadEvents != 1 || output.UnknownCacheWriteEvents != 1 {
+		t.Fatalf("hour 10 output row coverage = %#v", output)
 	}
 	// Eine Ausgabe ohne Tokenwerte ist unbepreisbar, zählt aber als Turn.
-	if byHour[11].Turns != 1 || byHour[11].PricedEvents != 0 || byHour[11].UnpricedEvents != 1 {
-		t.Fatalf("hour 11 = %#v", byHour[11])
+	later := byRow[rowKey{11, "claude-opus-4-8"}]
+	if later.Turns != 1 || later.PricedEvents != 0 || later.UnpricedEvents != 1 {
+		t.Fatalf("hour 11 = %#v", later)
 	}
 }
 
