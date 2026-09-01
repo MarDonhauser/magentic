@@ -20,6 +20,9 @@ type fakeLifecycleRuntime struct {
 	renameErr            error
 	renameAppliesOnError bool
 	existsCalls          []string
+	startCalls           int
+	stopCalls            int
+	lastStartMode        string
 	renameCalls          int
 	lastRenameFrom       string
 	lastRenameTo         string
@@ -40,7 +43,9 @@ func (f *fakeLifecycleRuntime) Exists(_ context.Context, session Session) (bool,
 	return f.present[session.ID], nil
 }
 
-func (f *fakeLifecycleRuntime) Start(_ context.Context, session Session, _ string) error {
+func (f *fakeLifecycleRuntime) Start(_ context.Context, session Session, mode string) error {
+	f.startCalls++
+	f.lastStartMode = mode
 	if f.onStart != nil {
 		f.onStart(session)
 	}
@@ -55,6 +60,7 @@ func (f *fakeLifecycleRuntime) Start(_ context.Context, session Session, _ strin
 }
 
 func (f *fakeLifecycleRuntime) Stop(_ context.Context, session Session) error {
+	f.stopCalls++
 	if f.onStop != nil {
 		f.onStop(session)
 	}
@@ -85,6 +91,11 @@ func (f *fakeLifecycleRuntime) Rename(_ context.Context, session Session, target
 func (f *fakeLifecycleRuntime) DeliverInitial(_ context.Context, _ Session, _ string) (bool, error) {
 	f.deliverCalls++
 	return false, nil
+}
+
+func (f *fakeLifecycleRuntime) reset() {
+	f.startCalls, f.stopCalls, f.lastStartMode = 0, 0, ""
+	f.existsCalls = nil
 }
 
 type fakeLifecycleRepositories struct {

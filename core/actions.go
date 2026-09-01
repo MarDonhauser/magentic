@@ -709,6 +709,12 @@ func startSkillAgent(st *State, projectID ProjectID, dir, prompt, kind, nameHint
 	return name, nil
 }
 
+// SwitchSessionVendor changes which coding agent a Session runs.
+func SwitchSessionVendor(sessionID SessionID, vendor string) error {
+	_, err := defaultSessionLifecycle().SwitchVendor(context.Background(), sessionID, AgentVendor(strings.TrimSpace(vendor)))
+	return err
+}
+
 // SendSkillByID resolves the action target through its durable Registry
 // identity.
 func SendSkillByID(id SessionID, cmd string) error {

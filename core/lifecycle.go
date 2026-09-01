@@ -477,6 +477,79 @@ func (l *SessionLifecycle) Park(ctx context.Context, id SessionID, name string) 
 	return l.planExisting(ctx, id, name, SessionDesiredLater)
 }
 
+// SwitchVendor moves a Session to another coding-agent vendor. The target's
+// binary is checked before anything is stopped, so a missing program leaves
+// the running Session untouched. AgentRuns of every vendor survive the
+// switch; the target resumes when it already has one.
+func (l *SessionLifecycle) SwitchVendor(ctx context.Context, sessionID SessionID, vendor AgentVendor) (Session, error) {
+	provider, known := providerForVendor(vendor)
+	if !known {
+		return Session{}, fmt.Errorf("unbekannter Agent-Vendor %q", vendor)
+	}
+	if !providerBinaryAvailable(provider) {
+		return Session{}, fmt.Errorf("%s ist nicht installiert (%s nicht im PATH)", vendor, provider.Binary())
+	}
+	snapshot, err := l.registry.Snapshot(ctx)
+	if err != nil {
+		return Session{}, err
+	}
+	state := snapshot.State()
+	session := state.SessionByID(sessionID)
+	if session == nil {
+		return Session{}, fmt.Errorf("Session %q nicht gefunden", sessionID)
+	}
+	if session.IsTerm() {
+		return Session{}, fmt.Errorf("Session %q ist ein Terminal und hat keinen Agent-Vendor", session.Name)
+	}
+	current := *session
+	if current.SessionVendor() == vendor {
+		return current, nil
+	}
+	var switched Session
+	err = l.withSessionTransition(ctx, current.ID, current.Name, func() error {
+		fresh, err := l.registry.Snapshot(ctx)
+		if err != nil {
+			return err
+		}
+		freshState := fresh.State()
+		resolved := freshState.SessionByID(current.ID)
+		if resolved == nil {
+			return fmt.Errorf("Session %q wurde während des Wechsels entfernt", current.Name)
+		}
+		exists, err := l.runtime.Exists(ctx, *resolved)
+		if err != nil {
+			return err
+		}
+		if exists {
+			if err := l.runtime.Stop(ctx, *resolved); err != nil {
+				return err
+			}
+		}
+		result, err := l.registry.Change(ctx, SetSessionVendor(resolved.ID, resolved.Name, vendor))
+		if err != nil {
+			return err
+		}
+		updated := result.Snapshot.State()
+		target := updated.SessionByID(resolved.ID)
+		if target == nil {
+			return fmt.Errorf("Session %q wurde während des Wechsels entfernt", resolved.Name)
+		}
+		mode := "new"
+		if _, hasRun := target.AgentRun(vendor); hasRun {
+			mode = "resume"
+		}
+		if err := l.runtime.Start(ctx, *target, mode); err != nil {
+			return err
+		}
+		switched = *target
+		return nil
+	})
+	if err != nil {
+		return Session{}, err
+	}
+	return switched, nil
+}
+
 func (l *SessionLifecycle) Remove(ctx context.Context, id SessionID, name string) (SessionLifecycleResult, error) {
 	return l.planExisting(ctx, id, name, SessionDesiredRemoved)
 }

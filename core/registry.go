@@ -59,6 +59,7 @@ const (
 	registryDequeueMessage
 	registryResetMessageAttempt
 	registryRecordAgentRun
+	registrySetVendor
 )
 
 // RegistryChange is intentionally constructed through semantic helpers. Its
@@ -81,6 +82,7 @@ type RegistryChange struct {
 	message     QueuedMessage
 	messageID   string
 	agentRun    AgentRunRef
+	vendor      AgentVendor
 	at          time.Time
 }
 
@@ -146,6 +148,13 @@ func RenameRegisteredSessionRuntime(sessionID SessionID, oldName, newName, newRu
 // never overwritten: run identity is durable once known.
 func RecordAgentRun(sessionID SessionID, name string, run AgentRunRef) RegistryChange {
 	return RegistryChange{kind: registryRecordAgentRun, sessionID: sessionID, sessionName: name, agentRun: run}
+}
+
+// SetSessionVendor records which coding-agent vendor starts this Session from
+// now on. AgentRuns of other vendors stay untouched, so a Session can carry a
+// run reference per vendor and be switched back without losing history.
+func SetSessionVendor(sessionID SessionID, name string, vendor AgentVendor) RegistryChange {
+	return RegistryChange{kind: registrySetVendor, sessionID: sessionID, sessionName: name, vendor: vendor}
 }
 
 // EnqueueSessionMessage appends a message to the Session's durable Outbox. A
@@ -339,7 +348,7 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 		id := state.Agents[idx].ID
 		state.Agents = append(state.Agents[:idx], state.Agents[idx+1:]...)
 		return true, "", id, nil
-	case registryMarkSeen, registryMarkLater, registryReopenSession, registryMarkDeploy, registryRenameSession, registryRecordAgentRun:
+	case registryMarkSeen, registryMarkLater, registryReopenSession, registryMarkDeploy, registryRenameSession, registryRecordAgentRun, registrySetVendor:
 		idx := sessionIndex(state, change.sessionID, change.sessionName)
 		if idx < 0 {
 			return false, "", "", fmt.Errorf("Session %q nicht gefunden", change.sessionName)
@@ -384,6 +393,17 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 				return false, "", session.ID, nil
 			}
 			session.AgentRuns = append(session.AgentRuns, change.agentRun)
+		case registrySetVendor:
+			if session.IsTerm() {
+				return false, "", "", fmt.Errorf("Session %q ist ein Terminal und hat keinen Agent-Vendor", session.Name)
+			}
+			if _, known := providerForVendor(change.vendor); !known {
+				return false, "", "", fmt.Errorf("unbekannter Agent-Vendor %q", change.vendor)
+			}
+			if session.Vendor == change.vendor {
+				return false, "", session.ID, nil
+			}
+			session.Vendor = change.vendor
 		case registryRenameSession:
 			if change.newName == "" {
 				return false, "", "", fmt.Errorf("leerer Session-Name")
