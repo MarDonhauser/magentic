@@ -73,3 +73,52 @@ func TestHistoryStoreRebuildsOnUnknownSchemaVersion(t *testing.T) {
 		t.Fatalf("sources after rebuild = %d, want 0", count)
 	}
 }
+
+func TestHistoryStoreSourceRoundTripAndDeletion(t *testing.T) {
+	store := openTestHistoryStore(t)
+	row := historySourceRow{
+		SourceID: "claude:a", Provider: HistoryProviderClaude, Path: "/a.jsonl",
+		AdapterVersion: 3, Digest: "digest-a", Size: 120, ModTime: 900, IndexedAt: 1000,
+		Problems: []HistoryProblem{{Provider: HistoryProviderClaude, SourceID: "claude:a", Kind: "malformed", Message: "1 Zeile"}},
+	}
+	if err := store.writeSourceRow(row); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := store.source("claude:a")
+	if err != nil || !ok {
+		t.Fatalf("source: ok=%v err=%v", ok, err)
+	}
+	if got.Digest != "digest-a" || got.AdapterVersion != 3 || got.ModTime != 900 {
+		t.Fatalf("source = %#v", got)
+	}
+	if len(got.Problems) != 1 || got.Problems[0].Kind != "malformed" {
+		t.Fatalf("problems = %#v", got.Problems)
+	}
+
+	ids, err := store.sourceIDsByProvider(HistoryProviderClaude)
+	if err != nil || !ids["claude:a"] || len(ids) != 1 {
+		t.Fatalf("ids = %#v err = %v", ids, err)
+	}
+
+	problems, count, err := store.sourceProblems(HistoryProviderClaude)
+	if err != nil || count != 1 || len(problems) != 1 {
+		t.Fatalf("problems = %#v count = %d err = %v", problems, count, err)
+	}
+
+	if err := store.deleteSources([]string{"claude:a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := store.source("claude:a"); ok || err != nil {
+		t.Fatalf("after delete: ok=%v err=%v", ok, err)
+	}
+}
+
+func openTestHistoryStore(t *testing.T) *historyStore {
+	t.Helper()
+	store, err := openHistoryStore(filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return store
+}
