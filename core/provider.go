@@ -27,7 +27,7 @@ type AgentProvider interface {
 }
 
 func builtinAgentProviders() []AgentProvider {
-	return []AgentProvider{claudeProvider{}}
+	return []AgentProvider{claudeProvider{}, codexProvider{}, geminiProvider{}, copilotProvider{}}
 }
 
 func providerForVendor(vendor AgentVendor) (AgentProvider, bool) {
@@ -88,4 +88,74 @@ func (claudeProvider) StartCommand(session Session, run *AgentRunRef, mode strin
 		command += " --continue"
 	}
 	return command, nil
+}
+
+type codexProvider struct{}
+
+func (codexProvider) Vendor() AgentVendor { return AgentVendorCodex }
+func (codexProvider) Tool() string        { return AgentToolCodex }
+func (codexProvider) Binary() string      { return "codex" }
+
+// Codex assigns its own session id, so the run identity can only be
+// discovered from its rollout files after the fact.
+func (codexProvider) NewRunID() string { return "" }
+
+func (codexProvider) Matches(paneCommand string) bool {
+	return paneCommandMatches(paneCommand, "codex")
+}
+
+func (codexProvider) StartCommand(_ Session, run *AgentRunRef, mode string) (string, error) {
+	if mode == "new" {
+		return "codex", nil
+	}
+	if run != nil && run.ExternalID != "" {
+		return "codex resume " + ShellQuote(run.ExternalID), nil
+	}
+	return "codex resume --last", nil
+}
+
+type copilotProvider struct{}
+
+func (copilotProvider) Vendor() AgentVendor { return AgentVendorCopilot }
+func (copilotProvider) Tool() string        { return AgentToolCopilot }
+func (copilotProvider) Binary() string      { return "copilot" }
+func (copilotProvider) NewRunID() string    { return NewUUID() }
+
+func (copilotProvider) Matches(paneCommand string) bool {
+	return paneCommandMatches(paneCommand, "copilot") || paneCommand == "github-copilot"
+}
+
+func (copilotProvider) StartCommand(session Session, run *AgentRunRef, mode string) (string, error) {
+	command := "copilot --name " + ShellQuote(session.TmuxName())
+	if run != nil && run.ExternalID != "" {
+		// Both flags accept the value only in "=" form without ambiguity:
+		// --resume takes an optional value and would otherwise swallow the
+		// next positional argument.
+		flag := "--resume="
+		if mode == "new" {
+			flag = "--session-id="
+		}
+		return command + " " + flag + ShellQuote(run.ExternalID), nil
+	}
+	if mode != "new" {
+		command += " --continue"
+	}
+	return command, nil
+}
+
+type geminiProvider struct{}
+
+func (geminiProvider) Vendor() AgentVendor { return AgentVendorGemini }
+func (geminiProvider) Tool() string        { return AgentToolGemini }
+func (geminiProvider) Binary() string      { return "gemini" }
+func (geminiProvider) NewRunID() string    { return "" }
+
+func (geminiProvider) Matches(paneCommand string) bool {
+	return paneCommandMatches(paneCommand, "gemini")
+}
+
+// Gemini CLI has no verified resume form. Starting fresh is the conservative
+// contract; the run identity is discovered from ~/.gemini/tmp afterwards.
+func (geminiProvider) StartCommand(Session, *AgentRunRef, string) (string, error) {
+	return "gemini", nil
 }

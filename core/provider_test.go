@@ -132,3 +132,69 @@ func TestClaudeProviderSuppliesRunID(t *testing.T) {
 		t.Fatal("Claude nimmt eine vorgegebene Run-Identität an")
 	}
 }
+
+func TestVendorStartCommands(t *testing.T) {
+	session := Session{Name: "navi", RuntimeName: "mgt-navi"}
+	tests := []struct {
+		name   string
+		vendor AgentVendor
+		runID  string
+		mode   string
+		want   string
+	}{
+		{name: "codex neu", vendor: AgentVendorCodex, mode: "new", want: "codex"},
+		{name: "codex resume mit Run", vendor: AgentVendorCodex, runID: "abc-123", mode: "resume", want: "codex resume 'abc-123'"},
+		{name: "codex resume ohne Run", vendor: AgentVendorCodex, mode: "resume", want: "codex resume --last"},
+		{name: "codex neu mit Run", vendor: AgentVendorCodex, runID: "abc-123", mode: "new", want: "codex"},
+		{name: "copilot neu", vendor: AgentVendorCopilot, mode: "new", want: "copilot --name 'mgt-navi'"},
+		{name: "copilot neu mit Run", vendor: AgentVendorCopilot, runID: "abc-123", mode: "new", want: "copilot --name 'mgt-navi' --session-id='abc-123'"},
+		{name: "copilot resume mit Run", vendor: AgentVendorCopilot, runID: "abc-123", mode: "resume", want: "copilot --name 'mgt-navi' --resume='abc-123'"},
+		{name: "copilot resume ohne Run", vendor: AgentVendorCopilot, mode: "resume", want: "copilot --name 'mgt-navi' --continue"},
+		{name: "gemini neu", vendor: AgentVendorGemini, mode: "new", want: "gemini"},
+		{name: "gemini resume", vendor: AgentVendorGemini, runID: "abc-123", mode: "resume", want: "gemini"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider, ok := providerForVendor(tt.vendor)
+			if !ok {
+				t.Fatalf("kein Provider für %q", tt.vendor)
+			}
+			var run *AgentRunRef
+			if tt.runID != "" {
+				run = &AgentRunRef{Vendor: tt.vendor, ExternalID: tt.runID}
+			}
+			got, err := provider.StartCommand(session, run, tt.mode)
+			if err != nil {
+				t.Fatalf("StartCommand: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("StartCommand = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunIDOrigin(t *testing.T) {
+	supplied := map[AgentVendor]bool{
+		AgentVendorClaude:  true,
+		AgentVendorCopilot: true,
+		AgentVendorCodex:   false,
+		AgentVendorGemini:  false,
+	}
+	for vendor, want := range supplied {
+		provider, ok := providerForVendor(vendor)
+		if !ok {
+			t.Fatalf("kein Provider für %q", vendor)
+		}
+		if got := provider.NewRunID() != ""; got != want {
+			t.Fatalf("%q liefert vorgegebene Run-ID = %v, want %v", vendor, got, want)
+		}
+	}
+}
+
+func TestCopilotMatchesGithubCopilot(t *testing.T) {
+	provider, ok := providerForPaneCommand("github-copilot")
+	if !ok || provider.Vendor() != AgentVendorCopilot {
+		t.Fatal("github-copilot muss als Copilot erkannt werden")
+	}
+}
