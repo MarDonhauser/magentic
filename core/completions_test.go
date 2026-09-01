@@ -109,3 +109,89 @@ func TestWorktreeFilesWithoutDirectoryFails(t *testing.T) {
 		t.Error("Session ohne Verzeichnis muss einen Fehler liefern")
 	}
 }
+
+func writeCompletionFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("Verzeichnis anlegen: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("Datei schreiben: %v", err)
+	}
+}
+
+func findCommand(commands []SlashCommand, name string) (SlashCommand, bool) {
+	for _, command := range commands {
+		if command.Name == name {
+			return command, true
+		}
+	}
+	return SlashCommand{}, false
+}
+
+func TestSlashCommandsReadsCommandsSkillsAndPlugins(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeCompletionFile(t, filepath.Join(home, ".claude", "commands", "adapt.md"),
+		"---\ndescription: Responsive layout pass\n---\n\nInhalt\n")
+	writeCompletionFile(t, filepath.Join(home, ".claude", "skills", "apple-hig", "SKILL.md"),
+		"---\nname: apple-hig\ndescription: Apple HIG Entscheidungshilfen\n---\n\nInhalt\n")
+	writeCompletionFile(t, filepath.Join(home, ".claude", "plugins", "cache", "official", "design", "1.0.0", "skills", "polish", "SKILL.md"),
+		"---\nname: polish\ndescription: Letzter Schliff\n---\n\nInhalt\n")
+
+	commands := SlashCommands(AgentVendorClaude, "")
+
+	adapt, found := findCommand(commands, "adapt")
+	if !found || adapt.Description != "Responsive layout pass" || adapt.Source != SlashCommandSourceUser {
+		t.Errorf("Command adapt falsch gelesen: %+v (gefunden: %v)", adapt, found)
+	}
+	skill, found := findCommand(commands, "apple-hig")
+	if !found || skill.Description != "Apple HIG Entscheidungshilfen" {
+		t.Errorf("Skill apple-hig falsch gelesen: %+v (gefunden: %v)", skill, found)
+	}
+	plugin, found := findCommand(commands, "design:polish")
+	if !found || plugin.Source != SlashCommandSourcePlugin {
+		t.Errorf("Plugin-Skill falsch gelesen: %+v (gefunden: %v)", plugin, found)
+	}
+}
+
+func TestSlashCommandsProjectEntryOverridesUserEntry(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	t.Setenv("HOME", home)
+	writeCompletionFile(t, filepath.Join(home, ".claude", "commands", "deploy.md"),
+		"---\ndescription: global\n---\n")
+	writeCompletionFile(t, filepath.Join(project, ".claude", "commands", "deploy.md"),
+		"---\ndescription: projektlokal\n---\n")
+
+	commands := SlashCommands(AgentVendorClaude, project)
+
+	deploy, found := findCommand(commands, "deploy")
+	if !found || deploy.Description != "projektlokal" || deploy.Source != SlashCommandSourceProject {
+		t.Errorf("projektlokaler Eintrag hat nicht gewonnen: %+v (gefunden: %v)", deploy, found)
+	}
+	count := 0
+	for _, command := range commands {
+		if command.Name == "deploy" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("deploy steht %d mal in der Liste, erwartet 1", count)
+	}
+}
+
+func TestSlashCommandsUnknownVendorIsEmpty(t *testing.T) {
+	if commands := SlashCommands(AgentVendorCopilot, ""); commands != nil {
+		t.Errorf("unbekannter Vendor muss nil liefern, war: %+v", commands)
+	}
+}
+
+func TestPromptLinePattern(t *testing.T) {
+	if got := PromptLinePattern(AgentVendorClaude); got != "❯" {
+		t.Errorf("Claude-Muster war %q", got)
+	}
+	if got := PromptLinePattern(AgentVendorCopilot); got != "" {
+		t.Errorf("unbekannter Vendor muss ein leeres Muster liefern, war %q", got)
+	}
+}
