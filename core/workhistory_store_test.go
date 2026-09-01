@@ -21,7 +21,7 @@ func TestHistoryStoreCreatesSchemaAndReopens(t *testing.T) {
 	if version != historySchemaVersion {
 		t.Fatalf("schema version = %d, want %d", version, historySchemaVersion)
 	}
-	for _, table := range []string{"sources", "events", "events_fts", "activity"} {
+	for _, table := range []string{"sources", "events", "activity"} {
 		var name string
 		err := store.db.QueryRow(`SELECT name FROM sqlite_master WHERE name = ?`, table).Scan(&name)
 		if err != nil {
@@ -209,26 +209,6 @@ func TestHistoryStoreReplaceSourceRemovesVanishedEvents(t *testing.T) {
 	}
 }
 
-func TestHistoryFTSExpression(t *testing.T) {
-	cases := []struct {
-		in     string
-		want   string
-		usable bool
-	}{
-		{in: "hallo welt", want: `"hallo"* "welt"*`, usable: true},
-		{in: "  Fehler ", want: `"Fehler"*`, usable: true},
-		{in: `such"e`, want: `"such""e"*`, usable: true},
-		{in: "...", want: "", usable: false},
-		{in: "", want: "", usable: false},
-	}
-	for _, c := range cases {
-		got, usable := historyFTSExpression(c.in)
-		if got != c.want || usable != c.usable {
-			t.Fatalf("historyFTSExpression(%q) = (%q, %v), want (%q, %v)", c.in, got, usable, c.want, c.usable)
-		}
-	}
-}
-
 func TestHistoryStoreRecordsFilterAndSubstringSearch(t *testing.T) {
 	store := openTestHistoryStore(t)
 	base := historySourceRow{SourceID: "claude:a", Provider: HistoryProviderClaude, Path: "/a.jsonl", ModTime: 10}
@@ -270,13 +250,23 @@ func TestHistoryStoreRecordsFilterAndSubstringSearch(t *testing.T) {
 		t.Fatalf("since with unknown time = %d, want 2", len(got))
 	}
 
-	// Teilstring innerhalb eines Wortes: FTS allein fände das nicht.
+	// Teilstring innerhalb eines Wortes.
 	got, err = store.records(ctx, historyRecordFilter{Text: "bernet"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0].ID != "e1" {
 		t.Fatalf("substring search = %#v", got)
+	}
+
+	// Groß-/Kleinschreibung darf für den Treffer keine Rolle spielen, weder in
+	// der Anfrage noch im gespeicherten Text.
+	got, err = store.records(ctx, historyRecordFilter{Text: "KUBERNETES"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "e1" {
+		t.Fatalf("case-insensitive search = %#v", got)
 	}
 
 	got, err = store.records(ctx, historyRecordFilter{Text: "..."})

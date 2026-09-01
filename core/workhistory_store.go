@@ -8,7 +8,6 @@ import (
 	"os"
 	"strings"
 	"time"
-	"unicode"
 
 	_ "modernc.org/sqlite"
 )
@@ -59,9 +58,7 @@ CREATE INDEX IF NOT EXISTS events_occurred ON events(occurred_at);
 CREATE INDEX IF NOT EXISTS events_source ON events(source_id);
 CREATE INDEX IF NOT EXISTS events_conversation ON events(provider, conversation_id);
 
-CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
-	text, content='events', content_rowid='rowid', tokenize='unicode61'
-);
+DROP TABLE IF EXISTS events_fts;
 
 CREATE TABLE IF NOT EXISTS activity (
 	agg_key         TEXT NOT NULL,
@@ -304,12 +301,9 @@ func (s *historyStore) deleteSources(ids []string) error {
 	return tx.Commit()
 }
 
-// deleteHistorySourceTx löscht eine Quelle samt ihrer Events und
-// Volltextindex-Einträge innerhalb einer bestehenden Transaktion.
+// deleteHistorySourceTx löscht eine Quelle samt ihrer Events innerhalb einer
+// bestehenden Transaktion.
 func deleteHistorySourceTx(tx *sql.Tx, sourceID string) error {
-	if _, err := tx.Exec(`DELETE FROM events_fts WHERE rowid IN (SELECT rowid FROM events WHERE source_id = ?)`, sourceID); err != nil {
-		return fmt.Errorf("delete source text: %w", err)
-	}
 	if _, err := tx.Exec(`DELETE FROM events WHERE source_id = ?`, sourceID); err != nil {
 		return fmt.Errorf("delete source events: %w", err)
 	}
@@ -329,9 +323,6 @@ func (s *historyStore) replaceSource(row historySourceRow, records []historyReco
 		return fmt.Errorf("write source: %w", err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`DELETE FROM events_fts WHERE rowid IN (SELECT rowid FROM events WHERE source_id = ?)`, row.SourceID); err != nil {
-		return fmt.Errorf("clear source text: %w", err)
-	}
 	if _, err := tx.Exec(`DELETE FROM events WHERE source_id = ?`, row.SourceID); err != nil {
 		return fmt.Errorf("clear source events: %w", err)
 	}
@@ -357,9 +348,6 @@ func insertHistoryRecordTx(tx *sql.Tx, record historyRecord) error {
 	if found {
 		// Die vorhandene Fassung führt; fehlende Tatsachen kommen aus der neuen.
 		record = mergeHistoryRecord(existing, record)
-		if _, err := tx.Exec(`DELETE FROM events_fts WHERE rowid IN (SELECT rowid FROM events WHERE event_id = ?)`, record.ID); err != nil {
-			return fmt.Errorf("clear merged text: %w", err)
-		}
 		if _, err := tx.Exec(`DELETE FROM events WHERE event_id = ?`, record.ID); err != nil {
 			return fmt.Errorf("clear merged event: %w", err)
 		}
@@ -368,7 +356,7 @@ func insertHistoryRecordTx(tx *sql.Tx, record historyRecord) error {
 	if err != nil {
 		return fmt.Errorf("encode links: %w", err)
 	}
-	result, err := tx.Exec(`INSERT INTO events
+	if _, err := tx.Exec(`INSERT INTO events
 		(event_id, source_id, provider, conversation_id, occurred_at, timestamp_raw, role, kind, lineage,
 		 text, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
 		 cwd, project_alias, native_id, links)
@@ -381,16 +369,8 @@ func insertHistoryRecordTx(tx *sql.Tx, record historyRecord) error {
 		historyNullableInt(record.Usage.Output, record.Usage.OutputKnown),
 		historyNullableInt(record.Usage.CacheRead, record.Usage.CacheReadKnown),
 		historyNullableInt(record.Usage.CacheWrite, record.Usage.CacheWriteKnown),
-		record.CWD, record.ProjectAlias, record.NativeID, string(links))
-	if err != nil {
+		record.CWD, record.ProjectAlias, record.NativeID, string(links)); err != nil {
 		return fmt.Errorf("write event: %w", err)
-	}
-	rowID, err := result.LastInsertId()
-	if err != nil {
-		return fmt.Errorf("write event: %w", err)
-	}
-	if _, err := tx.Exec(`INSERT INTO events_fts(rowid, text) VALUES(?, ?)`, rowID, record.Text); err != nil {
-		return fmt.Errorf("write event text: %w", err)
 	}
 	return nil
 }
@@ -512,26 +492,6 @@ type historyRecordFilter struct {
 	SourceIDs          []string
 }
 
-// historyFTSExpression baut aus einer Nutzeranfrage einen FTS5-Präfixausdruck.
-// Er dient nur der Vorauswahl; die genaue Trefferentscheidung fällt danach über
-// einen Teilstringvergleich, damit sich die Suche wie bisher verhält.
-func historyFTSExpression(query string) (string, bool) {
-	fields := strings.Fields(query)
-	terms := make([]string, 0, len(fields))
-	for _, field := range fields {
-		if !strings.ContainsFunc(field, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
-			// Ein Feld ohne Buchstaben oder Ziffern (z. B. reine Satzzeichen)
-			// trägt nichts zur Vorauswahl bei.
-			continue
-		}
-		terms = append(terms, `"`+strings.ReplaceAll(field, `"`, `""`)+`"*`)
-	}
-	if len(terms) == 0 {
-		return "", false
-	}
-	return strings.Join(terms, " "), true
-}
-
 // records liest Ereignisse anhand des übergebenen Filters. Sortierung und
 // Paginierung bleiben in Go, weil die Sortierreihenfolge von Tatsachen
 // abhängt, die erst nach dem Lesen aufgelöst werden.
@@ -576,22 +536,11 @@ func (s *historyStore) records(ctx context.Context, filter historyRecordFilter) 
 
 	needle := strings.TrimSpace(filter.Text)
 	if needle != "" {
-		expression, usable := historyFTSExpression(needle)
-		if !usable {
-			// Aus reinen Satzzeichen entsteht kein FTS-Ausdruck; ein MATCH mit
-			// leerem Ausdruck würde die Abfrage scheitern lassen. Der
-			// Teilstringvergleich unten bleibt ohnehin verbindlich, deshalb
-			// wird hier nur über instr() vorausgewählt.
-			where = append(where, "instr(lower(text), lower(?)) > 0")
-			args = append(args, needle)
-		} else {
-			// FTS matcht nur ganze Wörter bzw. Wortanfänge und würde einen
-			// Treffer wie "bernet" in "Kubernetes" verpassen. instr() bleibt
-			// deshalb als zweiter Zweig bestehen; der Teilstringvergleich in Go
-			// entscheidet ohnehin über jeden Treffer verbindlich.
-			where = append(where, "(rowid IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ?) OR instr(lower(text), lower(?)) > 0)")
-			args = append(args, expression, needle)
-		}
+		// Die Vorauswahl bleibt ein einfacher Teilstringvergleich in SQL; der
+		// Go-Teilstringvergleich unten entscheidet ohnehin über jeden Treffer
+		// verbindlich.
+		where = append(where, "instr(lower(text), lower(?)) > 0")
+		args = append(args, needle)
 	}
 
 	query := `SELECT ` + historyRecordColumns + ` FROM events WHERE ` + strings.Join(where, " AND ")
