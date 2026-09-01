@@ -102,6 +102,15 @@ type previewMsg struct {
 	problems     []core.ObservationProblem
 }
 type attachDoneMsg struct{ err error }
+
+// previewDueMsg fires once the cursor has stood still long enough for a preview
+// to be worth fetching.
+type previewDueMsg struct{ generation int }
+
+// previewDebounce is short enough to feel immediate on a single keypress and
+// long enough that holding a key or scrolling produces one probe, not one per
+// step.
+const previewDebounce = 120 * time.Millisecond
 type usageTickMsg time.Time
 type usageMsg UsageInfo
 
@@ -132,7 +141,8 @@ type model struct {
 	height         int
 	pollBusy       bool
 	repoBusy       bool
-	previewPending bool
+	previewPending    bool
+	previewGeneration int
 	usage          UsageInfo
 }
 
@@ -539,7 +549,24 @@ func (m model) pollNow() tea.Cmd {
 	return tea.Batch(observeCmd(*m.state), repositoryCmd(*m.state))
 }
 
+// previewNow schedules a preview instead of starting one. Scrolling moves the
+// cursor far faster than tmux can answer, and every answer for a Session the
+// cursor has already left is thrown away — so the probe waits until the
+// selection stands still. The generation counter makes a timer that belongs to
+// an older selection expire silently.
 func (m *model) previewNow() tea.Cmd {
+	if m.selectedAgent() == nil {
+		return nil
+	}
+	m.previewGeneration++
+	generation := m.previewGeneration
+	return tea.Tick(previewDebounce, func(time.Time) tea.Msg {
+		return previewDueMsg{generation: generation}
+	})
+}
+
+// previewFetch starts the probe the settled selection asks for.
+func (m *model) previewFetch() tea.Cmd {
 	a := m.selectedAgent()
 	if a == nil || m.previewPending {
 		return nil
@@ -585,6 +612,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.repoBusy = true
 		return m, tea.Batch(repositoryCmd(*m.state), repoTick())
+	case previewDueMsg:
+		if msg.generation != m.previewGeneration {
+			return m, nil
+		}
+		return m, m.previewFetch()
 	case previewMsg:
 		m.previewPending = false
 		if a := m.selectedAgent(); a != nil && sessionKey(*a) == msg.key {
@@ -594,6 +626,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.poll.observed[msg.key] = msg.observation
 			return m, nil
 		}
+		// The cursor moved while tmux answered. Going through the debounce again
+		// keeps one rule: a probe only ever runs for a selection that stands
+		// still, so a fast scroll cannot chain probes it will discard.
 		return m, m.previewNow()
 	case usageTickMsg:
 		return m, tea.Batch(fetchUsageCmd(), usageTick())

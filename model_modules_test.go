@@ -290,3 +290,57 @@ func TestSeparatePollPassesKeepEachOthersFacts(t *testing.T) {
 		t.Fatalf("repository pass discarded the Observation: status = %v", got)
 	}
 }
+
+// Scrolling moves the cursor far faster than tmux answers. The preview probe
+// must wait for the selection to stand still, and a timer belonging to an
+// abandoned selection must not start one.
+func TestPreviewProbeWaitsForTheSelectionToSettle(t *testing.T) {
+	first := Agent{ID: "session-1", Name: "one", RuntimeName: "mgt-one"}
+	second := Agent{ID: "session-2", Name: "two", RuntimeName: "mgt-two"}
+	state := State{Agents: []Agent{first, second}}
+	// Row 0 is the header for Sessions without a Project; row 1 is the first one.
+	m := model{state: &state, collapsed: map[string]bool{}, cursor: 1,
+		attention: core.NewAttentionPlanner(core.AttentionPlannerConfig{})}
+
+	if cmd := m.previewNow(); cmd == nil {
+		t.Fatal("moving the cursor scheduled no preview at all")
+	}
+	if m.previewPending {
+		t.Fatal("preview probe started before the selection settled")
+	}
+	staleGeneration := m.previewGeneration
+
+	// A second cursor move abandons the first timer.
+	m.previewNow()
+	updated, cmd := m.Update(previewDueMsg{generation: staleGeneration})
+	if cmd != nil || updated.(model).previewPending {
+		t.Fatal("a timer from an abandoned selection started a probe")
+	}
+
+	updated, cmd = m.Update(previewDueMsg{generation: m.previewGeneration})
+	if cmd == nil || !updated.(model).previewPending {
+		t.Fatal("the settled selection started no probe")
+	}
+}
+
+// A probe that comes back for a Session the cursor has already left must not
+// immediately start the next one, or a scroll would chain probes it discards.
+func TestStalePreviewAnswerReschedulesInsteadOfProbing(t *testing.T) {
+	first := Agent{ID: "session-1", Name: "one", RuntimeName: "mgt-one"}
+	second := Agent{ID: "session-2", Name: "two", RuntimeName: "mgt-two"}
+	state := State{Agents: []Agent{first, second}}
+	m := model{state: &state, collapsed: map[string]bool{}, cursor: 1, previewPending: true,
+		attention: core.NewAttentionPlanner(core.AttentionPlannerConfig{})}
+
+	updated, cmd := m.Update(previewMsg{key: sessionKey(second)})
+	after := updated.(model)
+	if after.previewPending {
+		t.Fatal("the answered probe stayed pending")
+	}
+	if cmd == nil {
+		t.Fatal("the moved-on selection scheduled no new preview")
+	}
+	if after.previewPending {
+		t.Fatal("a stale answer started a probe instead of rescheduling")
+	}
+}
