@@ -123,6 +123,7 @@ type Overview struct {
 	Usage       []OvUsagePage  `json:"usage"`
 	Projects    []OvProject    `json:"projects"`
 	Later       []OvLater      `json:"later"`
+	Sidebar     []SidebarNode  `json:"sidebar"`
 }
 
 func statusKey(s AgentStatus) string {
@@ -301,6 +302,7 @@ func buildOverviewFromSurvey(s *State, snapshot ObservationSnapshot, survey Repo
 			}
 		}
 	}
+	ov.Sidebar = SidebarLayout(s)
 	return ov
 }
 

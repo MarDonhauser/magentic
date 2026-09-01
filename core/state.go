@@ -123,11 +123,56 @@ type Session struct {
 // Agent remains as a source-compatible name while callers migrate to Session.
 type Agent = Session
 
+// SidebarSlotKind names what a SidebarSlot places. Dividers are the only
+// slots the user creates outright; project and session slots merely record a
+// placement that differs from the default one.
+type SidebarSlotKind string
+
+const (
+	SidebarSlotDivider SidebarSlotKind = "divider"
+	SidebarSlotProject SidebarSlotKind = "project"
+	SidebarSlotSession SidebarSlotKind = "session"
+)
+
+type DividerID string
+
+// SidebarSlot is one placed entry of the session list. The slice order is the
+// order on screen; Parent carries the nesting. A divider always sits at the top
+// level, a project sits at the top level or inside a divider, and a session
+// sits at the top level, inside a divider, or inside its own project.
+//
+// Anything without a slot keeps the default placement: projects trail the top
+// level, sessions trail their project. A freshly started session therefore
+// needs no slot to show up where it always did.
+type SidebarSlot struct {
+	Kind       SidebarSlotKind `json:"kind"`
+	Ref        string          `json:"ref"`
+	Name       string          `json:"name,omitempty"`
+	Collapsed  bool            `json:"collapsed,omitempty"`
+	ParentKind SidebarSlotKind `json:"parent_kind,omitempty"`
+	Parent     string          `json:"parent,omitempty"`
+}
+
+// TopLevel reports whether the slot hangs directly under the session list.
+func (s SidebarSlot) TopLevel() bool { return s.ParentKind == "" }
+
 type State struct {
-	Schema   int       `json:"schema,omitempty"`
-	Revision uint64    `json:"revision,omitempty"`
-	Projects []Project `json:"projects"`
-	Agents   []Session `json:"agents"`
+	Schema   int           `json:"schema,omitempty"`
+	Revision uint64        `json:"revision,omitempty"`
+	Projects []Project     `json:"projects"`
+	Agents   []Session     `json:"agents"`
+	Sidebar  []SidebarSlot `json:"sidebar,omitempty"`
+}
+
+// SidebarSlotFor finds the slot placing one entry, or nil when the entry keeps
+// its default placement.
+func (s *State) SidebarSlotFor(kind SidebarSlotKind, ref string) *SidebarSlot {
+	for i := range s.Sidebar {
+		if s.Sidebar[i].Kind == kind && s.Sidebar[i].Ref == ref {
+			return &s.Sidebar[i]
+		}
+	}
+	return nil
 }
 
 func StatePath() string {

@@ -230,18 +230,41 @@ func (a *App) RemoveProject(projectID string) error {
 	return core.OpenSessionLifecycle(core.SessionLifecycleConfig{}).RemoveProject(a.ctx, core.ProjectID(projectID))
 }
 
-func (a *App) ReorderProjects(order []string) error {
-	ids := make([]core.ProjectID, 0, len(order))
-	seen := make(map[core.ProjectID]bool, len(order))
-	for _, rawID := range order {
-		id := core.ProjectID(strings.TrimSpace(rawID))
-		if id == "" || seen[id] {
-			return fmt.Errorf("ungültige ProjectID in Sortierung: %q", rawID)
-		}
-		seen[id] = true
-		ids = append(ids, id)
+// AddDivider creates a named group at the top level of the session list and
+// returns its ID so the caller can address it right away.
+func (a *App) AddDivider(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("Divider braucht einen Namen")
 	}
-	_, err := core.OpenRegistry(core.StatePath()).Change(a.ctx, core.ReorderProjects(ids))
+	id := core.DividerID(core.NewUUID())
+	if _, err := core.OpenRegistry(core.StatePath()).Change(a.ctx, core.AddDivider(id, name)); err != nil {
+		return "", err
+	}
+	return string(id), nil
+}
+
+func (a *App) RenameDivider(dividerID, name string) error {
+	_, err := core.OpenRegistry(core.StatePath()).Change(a.ctx, core.RenameDivider(core.DividerID(dividerID), name))
+	return err
+}
+
+func (a *App) RemoveDivider(dividerID string) error {
+	_, err := core.OpenRegistry(core.StatePath()).Change(a.ctx, core.RemoveDivider(core.DividerID(dividerID)))
+	return err
+}
+
+func (a *App) SetDividerCollapsed(dividerID string, collapsed bool) error {
+	_, err := core.OpenRegistry(core.StatePath()).Change(a.ctx, core.SetDividerCollapsed(core.DividerID(dividerID), collapsed))
+	return err
+}
+
+// MoveSidebarItem places one entry of the session list into a level and sets
+// that level's order. order carries the level exactly as the caller wants to
+// see it, the moved entry included.
+func (a *App) MoveSidebarItem(kind, ref, parentKind, parent string, order []core.SidebarRef) error {
+	_, err := core.OpenRegistry(core.StatePath()).Change(a.ctx, core.MoveSidebarItem(
+		core.SidebarSlotKind(kind), ref, core.SidebarSlotKind(parentKind), parent, order))
 	return err
 }
 

@@ -9,12 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strings"
 	"time"
 )
 
-const registrySchemaVersion = 2
+const registrySchemaVersion = 3
 
 var ErrRegistryConflict = errors.New("Registry wurde gleichzeitig geändert")
 
@@ -44,7 +43,6 @@ type registryChangeKind uint8
 const (
 	registryRegisterProject registryChangeKind = iota + 1
 	registryRemoveProject
-	registryReorderProjects
 	registrySetMainBranch
 	registryRegisterSession
 	registryRemoveSession
@@ -63,7 +61,23 @@ const (
 	registryQueueDueAutomation
 	registryRecordAgentRun
 	registrySetVendor
+	registryAddDivider
+	registryRenameDivider
+	registryRemoveDivider
+	registrySetDividerCollapsed
+	registryMoveSidebarItem
 )
+
+// sidebarChange carries the payload of the session-list arrangement changes.
+type sidebarChange struct {
+	kind       SidebarSlotKind
+	ref        string
+	name       string
+	parentKind SidebarSlotKind
+	parent     string
+	collapsed  bool
+	order      []SidebarRef
+}
 
 // RegistryChange is intentionally constructed through semantic helpers. Its
 // representation is private so callers cannot submit arbitrary record patches.
@@ -78,12 +92,12 @@ type RegistryChange struct {
 	newName      string
 	newRuntime   string
 	mainBranch   string
-	order        []ProjectID
 	sessions     []Session
 	baseCommit   string
 	baseDirty    []string
 	message      QueuedMessage
 	messageID    string
+	sidebar      sidebarChange
 	automation   SessionAutomation
 	automationID string
 	agentRun     AgentRunRef
@@ -97,10 +111,6 @@ func RegisterProject(project Project) RegistryChange {
 
 func removeProjectChange(projectID ProjectID, name string) RegistryChange {
 	return RegistryChange{kind: registryRemoveProject, projectID: projectID, projectName: name}
-}
-
-func ReorderProjects(order []ProjectID) RegistryChange {
-	return RegistryChange{kind: registryReorderProjects, order: append([]ProjectID(nil), order...)}
 }
 
 func SetProjectMainBranch(projectID ProjectID, name, branch string) RegistryChange {
@@ -287,6 +297,10 @@ func (r *Registry) commit(ctx context.Context, apply func(*State) (bool, error),
 
 func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, SessionID, error) {
 	switch change.kind {
+	case registryAddDivider, registryRenameDivider, registryRemoveDivider,
+		registrySetDividerCollapsed, registryMoveSidebarItem:
+		applied, err := applySidebarChange(state, change)
+		return applied, "", "", err
 	case registryRegisterProject:
 		project := change.project
 		if project.ID == "" {
@@ -310,34 +324,6 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 		id := state.Projects[idx].ID
 		state.Projects = append(state.Projects[:idx], state.Projects[idx+1:]...)
 		return true, id, "", nil
-	case registryReorderProjects:
-		before := projectOrder(state.Projects)
-		known := make(map[ProjectID]bool, len(state.Projects))
-		for _, project := range state.Projects {
-			known[project.ID] = true
-		}
-		rank := make(map[ProjectID]int, len(change.order))
-		for i, id := range change.order {
-			if id == "" || rank[id] != 0 {
-				return false, "", "", fmt.Errorf("ungültige ProjectID in Sortierung: %q", id)
-			}
-			if !known[id] {
-				return false, "", "", fmt.Errorf("unbekannte ProjectID in Sortierung: %s", id)
-			}
-			rank[id] = i + 1
-		}
-		sort.SliceStable(state.Projects, func(i, j int) bool {
-			ri, iok := rank[state.Projects[i].ID]
-			rj, jok := rank[state.Projects[j].ID]
-			if !iok {
-				ri = len(rank) + 1
-			}
-			if !jok {
-				rj = len(rank) + 1
-			}
-			return ri < rj
-		})
-		return !reflect.DeepEqual(before, projectOrder(state.Projects)), "", "", nil
 	case registrySetMainBranch:
 		idx := projectIndex(state, change.projectID, change.projectName)
 		if idx < 0 {
@@ -617,6 +603,12 @@ func normalizeRegistryState(state *State) bool {
 			changed = true
 		}
 	}
+	if migrateProjectOrderToSidebar(state) {
+		changed = true
+	}
+	if normalizeSidebar(state) {
+		changed = true
+	}
 	return changed
 }
 
@@ -742,7 +734,7 @@ func validateRegistryState(state *State) error {
 			}
 		}
 	}
-	return nil
+	return validateSidebar(state)
 }
 
 func readRegistryFile(path string) (State, []byte, bool, bool, error) {
@@ -829,6 +821,7 @@ func cloneState(state *State) State {
 	clone := *state
 	clone.Projects = append([]Project(nil), state.Projects...)
 	clone.Agents = append([]Session(nil), state.Agents...)
+	clone.Sidebar = append([]SidebarSlot(nil), state.Sidebar...)
 	for i := range clone.Agents {
 		clone.Agents[i].BaseDirty = append([]string(nil), clone.Agents[i].BaseDirty...)
 		clone.Agents[i].AgentRuns = append([]AgentRunRef(nil), clone.Agents[i].AgentRuns...)
