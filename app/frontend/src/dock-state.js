@@ -1,39 +1,28 @@
-export function normalizeDockRef(value) {
-  if (typeof value === 'string') {
-    const name = value.trim();
-    return name ? { id: '', name } : null;
-  }
-  if (!value || typeof value !== 'object') return null;
-  const id = typeof value.id === 'string' ? value.id.trim() : '';
-  const name = typeof value.name === 'string' ? value.name.trim() : '';
-  if (!name) return null;
-  return { id, name };
-}
+import { createLeaf, dockRefKey, normalizeDockRef, normalizeLayout } from './dock-tree.js';
 
-export function dockRefKey(value) {
-  const ref = normalizeDockRef(value);
-  if (!ref) return '';
-  return ref.id ? `session:${ref.id}` : `legacy:${ref.name}`;
-}
+export { dockRefKey, normalizeDockRef };
 
 export function normalizeDockState(raw, defaultHeight) {
   if (!raw || typeof raw !== 'object') return null;
-  const tabs = [];
-  const seen = new Set();
-  for (const value of Array.isArray(raw.tabs) ? raw.tabs : []) {
-    const ref = normalizeDockRef(value);
-    const key = dockRefKey(ref);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    tabs.push(ref);
+  let layout = normalizeLayout(raw.layout);
+  if (!layout) {
+    const tabs = [];
+    const seen = new Set();
+    for (const value of Array.isArray(raw.tabs) ? raw.tabs : []) {
+      const ref = normalizeDockRef(value);
+      const key = dockRefKey(ref);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      tabs.push(ref);
+    }
+    const requested = typeof raw.active === 'string' ? raw.active : '';
+    const activeRef = tabs.find(ref => dockRefKey(ref) === requested || ref.name === requested);
+    layout = createLeaf(tabs, activeRef ? dockRefKey(activeRef) : (tabs[0] ? dockRefKey(tabs[0]) : null));
   }
-  const requested = typeof raw.active === 'string' ? raw.active : '';
-  const activeRef = tabs.find(ref => dockRefKey(ref) === requested || ref.name === requested);
   return {
     open: !!raw.open,
     height: Number.isFinite(raw.height) ? raw.height : defaultHeight,
-    tabs,
-    active: activeRef ? dockRefKey(activeRef) : null,
+    layout,
   };
 }
 
