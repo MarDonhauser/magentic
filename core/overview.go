@@ -648,8 +648,9 @@ func finishWarnings(proj *OvProject) {
 }
 
 // usagePages collects every provider that can actually report its limits.
-// Claude answers over its OAuth endpoint, Codex from its own rollout records;
-// the others have no readable source and are therefore absent.
+// Claude answers over its OAuth endpoint, Codex from its own rollout records,
+// Copilot over GitHub's quota snapshot; Gemini has no readable source and is
+// therefore absent.
 func usagePages() []OvUsagePage {
 	var pages []OvUsagePage
 	if u := CachedUsage(); u.Err == "" && !u.FetchedAt.IsZero() {
@@ -672,6 +673,19 @@ func usagePages() []OvUsagePage {
 				} else {
 					entry.Reset = window.Reset.Format("15:04")
 				}
+			}
+			page.Windows = append(page.Windows, entry)
+		}
+		pages = append(pages, page)
+	}
+	if u := CachedCopilotUsage(); u.Err == "" && len(u.Windows) > 0 {
+		page := OvUsagePage{Provider: string(AgentVendorCopilot), Label: "Copilot-Limits"}
+		for _, window := range u.Windows {
+			entry := OvUsageWindow{Label: window.Label, Percent: window.Percent}
+			if !window.Reset.IsZero() {
+				// Copilot rechnet monatlich ab, ein Wochentag oder eine Uhrzeit
+				// würde den Zeitpunkt also falsch nahe erscheinen lassen.
+				entry.Reset = window.Reset.Format("2.1.")
 			}
 			page.Windows = append(page.Windows, entry)
 		}
