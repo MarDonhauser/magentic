@@ -78,6 +78,40 @@ func TestHistoryStoreRebuildsOnUnknownSchemaVersion(t *testing.T) {
 	}
 }
 
+// TestHistoryStoreSchemaSurvivesReopenAtSameVersion schützt gegen ein
+// destruktives Statement in historySchemaSQL (etwa ein DROP TABLE), das bei
+// jedem Öffnen ausgeführt würde und damit die dauerhaften Aggregate zerstören
+// würde, bevor die Schemaversion überhaupt geprüft ist.
+func TestHistoryStoreSchemaSurvivesReopenAtSameVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history.db")
+	store, err := openHistoryStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := historyActivityRow{
+		AggKey: "conv-1", Day: "2026-08-30", Hour: 10, Provider: HistoryProviderClaude,
+		SourceID: "claude:a", WrittenFromModTime: 1, ConversationID: "conv-1", Prompts: 1,
+	}
+	if err := store.writeActivity(context.Background(), []historyActivityRow{row}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := openHistoryStore(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	var count int
+	if err := reopened.db.QueryRow(`SELECT count(*) FROM activity WHERE agg_key = 'conv-1'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("activity rows after reopen = %d, want 1 — historySchemaSQL darf beim Öffnen nichts löschen", count)
+	}
+}
+
 func TestHistoryStoreSourceRoundTripAndDeletion(t *testing.T) {
 	store := openTestHistoryStore(t)
 	row := historySourceRow{

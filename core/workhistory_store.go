@@ -12,7 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const historySchemaVersion = 1
+const historySchemaVersion = 2
 
 // historyRetentionWindow begrenzt, wie lange Roh-Events vorgehalten werden.
 // Die dauerhaften Tagesaggregate in der Tabelle activity sind davon nicht
@@ -62,14 +62,6 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_occurred ON events(occurred_at);
 CREATE INDEX IF NOT EXISTS events_source ON events(source_id);
 CREATE INDEX IF NOT EXISTS events_conversation ON events(provider, conversation_id);
-
-DROP TABLE IF EXISTS events_fts;
-
--- Die Spalten der Abdeckungszähler haben sich während der Entwicklung von
--- einem Zählerpaar je Ereignis auf ein Zählerpaar je Tokenfeld geändert. Eine
--- Datenbank aus einem Zwischenstand wird verworfen statt migriert, weil die
--- Aggregate ohnehin vollständig aus den Transkripten neu entstehen.
-DROP TABLE IF EXISTS activity;
 
 CREATE TABLE IF NOT EXISTS activity (
 	agg_key         TEXT NOT NULL,
