@@ -920,15 +920,21 @@ func validateWorktreeRemovalObservations(sessions []Agent, snapshot ObservationS
 }
 
 func CreateAgentSession(st *State, projectID ProjectID, worktree bool, name string) (string, error) {
-	return createSession(st, projectID, worktree, name, "")
+	return CreateAgentSessionWithVendor(st, projectID, worktree, name, "")
+}
+
+// CreateAgentSessionWithVendor starts a coding Session with an explicitly
+// chosen coding agent. An empty vendor means Claude.
+func CreateAgentSessionWithVendor(st *State, projectID ProjectID, worktree bool, name, vendor string) (string, error) {
+	return createSession(st, projectID, worktree, name, "", AgentVendor(strings.TrimSpace(vendor)))
 }
 
 func CreateTermSession(st *State, projectID ProjectID, worktree bool, name string) (string, error) {
-	return createSession(st, projectID, worktree, name, KindTerm)
+	return createSession(st, projectID, worktree, name, KindTerm, "")
 }
 
 func CreateDockSession(st *State, projectID ProjectID) (string, error) {
-	return createSession(st, projectID, false, "", KindDock)
+	return createSession(st, projectID, false, "", KindDock, "")
 }
 
 func CreateTermSessionForID(st *State, sessionID SessionID, name string) (string, error) {
@@ -977,7 +983,7 @@ func pickSessionName(st *State, name, hint, kind string) (string, error) {
 	return name, nil
 }
 
-func createSession(st *State, projectID ProjectID, worktree bool, name, kind string) (string, error) {
+func createSession(st *State, projectID ProjectID, worktree bool, name, kind string, vendor AgentVendor) (string, error) {
 	current, err := LoadState()
 	if err != nil {
 		return "", err
@@ -1009,6 +1015,7 @@ func createSession(st *State, projectID ProjectID, worktree bool, name, kind str
 		ProjectID: proj.ID, Name: name, Directory: proj.Path,
 		CreateWorktree: worktree, Worktree: worktree,
 		Kind: sessionKind, Presentation: presentation, Purpose: SessionPurposeWork,
+		Vendor: vendor,
 	})
 	if err != nil {
 		return "", err

@@ -1425,6 +1425,8 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
   font-size: var(--fs-label);
 }
 #ctxmenu .mi:hover { background: var(--raise-2); }
+#ctxmenu .mi.disabled { opacity: .45; cursor: default; }
+#ctxmenu .mi.disabled:hover { background: transparent; }
 #ctxmenu .mi.danger { color: var(--critical); }
 #ctxmenu .mi.danger:hover { background: rgba(224,108,117,0.14); }
 

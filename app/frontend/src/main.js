@@ -7,7 +7,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import {
   Overview,
-  NewSession, NewTermSession, NewTermSessionFor, DoneAgent, Cleanup, Merge, Deploy, RemoveWorktree, SetMainBranch,
+  NewSession, NewSessionWithVendor, AgentVendors, SwitchSessionVendor, NewTermSession, NewTermSessionFor, DoneAgent, Cleanup, Merge, Deploy, RemoveWorktree, SetMainBranch,
   OpenTerm, WriteTerm, ResizeTerm, CloseTerm, KillSession, LaterSession, ReopenSession, SendSkill, HandoffSession,
   SendMessage, DiscardQueuedMessage, RetryQueuedMessage,
   DeployStatus, AzLogin, ArgoLogin, AzAccounts, AzSetSubscription,
@@ -778,6 +778,11 @@ BuildInfo()
   .then(at => { if (at) $('sidebar-head').title = `magentic · Build vom ${at}`; })
   .catch(() => {});
 
+let vendorCatalog = [{ vendor: 'claude', label: 'Claude Code', available: true }];
+AgentVendors()
+  .then(catalog => { if (Array.isArray(catalog) && catalog.length) vendorCatalog = catalog; })
+  .catch(() => { /* Standardkatalog bleibt */ });
+
 $('nav-overview').onclick = showOverview;
 $('sidebar-head').onclick = showOverview;
 $('nav-search').onclick = showSearch;
@@ -1158,20 +1163,19 @@ function renderSidebar() {
       const plus = document.createElement('button');
       plus.className = 'proj-add';
       plus.textContent = '+';
-      plus.title = 'Neue Claude-Session in ' + p.name + ' (⌥-Klick: in frischem Worktree · ⇧-Klick: reines Terminal)';
+      plus.title = 'Neue Session in ' + p.name + ' (⌥-Klick: in frischem Worktree · ⇧-Klick: reines Terminal)';
       plus.onclick = async e => {
         e.stopPropagation();
-        plus.disabled = true;
-        try {
-          const worktree = e.altKey;
-          const name = e.shiftKey
-            ? await act(NewTermSession(p.id, false, ''), n => `Terminal „${n}" geöffnet`)
-            : await act(NewSession(p.id, worktree, ''),
-                n => (worktree ? `Worktree-Session „${n}" gestartet` : `Session „${n}" gestartet`));
-          if (!name) return;
-          if (view === 'hydra' && hydraProject === p.name) await focusHydraSession(name);
-          else openSessionByName(name);
-        } catch { /* toast zeigt den Fehler */ }
+        if (e.shiftKey) {
+          try {
+            const name = await act(NewTermSession(p.id, false, ''), n => `Terminal „${n}" geöffnet`);
+            if (!name) return;
+            if (view === 'hydra' && hydraProject === p.name) await focusHydraSession(name);
+            else openSessionByName(name);
+          } catch { /* toast zeigt den Fehler */ }
+          return;
+        }
+        showVendorMenu(e.clientX, e.clientY, p, e.altKey);
       };
       head.appendChild(plus);
     }
@@ -2224,6 +2228,19 @@ function hideMenu() {
   menuFor = null;
 }
 
+function showVendorMenu(x, y, project, worktree) {
+  menuFor = { project, worktree };
+  menuEl.innerHTML =
+    `<div class="mi-head">Neue Session in ${esc(project.name)}</div>` +
+    vendorCatalog.map(option => option.available
+      ? `<div class="mi" data-mi="newvendor" data-vendor="${esc(option.vendor)}">${developerIcon(option.vendor)} ${esc(option.label)}</div>`
+      : `<div class="mi disabled" title="${esc(option.label)} ist nicht installiert">${developerIcon(option.vendor)} ${esc(option.label)}</div>`
+    ).join('');
+  menuEl.style.display = 'block';
+  menuEl.style.left = Math.min(x, window.innerWidth - 220) + 'px';
+  menuEl.style.top = Math.min(y, window.innerHeight - menuEl.offsetHeight - 10) + 'px';
+}
+
 function showMenu(x, y, sessionID, name, status) {
   menuFor = { id: sessionID, name };
   const session = agentInfo(name, sessionID) || (ov?.later || []).find(item => item.id === sessionID);
@@ -2235,9 +2252,16 @@ function showMenu(x, y, sessionID, name, status) {
   } else {
     const done = ['idle', 'running'].includes(status)
       ? `<div class="mi" data-mi="done">${icon('check')} /done senden</div>` : '';
+    const switchable = session && !session.term
+      ? vendorCatalog
+          .filter(option => option.available && option.vendor !== session.vendor)
+          .map(option => `<div class="mi" data-mi="switchvendor" data-vendor="${esc(option.vendor)}">${developerIcon(option.vendor)} Zu ${esc(option.label)} wechseln</div>`)
+          .join('')
+      : '';
     menuEl.innerHTML =
       `<div class="mi-head">${sessionToolMark(session)}${esc(name)}</div>` +
       `<div class="mi" data-mi="open">${developerIcon('bash')} Terminal öffnen</div>` + done +
+      switchable +
       `<div class="mi" data-mi="later">${icon('clock')} Für später schließen</div>` +
       `<div class="mi danger" data-mi="kill">${icon('x')} Session beenden</div>`;
   }
@@ -2313,9 +2337,36 @@ async function reopenLater(sessionID, name) {
 menuEl.addEventListener('click', async e => {
   const mi = e.target.closest('.mi');
   if (!mi || !menuFor) return;
-  const { id, name } = menuFor;
+  const { id, name, project, worktree } = menuFor;
+  if (mi.dataset.mi === 'newvendor') {
+    hideMenu();
+    if (!project) return;
+    try {
+      const created = await act(
+        NewSessionWithVendor(project.id, !!worktree, '', mi.dataset.vendor),
+        n => (worktree ? `Worktree-Session „${n}" gestartet` : `Session „${n}" gestartet`),
+      );
+      if (!created) return;
+      if (view === 'hydra' && hydraProject === project.name) await focusHydraSession(created);
+      else openSessionByName(created);
+    } catch { /* toast zeigt den Fehler */ }
+    return;
+  }
+  if (!id) return;
   switch (mi.dataset.mi) {
     case 'open': hideMenu(); openSession(id, name); break;
+    case 'switchvendor':
+      if (mi.dataset.confirm) {
+        hideMenu();
+        try {
+          await act(SwitchSessionVendor(id, mi.dataset.vendor), `„${name}" läuft jetzt mit einem anderen Agenten`);
+        } catch { /* toast zeigt den Fehler */ }
+        await refresh(true);
+      } else {
+        mi.dataset.confirm = '1';
+        mi.innerHTML = icon('play') + ' wirklich wechseln? Der laufende Prozess wird beendet';
+      }
+      break;
     case 'later': hideMenu(); parkSession(id, name); break;
     case 'reopen': hideMenu(); reopenLater(id, name); break;
     case 'done':

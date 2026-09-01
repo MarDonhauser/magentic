@@ -1,5 +1,21 @@
 export namespace core {
 	
+	export class AgentVendorOption {
+	    vendor: string;
+	    label: string;
+	    available: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new AgentVendorOption(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.vendor = source["vendor"];
+	        this.label = source["label"];
+	        this.available = source["available"];
+	    }
+	}
 	export class BoardTask {
 	    text: string;
 	    done: boolean;
@@ -468,6 +484,7 @@ export namespace core {
 	    id: string;
 	    name: string;
 	    tool?: string;
+	    vendor?: string;
 	    status: string;
 	    label: string;
 	    detail: string;
@@ -496,6 +513,7 @@ export namespace core {
 	        this.id = source["id"];
 	        this.name = source["name"];
 	        this.tool = source["tool"];
+	        this.vendor = source["vendor"];
 	        this.status = source["status"];
 	        this.label = source["label"];
 	        this.detail = source["detail"];

@@ -11,6 +11,7 @@ type OvAgent struct {
 	ID            SessionID `json:"id"`
 	Name          string    `json:"name"`
 	Tool          string    `json:"tool,omitempty"`
+	Vendor        string    `json:"vendor,omitempty"`
 	Status        string    `json:"status"`
 	Label         string    `json:"label"`
 	Detail        string    `json:"detail"`
@@ -513,6 +514,7 @@ func toOvAgent(a Agent, observed SessionObservation, branch string) OvAgent {
 		ID:            a.ID,
 		Name:          a.Name,
 		Tool:          tool,
+		Vendor:        string(a.SessionVendor()),
 		Status:        statusKey(st),
 		Label:         st.Label(),
 		Detail:        observed.Detail,

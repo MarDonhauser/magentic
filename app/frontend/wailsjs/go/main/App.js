@@ -6,6 +6,10 @@ export function AddProject(arg1) {
   return window['go']['main']['App']['AddProject'](arg1);
 }
 
+export function AgentVendors() {
+  return window['go']['main']['App']['AgentVendors']();
+}
+
 export function ArgoLogin() {
   return window['go']['main']['App']['ArgoLogin']();
 }
@@ -114,6 +118,10 @@ export function NewSession(arg1, arg2, arg3) {
   return window['go']['main']['App']['NewSession'](arg1, arg2, arg3);
 }
 
+export function NewSessionWithVendor(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['NewSessionWithVendor'](arg1, arg2, arg3, arg4);
+}
+
 export function NewTermSession(arg1, arg2, arg3) {
   return window['go']['main']['App']['NewTermSession'](arg1, arg2, arg3);
 }
@@ -204,6 +212,10 @@ export function StartBoardItem(arg1, arg2) {
 
 export function Stats(arg1) {
   return window['go']['main']['App']['Stats'](arg1);
+}
+
+export function SwitchSessionVendor(arg1, arg2) {
+  return window['go']['main']['App']['SwitchSessionVendor'](arg1, arg2);
 }
 
 export function TakeBreak() {
