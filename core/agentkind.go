@@ -55,7 +55,6 @@ type agentKind struct {
 	id              string
 	label           string
 	tool            string
-	vendor          AgentVendor
 	observedVersion string
 	screensRecorded bool
 	tail            int
@@ -89,7 +88,6 @@ type agentKindFile struct {
 	Kind            string                            `yaml:"kind"`
 	Label           string                            `yaml:"label"`
 	Tool            string                            `yaml:"tool"`
-	Vendor          string                            `yaml:"vendor"`
 	ObservedVersion string                            `yaml:"observed_version"`
 	ScreensRecorded *bool                             `yaml:"screens_recorded"`
 	Tail            int                               `yaml:"tail"`
@@ -138,7 +136,6 @@ func parseAgentKind(path string, data []byte, source AgentKindSource) (*agentKin
 		id:              strings.TrimSpace(file.Kind),
 		label:           strings.TrimSpace(file.Label),
 		tool:            strings.TrimSpace(file.Tool),
-		vendor:          AgentVendor(strings.TrimSpace(file.Vendor)),
 		observedVersion: strings.TrimSpace(file.ObservedVersion),
 		screensRecorded: file.ScreensRecorded == nil || *file.ScreensRecorded,
 		tail:            file.Tail,

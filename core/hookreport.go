@@ -99,21 +99,16 @@ type HookReportStore struct {
 	mu      sync.Mutex
 	records map[SessionID]hookRecord
 	now     func() time.Time
-	path    string
 	owner   int
 }
 
-// defaultHookReports is the store Observation reads. The desktop app applies
-// reports into the same store as soon as the event file changes.
+// defaultHookReports is the store Observation reads. The desktop app folds new
+// reports into the same store through ApplyHookReports.
 var defaultHookReports = NewHookReportStore()
 
 func NewHookReportStore() *HookReportStore {
 	return &HookReportStore{records: map[SessionID]hookRecord{}, now: time.Now, owner: os.Getuid()}
 }
-
-// DefaultHookReports is the process-wide report store. The desktop app hands it
-// the reports it sees before the next observation cycle.
-func DefaultHookReports() *HookReportStore { return defaultHookReports }
 
 func (s *HookReportStore) clock() time.Time {
 	if s.now == nil {

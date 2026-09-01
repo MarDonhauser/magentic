@@ -30,8 +30,10 @@ Zwei Oberflächen, eine gemeinsame Logik (`core/`):
 ## Nutzung
 
 ```sh
-magentic              # TUI starten
-magentic add [pfad]   # Projekt registrieren (Default: aktuelles Verzeichnis)
+magentic                   # TUI starten
+magentic add [pfad]        # Projekt registrieren (Default: aktuelles Verzeichnis)
+magentic agents            # Status-Manifeste prüfen und ihre Quelle nennen
+magentic hooks install     # Claude-Code-Hooks für Status-Meldungen einrichten
 open app/build/bin/magentic.app   # Desktop-App
 ./start.sh                         # Desktop-App bequem starten
 ```
@@ -255,12 +257,100 @@ Gesamtstatus. Die Projektzeile zeigt weiterhin den Repo-Gesamtzustand.
 
 ## Status
 
-- `●` läuft — Claude arbeitet gerade
-- `◆` wartet — Claude braucht Input (Permission-Dialog, Frage, Trust-Prompt)
+- `●` läuft — der Agent arbeitet gerade
+- `◆` wartet — der Agent braucht Input (Permission-Dialog, Frage, Trust-Prompt)
+- `✓` fertig — der Agent hat seine Runde beendet und du hast das Ergebnis noch nicht gesehen
 - `○` idle — bereit für den nächsten Prompt
-- `⌨` Terminal — reine Shell-Session, dort läuft kein Claude
-- `▪` beendet — Claude wurde beendet, Shell läuft noch
+- `⌨` Terminal — reine Shell-Session, dort läuft kein Agent
+- `▪` beendet — der Agent wurde beendet, die Shell läuft noch
 - `✗` tot — tmux-Session existiert nicht mehr (mit `x` entfernen)
+- `?` unbekannt — Magentic kann den Bildschirm nicht deuten
+
+Unbekannt wird nie zu idle, fertig oder tot geschönt, und in eine Session mit
+unbekanntem Status tippt Magentic nichts hinein. Das ist eine
+Sicherheitseigenschaft: ein falsches „idle" würde eine wartende Nachricht in
+einen offenen Dialog schreiben.
+
+### Status-Manifeste
+
+Welche Bildschirmzeile welchen Status bedeutet, steht nicht im Go-Code, sondern
+in einem Manifest pro Agent-Art. Magentic bringt Manifeste für Claude Code,
+Codex, GitHub Copilot und Gemini CLI mit (`core/agents/*.yaml`, in die Binary
+eingebettet). Eigene Manifeste liegen in `~/.config/magentic/agents/*.yaml`;
+eine Datei dort ersetzt eine mitgelieferte Agent-Art mit derselben `kind`
+vollständig oder bringt eine neue hinzu.
+
+```sh
+magentic agents   # jedes Manifest mit Agent-Art, Quelle und Ablehnungsgrund
+```
+
+Ein Manifest beschreibt genau eine Agent-Art:
+
+```yaml
+kind: acme                  # stabile Kennung, einmalig pro Quelle
+label: Acme Agent           # Klartext für die Oberfläche
+tool: acme                  # Identität für die Entwickler-Icons
+observed_version: "3.1.4"   # an welchem Build die Regeln aufgenommen wurden
+screens_recorded: true      # false, solange niemand die Bildschirme gesehen hat
+tail: 25                    # wie viele Zeilen vom Ende gelesen werden (max. 200)
+
+pane_commands:              # woran tmux die Agent-Art erkennt
+  - regex: '^acme(-.*)?$'
+  - literal: 'acme-cli'
+
+states:                     # nur working, blocked, done, idle
+  working:
+    - literal: 'esc to interrupt'
+  blocked:
+    - literal: 'do you want'
+  idle:
+    - literal: 'ask acme anything'
+
+composer:                   # woran die eigene Eingabezeile zu sehen ist
+  - literal: 'ask acme anything'
+
+details:
+  blocked:
+    - label: Shell-Freigabe
+      patterns:
+        - literal: 'run this command'
+  working:
+    - capture: '(?i)waiting for (\d+) helpers'
+      singular: 'wartet auf %d Helfer'
+      plural: 'wartet auf %d Helfer'
+```
+
+Die Reihenfolge der Auswertung steht im Format, nicht in der Datei: erst
+`working`, dann `blocked`, dann `done`, dann `idle`; innerhalb eines Zustands
+gewinnt das erste Muster in Dateireihenfolge. Ein Muster ist entweder ein
+`literal` (Teilzeichenkette, Groß- und Kleinschreibung egal) oder ein `regex`.
+Ein Detail ändert nie den Status. Wer keine `done`-Muster nennt — die meisten
+Agents haben keinen eigenen Fertig-Bildschirm — bekommt `done` daraus
+abgeleitet, dass der ruhende Bildschirm seit dem letzten Blick neu ist.
+
+Ein ungültiges Manifest wird mit Begründung abgelehnt; die mitgelieferte
+Agent-Art bleibt dann in Kraft. Eine Agent-Art, für die nur ein kaputtes
+Manifest existiert, bleibt unbekannt statt idle. Gemini CLI ist ein
+mitgeliefertes Beispiel für `screens_recorded: false`: startbar und
+verwaltbar, aber ohne gedeuteten Status, bis jemand seine Bildschirme
+aufnimmt.
+
+### Status-Meldungen aus Claude Code
+
+Wo ein Agent seinen eigenen Lebenszyklus melden kann, muss Magentic ihn nicht
+vom Bildschirm raten. Claude Code kann das über seine Hooks:
+
+```sh
+magentic hooks install     # sagt vorher, was wohin geschrieben wird
+magentic hooks uninstall   # entfernt nur die von Magentic geschriebenen Hooks
+```
+
+Installiert wird in `~/.claude/settings.json`; eigene Hook-Definitionen bleiben
+unangetastet, und ein zweiter Lauf ändert nichts. Die Hooks hängen eine
+JSON-Zeile an `~/.config/magentic/hook-reports.jsonl` (nur für den eigenen
+Benutzer lesbar), die Magentic beim nächsten Blick einliest. Eine Meldung gilt
+60 Sekunden lang; danach zählt wieder der Bildschirm. Ohne Hooks ändert sich
+nichts: jede Session wird weiter über ihr Manifest gedeutet.
 
 Rechts daneben: `✓` Arbeitsverzeichnis sauber, `±` uncommitted Änderungen, `⑂` läuft im Worktree.
 

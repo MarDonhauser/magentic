@@ -67,12 +67,12 @@ func TestCodexReachesFirstClassFidelity(t *testing.T) {
 	// done wird aus dem ruhenden Bildschirm plus dem letzten Blick abgeleitet.
 	seen := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	resolved := resolveSessionStatus(statusInput{
-		session:      Session{ID: "session-1", Name: "one", SeenAt: seen},
-		present:      true,
-		paneCommand:  "codex",
-		content:      paneFixture(t, "codex-idle.txt"),
-		contentKnown: true,
-		activity:     seen.Add(time.Minute),
+		session:       Session{ID: "session-1", Name: "one", SeenAt: seen},
+		present:       true,
+		paneCommand:   "codex",
+		content:       paneFixture(t, "codex-idle.txt"),
+		contentKnown:  true,
+		activity:      seen.Add(time.Minute),
 		activityKnown: true,
 		now:           seen.Add(time.Minute),
 	})

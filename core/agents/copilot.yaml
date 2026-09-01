@@ -4,7 +4,6 @@
 kind: copilot
 label: GitHub Copilot
 tool: copilot
-vendor: copilot
 observed_version: "1.0.82"
 screens_recorded: true
 tail: 25

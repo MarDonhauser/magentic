@@ -31,7 +31,6 @@ const handwrittenManifest = `
 kind: acme
 label: Acme Agent
 tool: acme
-vendor: acme
 observed_version: "3.1.4"
 tail: 12
 pane_commands:
@@ -67,7 +66,7 @@ func TestManifestDecodesIntoExpectedStructure(t *testing.T) {
 	if kind.id != "acme" || kind.label != "Acme Agent" || kind.tool != "acme" {
 		t.Fatalf("Kopf falsch gelesen: %#v", kind)
 	}
-	if kind.vendor != AgentVendor("acme") || kind.observedVersion != "3.1.4" || !kind.screensRecorded {
+	if kind.observedVersion != "3.1.4" || !kind.screensRecorded {
 		t.Fatalf("Herkunftsangaben falsch gelesen: %#v", kind)
 	}
 	if kind.tail != 12 {
@@ -140,7 +139,6 @@ func TestUserManifestReplacesShippedKindInFull(t *testing.T) {
 kind: claude
 label: Claude Code (eigenes Manifest)
 tool: claude
-vendor: claude
 pane_commands:
   - literal: 'claude'
 states:

@@ -5,7 +5,6 @@
 kind: gemini
 label: Gemini CLI
 tool: gemini
-vendor: gemini
 screens_recorded: false
 tail: 25
 

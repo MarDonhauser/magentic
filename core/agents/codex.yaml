@@ -4,7 +4,6 @@
 kind: codex
 label: Codex
 tool: codex
-vendor: codex
 observed_version: "0.151.0"
 screens_recorded: true
 tail: 25
