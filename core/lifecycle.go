@@ -1654,6 +1654,19 @@ func (tmuxLifecycleRuntime) Start(ctx context.Context, session Session, mode str
 	if info, err := os.Stat(session.Dir); err != nil || !info.IsDir() {
 		return fmt.Errorf("Session directory %q is unavailable", session.Dir)
 	}
+	var provider AgentProvider
+	if !session.IsTerm() {
+		// The binary check happens before the tmux Session exists, so a
+		// missing program leaves nothing behind to clean up.
+		resolved, err := resolveSessionProvider(session)
+		if err != nil {
+			return err
+		}
+		if !providerBinaryAvailable(resolved) {
+			return fmt.Errorf("%s ist nicht installiert (%s nicht im PATH)", resolved.Vendor(), resolved.Binary())
+		}
+		provider = resolved
+	}
 	args := []string{"new-session", "-d", "-s", session.TmuxName(), "-c", session.Dir, "-x", "220", "-y", "50"}
 	if out, err := exec.CommandContext(ctx, "tmux", args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("tmux new-session: %w: %s", err, strings.TrimSpace(string(out)))
@@ -1662,16 +1675,13 @@ func (tmuxLifecycleRuntime) Start(ctx context.Context, session Session, mode str
 	if session.IsTerm() {
 		return nil
 	}
-	run, hasRun := session.AgentRun(AgentVendorClaude)
-	command := "claude --name " + ShellQuote(session.TmuxName())
-	if hasRun {
-		flag := "--resume"
-		if mode == "new" {
-			flag = "--session-id"
-		}
-		command += " " + flag + " " + ShellQuote(run.ExternalID)
-	} else if mode != "new" {
-		command += " --continue"
+	var runRef *AgentRunRef
+	if run, ok := session.AgentRun(provider.Vendor()); ok {
+		runRef = &run
+	}
+	command, err := provider.StartCommand(session, runRef, mode)
+	if err != nil {
+		return err
 	}
 	if _, err := exec.CommandContext(ctx, "tmux", "send-keys", "-t", TargetPane(session.TmuxName()), "-l", command).CombinedOutput(); err != nil {
 		return fmt.Errorf("start coding agent: %w", err)
@@ -1704,10 +1714,14 @@ func (tmuxLifecycleRuntime) DeliverInitial(_ context.Context, session Session, p
 	if session.IsTerm() {
 		return false, errors.New("initial coding prompt cannot be delivered to a terminal Session")
 	}
+	provider, err := resolveSessionProvider(session)
+	if err != nil {
+		return false, err
+	}
 	// enqueuePrompt confirms only in-process scheduling. The durable state
 	// therefore remains delivery_unknown until a future observation can prove
 	// acceptance; reconciliation intentionally does not submit it again.
-	if err := enqueuePrompt(session.TmuxName(), prompt, true, AgentToolClaude, true, true, false, nil); err != nil {
+	if err := enqueuePrompt(session.TmuxName(), prompt, true, provider.Tool(), true, true, false, nil); err != nil {
 		return false, err
 	}
 	return false, nil

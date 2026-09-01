@@ -288,3 +288,32 @@ func TestRegistryMigrationDefaultsVendor(t *testing.T) {
 		t.Fatalf("Legacy-Run ging verloren: %+v", session.AgentRuns)
 	}
 }
+
+func TestResolveSessionProvider(t *testing.T) {
+	if _, err := resolveSessionProvider(Session{Name: "navi", SessionKind: SessionKindCodingAgent}); err != nil {
+		t.Fatalf("Claude-Standard muss auflösbar sein: %v", err)
+	}
+	if _, err := resolveSessionProvider(Session{
+		Name: "navi", SessionKind: SessionKindCodingAgent, Vendor: AgentVendor("cursor"),
+	}); err == nil {
+		t.Fatal("unbekannter Vendor muss einen Fehler liefern")
+	}
+	if _, err := resolveSessionProvider(Session{Name: "term-navi", Kind: KindTerm}); err == nil {
+		t.Fatal("eine Terminal-Session hat keinen Provider")
+	}
+}
+
+func TestStartCommandForSession(t *testing.T) {
+	session := Session{
+		Name: "navi", RuntimeName: "mgt-navi", SessionKind: SessionKindCodingAgent,
+		Vendor:    AgentVendorCodex,
+		AgentRuns: []AgentRunRef{{Vendor: AgentVendorCodex, ExternalID: "abc-123"}},
+	}
+	got, err := startCommandForSession(session, "resume")
+	if err != nil {
+		t.Fatalf("startCommandForSession: %v", err)
+	}
+	if got != "codex resume 'abc-123'" {
+		t.Fatalf("startCommandForSession = %q", got)
+	}
+}

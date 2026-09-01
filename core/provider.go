@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"os/exec"
 	"strings"
 )
@@ -58,6 +59,35 @@ func providerForPaneCommand(paneCommand string) (AgentProvider, bool) {
 func providerBinaryAvailable(provider AgentProvider) bool {
 	_, err := exec.LookPath(provider.Binary())
 	return err == nil
+}
+
+// resolveSessionProvider is the single place that turns a Session into the
+// Adapter that starts it. A terminal Session has no coding agent and is a
+// caller error here, not a silent no-op.
+func resolveSessionProvider(session Session) (AgentProvider, error) {
+	vendor := session.SessionVendor()
+	if vendor == "" {
+		return nil, fmt.Errorf("Session %q hostet keinen Coding-Agenten", session.Name)
+	}
+	provider, known := providerForVendor(vendor)
+	if !known {
+		return nil, fmt.Errorf("Session %q hat einen unbekannten Agent-Vendor %q", session.Name, vendor)
+	}
+	return provider, nil
+}
+
+// startCommandForSession resolves the Session's own AgentRunRef and asks its
+// provider for the command line.
+func startCommandForSession(session Session, mode string) (string, error) {
+	provider, err := resolveSessionProvider(session)
+	if err != nil {
+		return "", err
+	}
+	var runRef *AgentRunRef
+	if run, ok := session.AgentRun(provider.Vendor()); ok {
+		runRef = &run
+	}
+	return provider.StartCommand(session, runRef, mode)
 }
 
 func paneCommandMatches(command, binary string) bool {
