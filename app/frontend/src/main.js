@@ -1494,91 +1494,166 @@ function attentionBar() {
   bar.onclick = () => openSession(waiting[0].id, waiting[0].name);
 }
 
+function dividerRow(row) {
+  const el = document.createElement('div');
+  el.className = 'proj-head divider-head' + (row.collapsed ? ' collapsed' : '');
+  el.innerHTML = `<span class="divider-twisty">${icon('chevron')}</span>` +
+    `<span class="divider-name">${esc(row.name)}</span>`;
+  el.title = 'Bereich auf- und zuklappen · Rechtsklick zum Umbenennen';
+  el.onclick = () => {
+    if (suppressHeadClick) return;
+    SetDividerCollapsed(row.ref, !row.collapsed)
+      .then(() => refresh(true))
+      .catch(err => toast('Fehler: ' + err, true));
+  };
+  el.oncontextmenu = e => {
+    e.preventDefault();
+    e.stopPropagation();
+    showDividerMenu(e.clientX, e.clientY, row.ref, row.name);
+  };
+  makeSidebarDraggable(el, row);
+  if (renameDividerOnRender === row.ref) {
+    renameDividerOnRender = null;
+    setTimeout(() => startDividerRename(el, row.ref, row.name), 0);
+  }
+  return el;
+}
+
+// startDividerRename tauscht den Namen gegen ein Eingabefeld. Enter uebernimmt,
+// Escape laesst den alten Namen stehen.
+function startDividerRename(el, dividerID, current) {
+  const label = el.querySelector('.divider-name');
+  if (!label) return;
+  const input = document.createElement('input');
+  input.className = 'divider-rename';
+  input.value = current;
+  label.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = async commit => {
+    if (done) return;
+    done = true;
+    const name = input.value.trim();
+    if (commit && name && name !== current) {
+      try {
+        await RenameDivider(dividerID, name);
+      } catch (err) {
+        toast('Fehler: ' + err, true);
+      }
+    }
+    await refresh(true);
+  };
+  input.onblur = () => finish(true);
+  input.onkeydown = e => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  };
+}
+
+function projectRow(row) {
+  const p = row.project;
+  const head = document.createElement('div');
+  head.className = 'proj-head';
+  const label = document.createElement('span');
+  label.textContent = p.name;
+  if (p.path) {
+    label.className = 'pname';
+    label.title = 'Hydra-Modus: alle Sessions von ' + p.name + ' nebeneinander';
+    label.onclick = () => { if (!suppressHeadClick) enterHydra(p.name); };
+  }
+  head.appendChild(label);
+  if (!p.path) return head;
+  makeSidebarDraggable(head, row);
+  const plus = document.createElement('button');
+  plus.className = 'proj-add';
+  plus.textContent = '+';
+  plus.title = 'Neue Session in ' + p.name + ' (⌥-Klick: in frischem Worktree · ⇧-Klick: reines Terminal)';
+  plus.onclick = async e => {
+    e.stopPropagation();
+    if (e.shiftKey) {
+      try {
+        const name = await act(NewTermSession(p.id, false, ''), n => `Terminal „${n}“ geöffnet`);
+        if (!name) return;
+        if (view === 'hydra' && hydraProject === p.name) await focusHydraSession(name);
+        else openSessionByName(name);
+      } catch { /* toast zeigt den Fehler */ }
+      return;
+    }
+    showVendorMenu(e.clientX, e.clientY, p, e.altKey);
+  };
+  head.appendChild(plus);
+  return head;
+}
+
+function sessionRow(row) {
+  const a = row.agent;
+  const v = agentVisual(a, a.project);
+  const idx = sidebarSessions.length;
+  sidebarSessions.push({ id: a.id, name: a.name });
+  const active = view === 'term' && a.id === activeSessionID;
+  const div = document.createElement('div');
+  div.className = 'session' +
+    (active ? ' selected' : '') +
+    (a.status === 'blocked' ? ' needs-input' : '') +
+    (a.unread && !active ? ' unread' : '');
+  const key = idx < 9 ? `<span class="skey">⌘${idx + 1}</span>` : '';
+  const dead = ['exited', 'dead'].includes(a.status);
+  // Ausserhalb ihres Projekts braucht eine Session den Projektnamen, sonst
+  // haengt sie namenlos in der Liste.
+  const detached = row.parentKind !== 'project'
+    ? `<span class="sproject">${esc(a.project)}</span>` : '';
+  div.innerHTML =
+    `<span class="savatar${dead ? ' dim' : ''}">${agentPortrait(a.name, 26, a)}</span>` +
+    `<span class="sbody">` +
+      `<span class="srow">` +
+        `<span class="sname">${esc(a.name)}</span>` +
+        branchChip(a) +
+      `</span>` +
+      `<span class="srow sub">` +
+        `<span class="dot" style="background:${v.color}"></span>` +
+        `<span class="sstatus">${visHtml(v)}</span>` + detached +
+        `<span class="sage">${esc(a.age)}</span>${key}` +
+      `</span>` +
+    `</span>` +
+    (a.status === 'blocked' ? `<span class="sflag" title="wartet auf deine Eingabe">!</span>` :
+      a.unread && !active ? `<span class="sdot" title="neu seit deinem letzten Blick"></span>` : '');
+  div.dataset.sessionId = String(a.id || '');
+  div.onclick = () => { if (!suppressHeadClick) openSession(a.id, a.name); };
+  div.oncontextmenu = e => {
+    e.preventDefault();
+    e.stopPropagation();
+    showMenu(e.clientX, e.clientY, a.id, a.name, a.status);
+  };
+  attachHover(div, a.id);
+  return div;
+}
+
 function renderSidebar() {
   sessionsEl.innerHTML = '';
   sidebarSessions = [];
-  let any = false;
-  for (const p of ov?.projects || []) {
-    const agents = [];
-    for (const wt of p.worktrees || []) {
-      for (const a of wt.agents || []) {
-        if (a.status !== 'dead' && !a.dock) agents.push(a);
-      }
-    }
-    if (!agents.length && !p.path) continue;
-    any = true;
-    const head = document.createElement('div');
-    head.className = 'proj-head';
-    const label = document.createElement('span');
-    label.textContent = p.name;
-    if (p.path) {
-      label.className = 'pname';
-      label.title = 'Hydra-Modus: alle Sessions von ' + p.name + ' nebeneinander';
-      label.onclick = () => { if (!suppressHeadClick) enterHydra(p.name); };
-    }
-    head.appendChild(label);
-    if (p.path) {
-      makeProjDraggable(head, p.id, p.name);
-    }
-    if (p.path) {
-      const plus = document.createElement('button');
-      plus.className = 'proj-add';
-      plus.textContent = '+';
-      plus.title = 'Neue Session in ' + p.name + ' (⌥-Klick: in frischem Worktree · ⇧-Klick: reines Terminal)';
-      plus.onclick = async e => {
-        e.stopPropagation();
-        if (e.shiftKey) {
-          try {
-            const name = await act(NewTermSession(p.id, false, ''), n => `Terminal „${n}" geöffnet`);
-            if (!name) return;
-            if (view === 'hydra' && hydraProject === p.name) await focusHydraSession(name);
-            else openSessionByName(name);
-          } catch { /* toast zeigt den Fehler */ }
-          return;
-        }
-        showVendorMenu(e.clientX, e.clientY, p, e.altKey);
-      };
-      head.appendChild(plus);
-    }
-    sessionsEl.appendChild(head);
-    for (const a of agents) {
-      const v = agentVisual(a, p.name);
-      const idx = sidebarSessions.length;
-      sidebarSessions.push({ id: a.id, name: a.name });
-      const active = view === 'term' && a.id === activeSessionID;
-      const div = document.createElement('div');
-      div.className = 'session' +
-        (active ? ' selected' : '') +
-        (a.status === 'blocked' ? ' needs-input' : '') +
-        (a.unread && !active ? ' unread' : '');
-      const key = idx < 9 ? `<span class="skey">⌘${idx + 1}</span>` : '';
-      const dead = ['exited', 'dead'].includes(a.status);
-      div.innerHTML =
-        `<span class="savatar${dead ? ' dim' : ''}">${agentPortrait(a.name, 26, a)}</span>` +
-        `<span class="sbody">` +
-          `<span class="srow">` +
-            `<span class="sname">${esc(a.name)}</span>` +
-            branchChip(a) +
-          `</span>` +
-          `<span class="srow sub">` +
-            `<span class="dot" style="background:${v.color}"></span>` +
-            `<span class="sstatus">${visHtml(v)}</span>` +
-            `<span class="sage">${esc(a.age)}</span>${key}` +
-          `</span>` +
-        `</span>` +
-        (a.status === 'blocked' ? `<span class="sflag" title="wartet auf deine Eingabe">!</span>` :
-          a.unread && !active ? `<span class="sdot" title="neu seit deinem letzten Blick"></span>` : '');
-      div.dataset.sessionId = String(a.id || '');
-      div.onclick = () => openSession(a.id, a.name);
-      div.oncontextmenu = e => {
-        e.preventDefault();
-        showMenu(e.clientX, e.clientY, a.id, a.name, a.status);
-      };
-      attachHover(div, a.id);
-      sessionsEl.appendChild(div);
-    }
+  sidebarTree = buildSidebar(ov);
+  const rows = flattenSidebar(sidebarTree);
+  const counts = new Map();
+  for (const row of rows) {
+    const level = row.parentKind + ' ' + row.parent;
+    const index = counts.get(level) || 0;
+    counts.set(level, index + 1);
+    const el = row.kind === 'divider' ? dividerRow(row)
+      : row.kind === 'project' ? projectRow(row)
+      : sessionRow(row);
+    if (row.kind === 'session') makeSidebarDraggable(el, row);
+    el.dataset.row = '1';
+    el.dataset.kind = row.kind;
+    el.dataset.ref = row.ref;
+    el.dataset.parentKind = row.parentKind;
+    el.dataset.parent = row.parent;
+    el.dataset.index = String(index);
+    el.style.setProperty('--depth', String(row.depth));
+    sessionsEl.appendChild(el);
   }
-  if (!any) {
+  if (!rows.length) {
     sessionsEl.innerHTML = '<div class="none">Keine aktiven Sessions</div>';
   }
 
@@ -2649,6 +2724,29 @@ function showVendorMenu(x, y, project, worktree) {
   menuEl.style.top = Math.min(y, window.innerHeight - menuEl.offsetHeight - 10) + 'px';
 }
 
+// Rechtsklick auf einen Divider und auf die freie Flaeche darunter: einmal die
+// Pflege eines Bereichs, einmal das Anlegen eines neuen.
+function showDividerMenu(x, y, dividerID, name) {
+  menuFor = { divider: dividerID };
+  menuEl.innerHTML =
+    `<div class="mi-head">${esc(name)}</div>` +
+    `<div class="mi" data-mi="renamedivider">${icon('pencil')} Umbenennen</div>` +
+    `<div class="mi danger" data-mi="removedivider">${icon('trash')} Bereich entfernen</div>`;
+  placeMenu(x, y, 200);
+}
+
+function showSidebarMenu(x, y) {
+  menuFor = { sidebar: true };
+  menuEl.innerHTML = `<div class="mi" data-mi="newdivider">${icon('square')} Bereich anlegen</div>`;
+  placeMenu(x, y, 200);
+}
+
+function placeMenu(x, y, width) {
+  menuEl.style.display = 'block';
+  menuEl.style.left = Math.min(x, window.innerWidth - width) + 'px';
+  menuEl.style.top = Math.min(y, window.innerHeight - menuEl.offsetHeight - 10) + 'px';
+}
+
 function showMenu(x, y, sessionID, name, status) {
   menuFor = { id: sessionID, name };
   const session = agentInfo(name, sessionID) || (ov?.later || []).find(item => item.id === sessionID);
@@ -2745,7 +2843,38 @@ async function reopenLater(sessionID, name) {
 menuEl.addEventListener('click', async e => {
   const mi = e.target.closest('.mi');
   if (!mi || !menuFor) return;
-  const { id, name, project, worktree } = menuFor;
+  const { id, name, project, worktree, divider } = menuFor;
+  if (mi.dataset.mi === 'newdivider') {
+    hideMenu();
+    try {
+      renameDividerOnRender = await AddDivider('Neuer Bereich');
+      await refresh(true);
+    } catch (err) {
+      toast('Fehler: ' + err, true);
+    }
+    return;
+  }
+  if (mi.dataset.mi === 'renamedivider') {
+    hideMenu();
+    renameDividerOnRender = divider;
+    await refresh(true);
+    return;
+  }
+  if (mi.dataset.mi === 'removedivider') {
+    if (!mi.dataset.confirm) {
+      mi.dataset.confirm = '1';
+      mi.innerHTML = icon('trash') + ' wirklich entfernen?';
+      return;
+    }
+    hideMenu();
+    try {
+      await RemoveDivider(divider);
+      await refresh(true);
+    } catch (err) {
+      toast('Fehler: ' + err, true);
+    }
+    return;
+  }
   if (mi.dataset.mi === 'newvendor') {
     hideMenu();
     if (!project) return;
@@ -2778,6 +2907,11 @@ menuEl.addEventListener('click', async e => {
       else { mi.dataset.confirm = '1'; mi.innerHTML = icon('x') + ' wirklich beenden?'; }
       break;
   }
+});
+sessionsEl.addEventListener('contextmenu', e => {
+  if (e.target.closest('[data-row], .session')) return;
+  e.preventDefault();
+  showSidebarMenu(e.clientX, e.clientY);
 });
 document.addEventListener('mousedown', e => { if (!menuEl.contains(e.target)) hideMenu(); });
 window.addEventListener('blur', hideMenu);

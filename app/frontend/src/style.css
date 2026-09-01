@@ -508,17 +508,53 @@ html, body {
   display: flex;
   align-items: center;
   padding: 8px 6px 3px 10px;
-  color: var(--muted);
-  font-size: var(--fs-meta);
+  color: var(--ink-2);
+  font-size: var(--fs-label);
   font-weight: var(--fw-semibold);
 }
 .proj-head:first-child { padding-top: 2px; }
 .proj-head.draggable { cursor: grab; }
-.proj-head.dragging { opacity: 0.4; }
-.proj-head.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
-.proj-head.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
+
+/* Jede Zeile der Liste kennt ihre Tiefe und rueckt entsprechend ein. */
+#sessions [data-row] { --depth: 0; margin-left: calc(var(--depth) * 11px); }
+[data-row].dragging { opacity: 0.4; }
+[data-row].drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+[data-row].drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
+[data-row].drop-into { box-shadow: inset 0 0 0 1px var(--accent); border-radius: 6px; }
 body.reordering { cursor: grabbing; user-select: none; }
-body.reordering .pname { pointer-events: none; }
+body.reordering .pname, body.reordering .divider-name { pointer-events: none; }
+
+.divider-head {
+  gap: 4px;
+  color: var(--muted);
+  font-size: var(--fs-meta);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.divider-head:hover { color: var(--ink-2); }
+.divider-twisty { display: flex; transition: transform 0.12s ease; }
+.divider-twisty .ico { width: 13px; height: 13px; }
+.divider-head.collapsed .divider-twisty { transform: rotate(-90deg); }
+.divider-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.divider-rename {
+  flex: 1; min-width: 0;
+  font: inherit; letter-spacing: inherit; text-transform: inherit;
+  color: var(--ink);
+  background: var(--raise);
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  padding: 1px 5px;
+  outline: none;
+}
+
+/* Eine Session ausserhalb ihres Projekts nennt selbst, wozu sie gehoert. */
+.sproject {
+  flex: none;
+  color: var(--muted); font-size: var(--fs-micro);
+  padding: 0 5px; border-radius: 999px; background: var(--raise);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%;
+}
 .proj-add {
   margin-left: auto;
   font: inherit;

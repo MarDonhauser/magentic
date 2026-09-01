@@ -10,7 +10,7 @@ import {
   NewDockSession,
   OpenTerm,
   RemoveProject,
-  ReorderProjects,
+  MoveSidebarItem,
   SendSkill,
   SetMainBranch,
   SwitchSessionVendor,
@@ -50,7 +50,7 @@ test('session and project actions forward stable IDs through the Wails bridge', 
           KillSession: record('KillSession'),
           OpenTerm: record('OpenTerm'),
           RemoveProject: record('RemoveProject'),
-          ReorderProjects: record('ReorderProjects'),
+          MoveSidebarItem: record('MoveSidebarItem'),
           SendSkill: record('SendSkill'),
           SetMainBranch: record('SetMainBranch'),
           SwitchSessionVendor: record('SwitchSessionVendor'),
@@ -65,7 +65,7 @@ test('session and project actions forward stable IDs through the Wails bridge', 
   await SetMainBranch('project-id', 'main');
   await SwitchSessionVendor('session-id', 'codex', true);
   await RemoveProject('project-id');
-  await ReorderProjects(['project-b', 'project-a']);
+  await MoveSidebarItem('session', 'session-id', 'divider', 'divider-id', [{ kind: 'session', ref: 'session-id' }]);
 
   assert.deepEqual(calls, [
     ['OpenTerm', 'session-id', 'Display name', 120, 40],
@@ -74,7 +74,7 @@ test('session and project actions forward stable IDs through the Wails bridge', 
     ['SetMainBranch', 'project-id', 'main'],
     ['SwitchSessionVendor', 'session-id', 'codex', true],
     ['RemoveProject', 'project-id'],
-    ['ReorderProjects', ['project-b', 'project-a']],
+    ['MoveSidebarItem', 'session', 'session-id', 'divider', 'divider-id', [{ kind: 'session', ref: 'session-id' }]],
   ]);
 });
 
