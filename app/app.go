@@ -30,6 +30,8 @@ type App struct {
 	attention        *core.AttentionPlanner
 	attentionEventMu sync.Mutex
 	attentionEvents  []core.AttentionEvent
+	notchMu          sync.Mutex
+	notchEvent       *NotchEvent
 	observationMu    sync.Mutex
 	observation      core.ObservationSnapshot
 	observationAt    time.Time
@@ -64,6 +66,12 @@ func (a *App) attentionPlanner() *core.AttentionPlanner {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	installNativeNotifier()
+	installNotchOwner(a)
+	if document, err := notchDocumentFromAssets(assets); err != nil {
+		core.Logf("notch: Bundle konnte nicht geladen werden: %v", err)
+	} else if err := createNotchWindow(document); err != nil {
+		core.Logf("notch: Fenster konnte nicht erstellt werden: %v", err)
+	}
 	runtime.OnFileDrop(ctx, a.onFileDrop)
 	core.Logf("startup: pid %d", os.Getpid())
 	core.TmuxConfigureUX()
@@ -114,6 +122,8 @@ func escapeTermPath(p string) string {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	destroyNotchWindow()
+	installNotchOwner(nil)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for name, t := range a.terms {
