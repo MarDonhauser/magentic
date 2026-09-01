@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -196,5 +197,94 @@ func TestCopilotMatchesGithubCopilot(t *testing.T) {
 	provider, ok := providerForPaneCommand("github-copilot")
 	if !ok || provider.Vendor() != AgentVendorCopilot {
 		t.Fatal("github-copilot muss als Copilot erkannt werden")
+	}
+}
+
+func TestSessionVendorDefaultsToClaude(t *testing.T) {
+	coding := Session{Name: "navi", SessionKind: SessionKindCodingAgent}
+	if got := coding.SessionVendor(); got != AgentVendorClaude {
+		t.Fatalf("SessionVendor = %q, want %q", got, AgentVendorClaude)
+	}
+	stored := Session{Name: "navi", SessionKind: SessionKindCodingAgent, Vendor: AgentVendorCodex}
+	if got := stored.SessionVendor(); got != AgentVendorCodex {
+		t.Fatalf("SessionVendor = %q, want %q", got, AgentVendorCodex)
+	}
+	term := Session{Name: "term-navi", Kind: KindTerm}
+	if got := term.SessionVendor(); got != "" {
+		t.Fatalf("Terminal-SessionVendor = %q, want leer", got)
+	}
+}
+
+func provisionedCodingSession(t *testing.T, vendor AgentVendor) Session {
+	t.Helper()
+	lifecycle, _, registry, _ := lifecycleHarness(t)
+	project := registerLifecycleProject(t, registry)
+	result, err := lifecycle.Provision(context.Background(), SessionProvision{
+		ProjectID: project.ID, Name: "navi", Directory: project.Path,
+		Kind: SessionKindCodingAgent, Vendor: vendor,
+	})
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	return result.Session
+}
+
+func TestProvisionRecordsVendorAndRun(t *testing.T) {
+	tests := []struct {
+		name       string
+		vendor     AgentVendor
+		wantRuns   int
+		wantLegacy bool
+	}{
+		{name: "ohne Angabe wird Claude", vendor: "", wantRuns: 1, wantLegacy: true},
+		{name: "Copilot bekommt eine Run-Ref", vendor: AgentVendorCopilot, wantRuns: 1},
+		{name: "Codex startet ohne Run-Ref", vendor: AgentVendorCodex, wantRuns: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := provisionedCodingSession(t, tt.vendor)
+			wantVendor := tt.vendor
+			if wantVendor == "" {
+				wantVendor = AgentVendorClaude
+			}
+			if session.Vendor != wantVendor {
+				t.Fatalf("Vendor = %q, want %q", session.Vendor, wantVendor)
+			}
+			if len(session.AgentRuns) != tt.wantRuns {
+				t.Fatalf("AgentRuns = %d, want %d", len(session.AgentRuns), tt.wantRuns)
+			}
+			if tt.wantRuns == 1 && session.AgentRuns[0].Vendor != wantVendor {
+				t.Fatalf("Run-Vendor = %q, want %q", session.AgentRuns[0].Vendor, wantVendor)
+			}
+			if (session.SessionID != "") != tt.wantLegacy {
+				t.Fatalf("Legacy-SessionID gesetzt = %v, want %v", session.SessionID != "", tt.wantLegacy)
+			}
+		})
+	}
+}
+
+func TestProvisionRejectsUnknownVendor(t *testing.T) {
+	lifecycle, _, registry, _ := lifecycleHarness(t)
+	project := registerLifecycleProject(t, registry)
+	if _, err := lifecycle.Provision(context.Background(), SessionProvision{
+		ProjectID: project.ID, Name: "navi", Directory: project.Path,
+		Kind: SessionKindCodingAgent, Vendor: AgentVendor("cursor"),
+	}); err == nil {
+		t.Fatal("unbekannter Vendor muss abgelehnt werden")
+	}
+}
+
+func TestRegistryMigrationDefaultsVendor(t *testing.T) {
+	state := &State{Agents: []Session{{
+		ID: "s1", Name: "navi", RuntimeName: "mgt-navi", Dir: "/work/navi",
+		SessionKind: SessionKindCodingAgent, SessionID: "legacy-run",
+	}}}
+	normalizeRegistryState(state)
+	session := state.Agents[0]
+	if session.Vendor != AgentVendorClaude {
+		t.Fatalf("Vendor nach Migration = %q, want %q", session.Vendor, AgentVendorClaude)
+	}
+	if run, ok := session.AgentRun(AgentVendorClaude); !ok || run.ExternalID != "legacy-run" {
+		t.Fatalf("Legacy-Run ging verloren: %+v", session.AgentRuns)
 	}
 }

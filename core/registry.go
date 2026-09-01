@@ -542,6 +542,9 @@ func normalizeSession(session *Session) {
 			session.Purpose = SessionPurposeWork
 		}
 	}
+	if !session.IsTerm() && session.Vendor == "" {
+		session.Vendor = AgentVendorClaude
+	}
 	if session.SessionID != "" {
 		hasLegacy := false
 		for _, run := range session.AgentRuns {
@@ -583,6 +586,11 @@ func validateRegistryState(state *State) error {
 		sessionIDs[session.ID] = true
 		sessionNames[session.Name] = true
 		runtimeNames[session.RuntimeName] = true
+		if !session.IsTerm() && session.Vendor != "" {
+			if _, known := providerForVendor(session.Vendor); !known {
+				return fmt.Errorf("Session %q hat einen unbekannten Agent-Vendor %q", session.Name, session.Vendor)
+			}
+		}
 		if session.ProjectID != "" {
 			project := state.ProjectByID(session.ProjectID)
 			if project == nil {

@@ -97,6 +97,7 @@ type Session struct {
 	BaseCommit       string              `json:"base_commit,omitempty"`
 	BaseDirty        []string            `json:"base_dirty,omitempty"`
 	SessionID        string              `json:"session_id,omitempty"` // legacy Claude run identifier
+	Vendor           AgentVendor         `json:"vendor,omitempty"`
 	AgentRuns        []AgentRunRef       `json:"agent_runs,omitempty"`
 	DeployAt         time.Time           `json:"deploy_at,omitzero"`
 	LaterAt          time.Time           `json:"later_at,omitzero"`
@@ -156,6 +157,19 @@ func (a Session) AgentRun(vendor AgentVendor) (AgentRunRef, bool) {
 		return AgentRunRef{Vendor: AgentVendorClaude, ExternalID: a.SessionID}, true
 	}
 	return AgentRunRef{}, false
+}
+
+// SessionVendor is the durable vendor that starts this Session. An empty
+// stored value means Claude, which keeps every pre-multi-provider state
+// valid. Terminal Sessions host no coding agent and have no vendor.
+func (a Session) SessionVendor() AgentVendor {
+	if a.IsTerm() {
+		return ""
+	}
+	if a.Vendor != "" {
+		return a.Vendor
+	}
+	return AgentVendorClaude
 }
 
 func (s *State) AgentByName(name string) *Agent {

@@ -104,6 +104,7 @@ type SessionProvision struct {
 	Purpose          SessionPurpose
 	SpecificationRef SpecificationRef
 	InitialPrompt    string
+	Vendor           AgentVendor
 }
 
 type SessionLifecycleResult struct {
@@ -322,9 +323,23 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 			session.Kind = KindTerm
 		}
 	} else {
-		runID := NewUUID()
-		session.SessionID = runID
-		session.AgentRuns = []AgentRunRef{{Vendor: AgentVendorClaude, ExternalID: runID}}
+		vendor := request.Vendor
+		if vendor == "" {
+			vendor = AgentVendorClaude
+		}
+		provider, known := providerForVendor(vendor)
+		if !known {
+			return SessionLifecycleResult{}, fmt.Errorf("unbekannter Agent-Vendor %q", vendor)
+		}
+		session.Vendor = vendor
+		if runID := provider.NewRunID(); runID != "" {
+			if vendor == AgentVendorClaude {
+				// SessionID is the legacy Claude-only run field and stays in
+				// step with the canonical AgentRunRef.
+				session.SessionID = runID
+			}
+			session.AgentRuns = []AgentRunRef{{Vendor: vendor, ExternalID: runID}}
+		}
 	}
 	record := LifecycleRecord{
 		TransitionID: NewUUID(), SessionID: session.ID,
