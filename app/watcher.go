@@ -148,6 +148,7 @@ func (a *App) watchLoop() {
 			Quiet:         quiet,
 			Now:           time.Now(),
 		})
+		a.syncNotch(plan, snapshot)
 		executeAttentionPlan(plan)
 	}
 }

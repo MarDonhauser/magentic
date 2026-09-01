@@ -1859,6 +1859,13 @@ EventsOn('login:argo', msg => {
   toast(msg === 'ok' ? 'Argo-Login erfolgreich' : 'argocd login: ' + msg, msg !== 'ok');
   refreshDeployStatus();
 });
+EventsOn('notch://open-session', payload => {
+  if (!payload?.sessionId || !payload?.name) return;
+  openSession(payload.sessionId, payload.name);
+});
+EventsOn('notch://error', message => {
+  toast('Notch: ' + errorText(message), true);
+});
 
 function overviewSyncState() {
   if (!['stale', 'error'].includes(overviewSync.kind)) return '';
