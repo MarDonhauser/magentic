@@ -294,7 +294,7 @@ func validateHandoffTarget(session Session, observed SessionObservation) (string
 	}
 	promptTarget := promptTargetObservationFromSession(observed)
 	switch observed.Status {
-	case StatusRunning, StatusAgents, StatusShell, StatusIdle:
+	case StatusRunning, StatusAgents, StatusShell, StatusDone, StatusIdle:
 		waitForReady := promptTarget.Input != promptInputReady
 		return tool, waitForReady, nil
 	case StatusBlocked:

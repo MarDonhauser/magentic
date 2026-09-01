@@ -124,8 +124,8 @@ func TestDispatchOutboxDeliversReadyHeadAndDequeues(t *testing.T) {
 
 func TestDispatchOutboxHoldsWhenTargetIsNotReady(t *testing.T) {
 	notReady := map[string]SessionObservation{
-		"busy":    outboxObservation("session-1", StatusRunning, "arbeitet"),
-		"blocked": outboxObservation("session-1", StatusBlocked, "Do you want to proceed?"),
+		"busy":                          outboxObservation("session-1", StatusRunning, "arbeitet"),
+		"blocked":                       outboxObservation("session-1", StatusBlocked, "Do you want to proceed?"),
 		"idle without a ready composer": outboxObservation("session-1", StatusIdle, "kein Composer"),
 		"absent": {
 			SessionID: "session-1", Availability: ObservationAvailable, Presence: SessionPresenceAbsent,

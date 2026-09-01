@@ -58,6 +58,8 @@ func statusStyle(s AgentStatus) lipgloss.Style {
 		return lipgloss.NewStyle().Foreground(colAgents)
 	case StatusBlocked:
 		return lipgloss.NewStyle().Foreground(colBlocked).Bold(true)
+	case StatusDone:
+		return lipgloss.NewStyle().Foreground(colAgents)
 	case StatusDead:
 		return lipgloss.NewStyle().Foreground(colDead)
 	case StatusTerm:
@@ -155,13 +157,13 @@ func (m model) renderHeader() string {
 		counts[m.statusFor(session)]++
 	}
 	title := styleTitle.Render(" ⚡ magentic ")
-	agentsSeg := ""
-	if counts[StatusAgents] > 0 {
-		agentsSeg = fmt.Sprintf("%s %d agents   ", styleAgents.Render("◍"), counts[StatusAgents])
+	doneSeg := ""
+	if counts[StatusDone] > 0 {
+		doneSeg = fmt.Sprintf("%s %d fertig   ", styleAgents.Render("✓"), counts[StatusDone])
 	}
 	stats := fmt.Sprintf("%s %d läuft   %s%s %d wartet   %s %d idle   %s %d aus",
 		styleOK.Render("●"), counts[StatusRunning],
-		agentsSeg,
+		doneSeg,
 		styleWarn.Render("◆"), counts[StatusBlocked],
 		styleDim.Render("○"), counts[StatusIdle],
 		styleErr.Render("✗"), counts[StatusExited]+counts[StatusDead])

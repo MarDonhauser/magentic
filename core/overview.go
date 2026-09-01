@@ -136,6 +136,8 @@ func statusKey(s AgentStatus) string {
 		return "shell"
 	case StatusBlocked:
 		return "blocked"
+	case StatusDone:
+		return "done"
 	case StatusIdle:
 		return "idle"
 	case StatusExited:
@@ -149,7 +151,8 @@ func statusKey(s AgentStatus) string {
 }
 
 func agentAlive(s AgentStatus) bool {
-	return s == StatusRunning || s == StatusAgents || s == StatusShell || s == StatusBlocked || s == StatusIdle || s == StatusTerm
+	return s == StatusRunning || s == StatusAgents || s == StatusShell || s == StatusBlocked ||
+		s == StatusDone || s == StatusIdle || s == StatusTerm
 }
 
 type overviewRepositories interface {
@@ -630,7 +633,8 @@ func finishWarnings(proj *OvProject) {
 			if a.Status == "unknown" {
 				unknown = true
 			}
-			if a.Status == "running" || a.Status == "agents" || a.Status == "shell" || a.Status == "blocked" || a.Status == "idle" || a.Status == "term" {
+			if a.Status == "running" || a.Status == "agents" || a.Status == "shell" || a.Status == "blocked" ||
+				a.Status == "done" || a.Status == "idle" || a.Status == "term" {
 				alive = true
 			}
 		}

@@ -287,14 +287,14 @@ func TestPromptTerminalInputUsesBracketedPasteForMultilinePrompt(t *testing.T) {
 }
 
 func TestPromptTargetRuntimeKeepsProviderSemanticsSeparate(t *testing.T) {
-	// Gemini's screens were never recorded, so an unknown status is the truth
-	// about Magentic's knowledge and the literal queued path stays open.
+	// Gemini's screens were never recorded, so its status stays unknown — and
+	// unknown is fail-closed: nothing is typed into it.
 	gemini := promptTargetObservation{
 		Availability: ObservationAvailable, Presence: SessionPresencePresent,
 		Tool: AgentToolGemini, Status: StatusUnknown, ContentKnown: true, Input: promptInputUnknown,
 	}
-	if err := validatePromptTargetObservation("gemini", gemini); err != nil {
-		t.Fatalf("unbeobachteter Anbieter wurde an Claude-Semantik gemessen: %v", err)
+	if err := validatePromptTargetObservation("gemini", gemini); err == nil {
+		t.Fatal("eine unbeobachtete Agent-Art darf keinen Prompt bekommen")
 	}
 	// Codex was recorded, so an unfamiliar screen must not receive a prompt.
 	codex := promptTargetObservation{

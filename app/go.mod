@@ -7,6 +7,8 @@ require (
 	github.com/wailsapp/wails/v2 v2.12.0
 )
 
+require gopkg.in/yaml.v3 v3.0.1 // indirect
+
 require (
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect
 	github.com/bep/debounce v1.2.1 // indirect

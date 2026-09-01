@@ -74,29 +74,29 @@ type agentKind struct {
 // AgentKindReport is one line of the manifest validation surface: which kind a
 // file claims, where it came from, and either that it loaded or why it did not.
 type AgentKindReport struct {
-	Kind     string          `json:"kind"`
-	Label    string          `json:"label,omitempty"`
-	Source   AgentKindSource `json:"source"`
-	Path     string          `json:"path"`
-	Accepted bool            `json:"accepted"`
-	Reason   string          `json:"reason,omitempty"`
-	Overruled bool           `json:"overruled,omitempty"`
+	Kind      string          `json:"kind"`
+	Label     string          `json:"label,omitempty"`
+	Source    AgentKindSource `json:"source"`
+	Path      string          `json:"path"`
+	Accepted  bool            `json:"accepted"`
+	Reason    string          `json:"reason,omitempty"`
+	Overruled bool            `json:"overruled,omitempty"`
 }
 
 // --- YAML shape -------------------------------------------------------------
 
 type agentKindFile struct {
-	Kind            string                     `yaml:"kind"`
-	Label           string                     `yaml:"label"`
-	Tool            string                     `yaml:"tool"`
-	Vendor          string                     `yaml:"vendor"`
-	ObservedVersion string                     `yaml:"observed_version"`
-	ScreensRecorded *bool                      `yaml:"screens_recorded"`
-	Tail            int                        `yaml:"tail"`
-	PaneCommands    []agentKindPatternFile     `yaml:"pane_commands"`
+	Kind            string                            `yaml:"kind"`
+	Label           string                            `yaml:"label"`
+	Tool            string                            `yaml:"tool"`
+	Vendor          string                            `yaml:"vendor"`
+	ObservedVersion string                            `yaml:"observed_version"`
+	ScreensRecorded *bool                             `yaml:"screens_recorded"`
+	Tail            int                               `yaml:"tail"`
+	PaneCommands    []agentKindPatternFile            `yaml:"pane_commands"`
 	States          map[string][]agentKindPatternFile `yaml:"states"`
-	Composer        []agentKindPatternFile     `yaml:"composer"`
-	Details         agentKindDetailsFile       `yaml:"details"`
+	Composer        []agentKindPatternFile            `yaml:"composer"`
+	Details         agentKindDetailsFile              `yaml:"details"`
 }
 
 type agentKindPatternFile struct {
