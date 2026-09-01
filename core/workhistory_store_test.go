@@ -1,6 +1,7 @@
 package core
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 )
@@ -134,6 +135,75 @@ func TestHistoryStoreSourceRoundTripAndDeletion(t *testing.T) {
 	}
 	if _, ok, err := store.source("claude:a"); ok || err != nil {
 		t.Fatalf("after delete: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestHistoryStoreMergesEventsAcrossSources(t *testing.T) {
+	store := openTestHistoryStore(t)
+	shared := historyRecord{
+		ID: "codex:event:abc", Provider: HistoryProviderCodex, ConversationID: "conv-1",
+		Timestamp: "2026-08-30T10:00:00Z", Role: HistoryRoleAssistant,
+		Kind: HistoryEventOutput, Lineage: HistoryLineagePrimary, Text: "Antwort",
+	}
+	withText := shared
+	withText.SourceID = "codex:live"
+
+	withUsage := shared
+	withUsage.SourceID = "codex:archiv"
+	withUsage.Text = ""
+	withUsage.Model = "gpt-5"
+	withUsage.Usage = historyUsageRecord{Input: 10, InputKnown: true, Output: 4, OutputKnown: true}
+
+	if err := store.replaceSource(historySourceRow{SourceID: "codex:live", Provider: HistoryProviderCodex, Path: "/live.jsonl", ModTime: 100}, []historyRecord{withText}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.replaceSource(historySourceRow{SourceID: "codex:archiv", Provider: HistoryProviderCodex, Path: "/archiv.jsonl", ModTime: 90}, []historyRecord{withUsage}); err != nil {
+		t.Fatal(err)
+	}
+
+	var count int
+	if err := store.db.QueryRow(`SELECT count(*) FROM events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("events = %d, want 1", count)
+	}
+	var text, model string
+	var input sql.NullInt64
+	if err := store.db.QueryRow(`SELECT text, model, input_tokens FROM events`).Scan(&text, &model, &input); err != nil {
+		t.Fatal(err)
+	}
+	if text != "Antwort" {
+		t.Fatalf("text = %q, want the known one to survive", text)
+	}
+	if model != "gpt-5" || !input.Valid || input.Int64 != 10 {
+		t.Fatalf("merge lost facts: model=%q input=%#v", model, input)
+	}
+}
+
+func TestHistoryStoreReplaceSourceRemovesVanishedEvents(t *testing.T) {
+	store := openTestHistoryStore(t)
+	row := historySourceRow{SourceID: "claude:a", Provider: HistoryProviderClaude, Path: "/a.jsonl", ModTime: 10}
+	first := historyRecord{
+		ID: "claude:event:1", SourceID: "claude:a", Provider: HistoryProviderClaude,
+		Timestamp: "2026-08-30T10:00:00Z", Role: HistoryRoleDeveloper, Kind: HistoryEventPrompt,
+		Lineage: HistoryLineagePrimary, Text: "alt",
+	}
+	if err := store.replaceSource(row, []historyRecord{first}); err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	second.ID = "claude:event:2"
+	second.Text = "neu"
+	if err := store.replaceSource(row, []historyRecord{second}); err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.recordsBySource("claude:a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Text != "neu" {
+		t.Fatalf("records = %#v", records)
 	}
 }
 

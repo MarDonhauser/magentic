@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -313,4 +314,183 @@ func deleteHistorySourceTx(tx *sql.Tx, sourceID string) error {
 		return fmt.Errorf("delete source: %w", err)
 	}
 	return nil
+}
+
+// replaceSource ersetzt die Events einer Quelle vollständig und legt die Quelle
+// selbst an oder aktualisiert sie, alles in einer Transaktion. Kollisionen auf
+// event_id (z. B. wenn Codex dieselbe Konversation in sessions und
+// archived_sessions ablegt) werden über mergeHistoryRecord zusammengeführt.
+func (s *historyStore) replaceSource(row historySourceRow, records []historyRecord) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("write source: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM events_fts WHERE rowid IN (SELECT rowid FROM events WHERE source_id = ?)`, row.SourceID); err != nil {
+		return fmt.Errorf("clear source text: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM events WHERE source_id = ?`, row.SourceID); err != nil {
+		return fmt.Errorf("clear source events: %w", err)
+	}
+	for _, record := range records {
+		if err := insertHistoryRecordTx(tx, record); err != nil {
+			return err
+		}
+	}
+	if err := writeSourceRowTx(tx, row); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// insertHistoryRecordTx schreibt einen Datensatz. Kollidiert die event_id mit
+// einem bereits gespeicherten Ereignis, führt die vorhandene Fassung; fehlende
+// Tatsachen kommen aus der neuen Fassung hinzu.
+func insertHistoryRecordTx(tx *sql.Tx, record historyRecord) error {
+	existing, found, err := historyRecordByIDTx(tx, record.ID)
+	if err != nil {
+		return err
+	}
+	if found {
+		// Die vorhandene Fassung führt; fehlende Tatsachen kommen aus der neuen.
+		record = mergeHistoryRecord(existing, record)
+		if _, err := tx.Exec(`DELETE FROM events_fts WHERE rowid IN (SELECT rowid FROM events WHERE event_id = ?)`, record.ID); err != nil {
+			return fmt.Errorf("clear merged text: %w", err)
+		}
+		if _, err := tx.Exec(`DELETE FROM events WHERE event_id = ?`, record.ID); err != nil {
+			return fmt.Errorf("clear merged event: %w", err)
+		}
+	}
+	links, err := json.Marshal(historyLinksOrEmpty(record.Links))
+	if err != nil {
+		return fmt.Errorf("encode links: %w", err)
+	}
+	result, err := tx.Exec(`INSERT INTO events
+		(event_id, source_id, provider, conversation_id, occurred_at, timestamp_raw, role, kind, lineage,
+		 text, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+		 cwd, project_alias, native_id, links)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		record.ID, record.SourceID, string(record.Provider), record.ConversationID,
+		historyOccurredAtValue(record.Timestamp), record.Timestamp,
+		string(record.Role), string(record.Kind), string(record.Lineage),
+		record.Text, record.Model,
+		historyNullableInt(record.Usage.Input, record.Usage.InputKnown),
+		historyNullableInt(record.Usage.Output, record.Usage.OutputKnown),
+		historyNullableInt(record.Usage.CacheRead, record.Usage.CacheReadKnown),
+		historyNullableInt(record.Usage.CacheWrite, record.Usage.CacheWriteKnown),
+		record.CWD, record.ProjectAlias, record.NativeID, string(links))
+	if err != nil {
+		return fmt.Errorf("write event: %w", err)
+	}
+	rowID, err := result.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("write event: %w", err)
+	}
+	if _, err := tx.Exec(`INSERT INTO events_fts(rowid, text) VALUES(?, ?)`, rowID, record.Text); err != nil {
+		return fmt.Errorf("write event text: %w", err)
+	}
+	return nil
+}
+
+// historyLinksOrEmpty sorgt dafür, dass eine nil-Slice als "[]" statt als
+// "null" serialisiert wird.
+func historyLinksOrEmpty(links []string) []string {
+	if links == nil {
+		return []string{}
+	}
+	return links
+}
+
+// historyOccurredAtValue wandelt den rohen RFC3339-Zeitstempel in eine
+// sortierbare Unix-Nanosekundenzahl um, oder liefert nil, wenn der Zeitstempel
+// fehlt oder unlesbar ist.
+func historyOccurredAtValue(timestamp string) any {
+	if timestamp == "" {
+		return nil
+	}
+	parsed, err := time.Parse(time.RFC3339, timestamp)
+	if err != nil {
+		return nil
+	}
+	return parsed.UTC().UnixNano()
+}
+
+// historyNullableInt liefert nil, solange der Wert nicht bekannt ist, damit
+// unbekannte Nutzungswerte nicht als 0 gespeichert werden.
+func historyNullableInt(value int64, known bool) any {
+	if !known {
+		return nil
+	}
+	return value
+}
+
+// historyRecordColumns listet die Spalten, die einen historyRecord vollständig
+// rekonstruieren; historyRecordByIDTx und recordsBySource teilen sie sich.
+const historyRecordColumns = `event_id, source_id, provider, conversation_id, timestamp_raw, role, kind, lineage,
+	text, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+	cwd, project_alias, native_id, links`
+
+// scanHistoryRecord liest eine Zeile im Format von historyRecordColumns in
+// einen historyRecord ein.
+func scanHistoryRecord(scan func(...any) error) (historyRecord, error) {
+	var record historyRecord
+	var provider, role, kind, lineage, links string
+	var input, output, cacheRead, cacheWrite sql.NullInt64
+	err := scan(&record.ID, &record.SourceID, &provider, &record.ConversationID, &record.Timestamp,
+		&role, &kind, &lineage, &record.Text, &record.Model,
+		&input, &output, &cacheRead, &cacheWrite,
+		&record.CWD, &record.ProjectAlias, &record.NativeID, &links)
+	if err != nil {
+		return historyRecord{}, err
+	}
+	record.Provider = HistoryProvider(provider)
+	record.Role = HistoryRole(role)
+	record.Kind = HistoryEventKind(kind)
+	record.Lineage = HistoryLineage(lineage)
+	record.Usage = historyUsageRecord{
+		Input: input.Int64, InputKnown: input.Valid,
+		Output: output.Int64, OutputKnown: output.Valid,
+		CacheRead: cacheRead.Int64, CacheReadKnown: cacheRead.Valid,
+		CacheWrite: cacheWrite.Int64, CacheWriteKnown: cacheWrite.Valid,
+	}
+	if err := json.Unmarshal([]byte(links), &record.Links); err != nil {
+		return historyRecord{}, fmt.Errorf("decode links: %w", err)
+	}
+	if len(record.Links) == 0 {
+		record.Links = nil
+	}
+	return record, nil
+}
+
+// historyRecordByIDTx liest ein Ereignis anhand seiner event_id innerhalb
+// einer bestehenden Transaktion.
+func historyRecordByIDTx(tx *sql.Tx, id string) (historyRecord, bool, error) {
+	row := tx.QueryRow(`SELECT `+historyRecordColumns+` FROM events WHERE event_id = ?`, id)
+	record, err := scanHistoryRecord(row.Scan)
+	if err == sql.ErrNoRows {
+		return historyRecord{}, false, nil
+	}
+	if err != nil {
+		return historyRecord{}, false, fmt.Errorf("read event: %w", err)
+	}
+	return record, true, nil
+}
+
+// recordsBySource liest alle Ereignisse einer Quelle. Dient Tests und der
+// Aggregatprüfung.
+func (s *historyStore) recordsBySource(sourceID string) ([]historyRecord, error) {
+	rows, err := s.db.Query(`SELECT `+historyRecordColumns+` FROM events WHERE source_id = ? ORDER BY event_id`, sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("read events: %w", err)
+	}
+	defer rows.Close()
+	var out []historyRecord
+	for rows.Next() {
+		record, err := scanHistoryRecord(rows.Scan)
+		if err != nil {
+			return nil, fmt.Errorf("read events: %w", err)
+		}
+		out = append(out, record)
+	}
+	return out, rows.Err()
 }
