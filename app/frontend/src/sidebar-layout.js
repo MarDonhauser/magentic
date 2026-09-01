@@ -93,7 +93,9 @@ export function flattenSidebar(tree, parentKind = TOP, parent = '', depth = 0) {
     if (item.kind === 'divider') {
       if (!item.collapsed) rows.push(...flattenSidebar(item.children, 'divider', item.ref, depth + 1));
     } else if (item.kind === 'project') {
-      rows.push(...flattenSidebar(item.children, 'project', item.ref, depth + 1));
+      // Sessions ruecken unter ihrem Projekt nicht ein: die Liste sah schon
+      // immer so aus, und eingerueckt wird nur, was in einem Divider liegt.
+      rows.push(...flattenSidebar(item.children, 'project', item.ref, depth));
     }
   }
   return rows;

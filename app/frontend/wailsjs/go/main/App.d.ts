@@ -3,6 +3,8 @@
 import {core} from '../models';
 import {main} from '../models';
 
+export function AddDivider(arg1:string):Promise<string>;
+
 export function AddProject(arg1:string):Promise<string>;
 
 export function AgentVendors():Promise<Array<core.AgentVendorOption>>;
@@ -61,6 +63,8 @@ export function Merge(arg1:string,arg2:string,arg3:string):Promise<string>;
 
 export function MigrateDockSessions(arg1:Array<string>):Promise<Array<main.DockSessionRef>>;
 
+export function MoveSidebarItem(arg1:string,arg2:string,arg3:string,arg4:string,arg5:Array<core.SidebarRef>):Promise<void>;
+
 export function NewDockSession(arg1:string):Promise<main.DockSessionRef>;
 
 export function NewSession(arg1:string,arg2:boolean,arg3:string):Promise<string>;
@@ -77,21 +81,15 @@ export function Overview(arg1:boolean):Promise<core.Overview>;
 
 export function PickFolder():Promise<string>;
 
+export function RemoveDivider(arg1:string):Promise<void>;
+
 export function RemoveProject(arg1:string):Promise<void>;
 
 export function RemoveWorktree(arg1:string,arg2:string):Promise<void>;
 
-export function ReopenSession(arg1:string):Promise<void>;
-
-export function AddDivider(arg1:string):Promise<string>;
-
 export function RenameDivider(arg1:string,arg2:string):Promise<void>;
 
-export function RemoveDivider(arg1:string):Promise<void>;
-
-export function SetDividerCollapsed(arg1:string,arg2:boolean):Promise<void>;
-
-export function MoveSidebarItem(arg1:string,arg2:string,arg3:string,arg4:string,arg5:Array<core.SidebarRef>):Promise<void>;
+export function ReopenSession(arg1:string):Promise<void>;
 
 export function ResizeTerm(arg1:string,arg2:number,arg3:number):Promise<void>;
 
@@ -118,6 +116,8 @@ export function SessionPreview(arg1:string):Promise<main.SessionPreviewResult>;
 export function SetActiveTerm(arg1:string):Promise<void>;
 
 export function SetBreakConfig(arg1:core.BreakConfig):Promise<void>;
+
+export function SetDividerCollapsed(arg1:string,arg2:boolean):Promise<void>;
 
 export function SetMainBranch(arg1:string,arg2:string):Promise<void>;
 

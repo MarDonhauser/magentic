@@ -127,7 +127,7 @@ func sidebarMayHold(s *State, kind SidebarSlotKind, ref string, parentKind Sideb
 		}
 	case SidebarSlotProject:
 		if s.ProjectByID(ProjectID(ref)) == nil {
-			return fmt.Errorf("unbekanntes Projekt: %s", ref)
+			return fmt.Errorf("unbekannte ProjectID: %s", ref)
 		}
 		if parentKind != "" && parentKind != SidebarSlotDivider {
 			return fmt.Errorf("ein Projekt gehört auf die oberste Ebene oder in einen Divider")
@@ -150,7 +150,7 @@ func sidebarMayHold(s *State, kind SidebarSlotKind, ref string, parentKind Sideb
 		return fmt.Errorf("unbekannter Divider: %s", parent)
 	}
 	if parentKind == SidebarSlotProject && s.ProjectByID(ProjectID(parent)) == nil {
-		return fmt.Errorf("unbekanntes Projekt: %s", parent)
+		return fmt.Errorf("unbekannte ProjectID: %s", parent)
 	}
 	return nil
 }

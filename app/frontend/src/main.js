@@ -2909,7 +2909,7 @@ menuEl.addEventListener('click', async e => {
   }
 });
 sessionsEl.addEventListener('contextmenu', e => {
-  if (e.target.closest('[data-row], .session')) return;
+  if (e.target.closest('[data-row], .session, .proj-head')) return;
   e.preventDefault();
   showSidebarMenu(e.clientX, e.clientY);
 });
