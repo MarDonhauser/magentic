@@ -1304,6 +1304,14 @@ func (l *SessionLifecycle) advanceRunning(ctx context.Context, record LifecycleR
 		return l.failRecord(ctx, record, err)
 	}
 	if !exists {
+		if !record.Session.IsTerm() && record.StartMode != "new" {
+			// A vendor that assigns its own run id can only be resumed once
+			// its identity was found. A failure here is not fatal: the
+			// provider falls back to its own continuation form.
+			if resolved, resolveErr := resolveMissingAgentRun(ctx, record.Session); resolveErr == nil {
+				record.Session = resolved
+			}
+		}
 		startErr := l.runtime.Start(ctx, record.Session, record.StartMode)
 		if startErr != nil {
 			exists, err = l.runtime.Exists(ctx, record.Session)

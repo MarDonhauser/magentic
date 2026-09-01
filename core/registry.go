@@ -58,6 +58,7 @@ const (
 	registryMarkMessageAttempt
 	registryDequeueMessage
 	registryResetMessageAttempt
+	registryRecordAgentRun
 )
 
 // RegistryChange is intentionally constructed through semantic helpers. Its
@@ -79,6 +80,7 @@ type RegistryChange struct {
 	baseDirty   []string
 	message     QueuedMessage
 	messageID   string
+	agentRun    AgentRunRef
 	at          time.Time
 }
 
@@ -137,6 +139,13 @@ func RenameRegisteredSessionRuntime(sessionID SessionID, oldName, newName, newRu
 		kind: registryRenameSession, sessionID: sessionID, sessionName: oldName,
 		newName: newName, newRuntime: newRuntime,
 	}
+}
+
+// RecordAgentRun stores a vendor-qualified run reference that was discovered
+// from the vendor's own history. An existing reference for that vendor is
+// never overwritten: run identity is durable once known.
+func RecordAgentRun(sessionID SessionID, name string, run AgentRunRef) RegistryChange {
+	return RegistryChange{kind: registryRecordAgentRun, sessionID: sessionID, sessionName: name, agentRun: run}
 }
 
 // EnqueueSessionMessage appends a message to the Session's durable Outbox. A
@@ -330,7 +339,7 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 		id := state.Agents[idx].ID
 		state.Agents = append(state.Agents[:idx], state.Agents[idx+1:]...)
 		return true, "", id, nil
-	case registryMarkSeen, registryMarkLater, registryReopenSession, registryMarkDeploy, registryRenameSession:
+	case registryMarkSeen, registryMarkLater, registryReopenSession, registryMarkDeploy, registryRenameSession, registryRecordAgentRun:
 		idx := sessionIndex(state, change.sessionID, change.sessionName)
 		if idx < 0 {
 			return false, "", "", fmt.Errorf("Session %q nicht gefunden", change.sessionName)
@@ -367,6 +376,14 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 			return changed, "", session.ID, nil
 		case registryMarkDeploy:
 			session.DeployAt = at
+		case registryRecordAgentRun:
+			if change.agentRun.Vendor == "" || change.agentRun.ExternalID == "" {
+				return false, "", "", fmt.Errorf("unvollständige AgentRunRef für Session %q", session.Name)
+			}
+			if _, exists := session.AgentRun(change.agentRun.Vendor); exists {
+				return false, "", session.ID, nil
+			}
+			session.AgentRuns = append(session.AgentRuns, change.agentRun)
 		case registryRenameSession:
 			if change.newName == "" {
 				return false, "", "", fmt.Errorf("leerer Session-Name")
