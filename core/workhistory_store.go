@@ -14,6 +14,11 @@ import (
 
 const historySchemaVersion = 1
 
+// historyRetentionWindow begrenzt, wie lange Roh-Events vorgehalten werden.
+// Die dauerhaften Tagesaggregate in der Tabelle activity sind davon nicht
+// betroffen (Task 6).
+const historyRetentionWindow = 14 * 24 * time.Hour
+
 type historyStore struct {
 	path string
 	db   *sql.DB
@@ -311,6 +316,24 @@ func deleteHistorySourceTx(tx *sql.Tx, sourceID string) error {
 		return fmt.Errorf("delete source: %w", err)
 	}
 	return nil
+}
+
+// pruneEvents entfernt Roh-Events außerhalb des Aufbewahrungsfensters. Quellen
+// und Aggregate bleiben stehen: die Aggregate sind dauerhaft, und die Quellen
+// verhindern, dass eine unveränderte Datei erneut geparst wird.
+func (s *historyStore) pruneEvents(ctx context.Context, cutoff time.Time) (int, error) {
+	bound := cutoff.UTC().UnixNano()
+	const condition = `(occurred_at IS NOT NULL AND occurred_at < ?)
+		OR (occurred_at IS NULL AND source_id IN (SELECT source_id FROM sources WHERE mod_time < ?))`
+	result, err := s.db.ExecContext(ctx, `DELETE FROM events WHERE `+condition, bound, bound)
+	if err != nil {
+		return 0, fmt.Errorf("prune events: %w", err)
+	}
+	removed, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("prune events: %w", err)
+	}
+	return int(removed), nil
 }
 
 // replaceSource ersetzt die Events einer Quelle vollständig und legt die Quelle

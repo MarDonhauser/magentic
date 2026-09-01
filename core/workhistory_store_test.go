@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -275,6 +276,54 @@ func TestHistoryStoreRecordsFilterAndSubstringSearch(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("punctuation-only search = %#v, want none", got)
+	}
+}
+
+func TestHistoryStorePruneDropsOldEventsAndKeepsActivity(t *testing.T) {
+	store := openTestHistoryStore(t)
+	oldSource := historySourceRow{SourceID: "claude:alt", Provider: HistoryProviderClaude, Path: "/alt.jsonl", ModTime: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC).UnixNano()}
+	newSource := historySourceRow{SourceID: "claude:neu", Provider: HistoryProviderClaude, Path: "/neu.jsonl", ModTime: time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC).UnixNano()}
+
+	if err := store.replaceSource(oldSource, []historyRecord{
+		{ID: "alt-1", SourceID: "claude:alt", Provider: HistoryProviderClaude, Timestamp: "2026-07-01T10:00:00Z",
+			Role: HistoryRoleDeveloper, Kind: HistoryEventPrompt, Lineage: HistoryLineagePrimary, Text: "alt"},
+		{ID: "alt-2", SourceID: "claude:alt", Provider: HistoryProviderClaude, Timestamp: "",
+			Role: HistoryRoleDeveloper, Kind: HistoryEventPrompt, Lineage: HistoryLineagePrimary, Text: "alt ohne Zeit"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.replaceSource(newSource, []historyRecord{
+		{ID: "neu-1", SourceID: "claude:neu", Provider: HistoryProviderClaude, Timestamp: "2026-08-31T10:00:00Z",
+			Role: HistoryRoleDeveloper, Kind: HistoryEventPrompt, Lineage: HistoryLineagePrimary, Text: "neu"},
+		{ID: "neu-2", SourceID: "claude:neu", Provider: HistoryProviderClaude, Timestamp: "",
+			Role: HistoryRoleDeveloper, Kind: HistoryEventPrompt, Lineage: HistoryLineagePrimary, Text: "neu ohne Zeit"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cutoff := time.Date(2026, 8, 18, 0, 0, 0, 0, time.UTC)
+	removed, err := store.pruneEvents(context.Background(), cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 2 {
+		t.Fatalf("removed = %d, want 2", removed)
+	}
+	remaining, err := store.records(context.Background(), historyRecordFilter{IncludeUnknownTime: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining) != 2 {
+		t.Fatalf("remaining = %#v", remaining)
+	}
+	for _, record := range remaining {
+		if strings.HasPrefix(record.ID, "alt") {
+			t.Fatalf("old record survived: %#v", record)
+		}
+	}
+	// Die Quellen selbst bleiben stehen, damit ihre Aggregate nicht neu entstehen müssen.
+	if _, ok, err := store.source("claude:alt"); !ok || err != nil {
+		t.Fatalf("source removed: ok=%v err=%v", ok, err)
 	}
 }
 
