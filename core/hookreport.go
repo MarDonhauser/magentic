@@ -177,6 +177,14 @@ func (s *HookReportStore) fresh(id SessionID, now time.Time) (hookRecord, bool) 
 	return record, true
 }
 
+// forget drops every recorded report. Tests use it so one Session's report does
+// not leak into another test's Observation.
+func (s *HookReportStore) forget() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.records = map[SessionID]hookRecord{}
+}
+
 // correlateHookReport resolves a report to a Session under stable identities.
 // A RuntimeName is only an address together with the vendor's AgentRunRef, so a
 // report for a runtime that a different run has since taken over is discarded.
