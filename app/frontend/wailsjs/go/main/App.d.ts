@@ -37,6 +37,10 @@ export function ClearNotch(arg1:string):Promise<void>;
 
 export function CloseTerm(arg1:string):Promise<void>;
 
+export function CompleteCommands(arg1:string,arg2:string):Promise<Array<core.SlashCommand>>;
+
+export function CompleteFiles(arg1:string,arg2:string):Promise<Array<string>>;
+
 export function DeleteSessionAutomation(arg1:string,arg2:string):Promise<void>;
 
 export function Deploy(arg1:string):Promise<string>;
@@ -80,6 +84,8 @@ export function OpenTerm(arg1:string,arg2:string,arg3:number,arg4:number):Promis
 export function Overview(arg1:boolean):Promise<core.Overview>;
 
 export function PickFolder():Promise<string>;
+
+export function PromptLinePattern(arg1:string):Promise<string>;
 
 export function RemoveDivider(arg1:string):Promise<void>;
 

@@ -644,6 +644,54 @@ func (a *App) DeleteSessionAutomation(sessionID, automationID string) error {
 	return err
 }
 
+// completionResultLimit deckelt, was eine Completion-Abfrage zurückgibt. Mehr
+// als das liest niemand in einem Popover.
+const completionResultLimit = 50
+
+// CompleteFiles liefert Worktree-Pfade der Session für das @-Menü. Ein Fehler
+// beim Lesen ist kein Fehler der Eingabe: die Liste bleibt dann leer.
+func (a *App) CompleteFiles(sessionID, query string) ([]string, error) {
+	_, session, err := loadSessionByID(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	paths, err := core.WorktreeFiles(session, query, completionResultLimit)
+	if err != nil {
+		return []string{}, nil
+	}
+	return paths, nil
+}
+
+// CompleteCommands liefert die Befehle des Session-Vendors für das /-Menü.
+func (a *App) CompleteCommands(sessionID, query string) ([]core.SlashCommand, error) {
+	_, session, err := loadSessionByID(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	needle := strings.ToLower(strings.TrimSpace(query))
+	matches := []core.SlashCommand{}
+	for _, command := range core.SlashCommands(session.SessionVendor(), session.Dir) {
+		if needle != "" && !strings.HasPrefix(strings.ToLower(command.Name), needle) {
+			continue
+		}
+		matches = append(matches, command)
+		if len(matches) >= completionResultLimit {
+			break
+		}
+	}
+	return matches, nil
+}
+
+// PromptLinePattern sagt dem Frontend, woran es die Eingabezeile des Agenten im
+// Terminalpuffer erkennt. Leer heißt: nichts verdecken.
+func (a *App) PromptLinePattern(sessionID string) string {
+	_, session, err := loadSessionByID(sessionID)
+	if err != nil {
+		return ""
+	}
+	return core.PromptLinePattern(session.SessionVendor())
+}
+
 // DiscardQueuedMessage removes a queued message the user no longer wants.
 func (a *App) DiscardQueuedMessage(sessionID, messageID string) error {
 	return core.DiscardQueuedMessage(core.SessionID(strings.TrimSpace(sessionID)), strings.TrimSpace(messageID))

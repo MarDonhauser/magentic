@@ -926,6 +926,22 @@ export namespace core {
 	        this.ref = source["ref"];
 	    }
 	}
+	export class SlashCommand {
+	    name: string;
+	    description: string;
+	    source: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SlashCommand(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.source = source["source"];
+	    }
+	}
 	export class StatsTotals {
 	    days: number;
 	    prompts: number;

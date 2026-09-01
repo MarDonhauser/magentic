@@ -70,6 +70,14 @@ export function CloseTerm(arg1) {
   return window['go']['main']['App']['CloseTerm'](arg1);
 }
 
+export function CompleteCommands(arg1, arg2) {
+  return window['go']['main']['App']['CompleteCommands'](arg1, arg2);
+}
+
+export function CompleteFiles(arg1, arg2) {
+  return window['go']['main']['App']['CompleteFiles'](arg1, arg2);
+}
+
 export function DeleteSessionAutomation(arg1, arg2) {
   return window['go']['main']['App']['DeleteSessionAutomation'](arg1, arg2);
 }
@@ -156,6 +164,10 @@ export function Overview(arg1) {
 
 export function PickFolder() {
   return window['go']['main']['App']['PickFolder']();
+}
+
+export function PromptLinePattern(arg1) {
+  return window['go']['main']['App']['PromptLinePattern'](arg1);
 }
 
 export function RemoveDivider(arg1) {
