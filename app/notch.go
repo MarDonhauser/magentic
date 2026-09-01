@@ -204,7 +204,7 @@ func (a *App) RespondToNotch(response NotchResponse) error {
 		a.notchEvent = nil
 	}
 	a.notchMu.Unlock()
-	nativeAcknowledgeNotch(event.ID)
+	nativeAcknowledgeNotch()
 
 	var actionErr error
 	switch response.OptionID {

@@ -44,10 +44,8 @@ func nativeClearNotch(id string) error {
 	return nil
 }
 
-func nativeAcknowledgeNotch(id string) {
-	value := C.CString(id)
-	defer C.free(unsafe.Pointer(value))
-	C.acknowledgeNotchEventC(value)
+func nativeAcknowledgeNotch() {
+	C.acknowledgeNotchEventC()
 }
 
 //export magenticNotchResponse

@@ -5,6 +5,6 @@ void createNotchWindowC(const char *document);
 void destroyNotchWindowC(void);
 void showNotchEventC(const char *payload);
 void clearNotchEventC(const char *identifier);
-void acknowledgeNotchEventC(const char *identifier);
+void acknowledgeNotchEventC(void);
 
 #endif
