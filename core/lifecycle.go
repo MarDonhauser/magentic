@@ -534,6 +534,8 @@ func (l *SessionLifecycle) SwitchVendor(ctx context.Context, sessionID SessionID
 		if target == nil {
 			return fmt.Errorf("Session %q wurde während des Wechsels entfernt", resolved.Name)
 		}
+		// Intent only: startCommandForSession asks the vendor's storage whether
+		// the stored run really exists and corrects the form accordingly.
 		mode := "new"
 		if _, hasRun := target.AgentRun(vendor); hasRun {
 			mode = "resume"
@@ -1735,18 +1737,16 @@ func (tmuxLifecycleRuntime) Start(ctx context.Context, session Session, mode str
 	if info, err := os.Stat(session.Dir); err != nil || !info.IsDir() {
 		return fmt.Errorf("Session directory %q is unavailable", session.Dir)
 	}
-	var provider AgentProvider
 	if !session.IsTerm() {
 		// The binary check happens before the tmux Session exists, so a
 		// missing program leaves nothing behind to clean up.
-		resolved, err := resolveSessionProvider(session)
+		provider, err := resolveSessionProvider(session)
 		if err != nil {
 			return err
 		}
-		if !providerBinaryAvailable(resolved) {
-			return fmt.Errorf("%s ist nicht installiert (%s nicht im PATH)", resolved.Vendor(), resolved.Binary())
+		if !providerBinaryAvailable(provider) {
+			return fmt.Errorf("%s ist nicht installiert (%s nicht im PATH)", provider.Vendor(), provider.Binary())
 		}
-		provider = resolved
 	}
 	args := []string{"new-session", "-d", "-s", session.TmuxName(), "-c", session.Dir, "-x", "220", "-y", "50"}
 	if out, err := exec.CommandContext(ctx, "tmux", args...).CombinedOutput(); err != nil {
@@ -1756,11 +1756,7 @@ func (tmuxLifecycleRuntime) Start(ctx context.Context, session Session, mode str
 	if session.IsTerm() {
 		return nil
 	}
-	var runRef *AgentRunRef
-	if run, ok := session.AgentRun(provider.Vendor()); ok {
-		runRef = &run
-	}
-	command, err := provider.StartCommand(session, runRef, mode)
+	command, err := startCommandForSession(session, mode)
 	if err != nil {
 		return err
 	}

@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -307,6 +308,10 @@ func TestResolveSessionProvider(t *testing.T) {
 }
 
 func TestStartCommandForSession(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	writeFile(t, filepath.Join(home, ".codex", "sessions", "rollout-2026-09-01T11-24-14-abc-123.jsonl"), "{}\n")
 	session := Session{
 		Name: "navi", RuntimeName: "mgt-navi", SessionKind: SessionKindCodingAgent,
 		Vendor:    AgentVendorCodex,
