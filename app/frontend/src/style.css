@@ -1743,6 +1743,30 @@ body.tl-open #timeline { display: flex; }
   grid-template-columns: 1fr 1fr;
   grid-auto-rows: 1fr;
 }
+#hydra-handoff-panel {
+  position: absolute;
+  z-index: 6;
+  top: 50px;
+  left: 10px;
+  right: 8px;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-soft) 52%, var(--surface));
+  color: var(--accent);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-semibold);
+  box-shadow: var(--card-shadow);
+}
+#hydra-handoff-panel[hidden] { display: none; }
+#hydra-handoff-panel:not([hidden]) ~ #hydra-grid { inset-block-start: 96px; }
+#hydra-handoff-panel .ico { width: 15px; height: 15px; flex: none; }
+#hydra-handoff-panel[aria-busy="true"] .ico { animation: handoff-pulse 900ms ease-in-out infinite alternate; }
+@keyframes handoff-pulse { to { opacity: 0.35; } }
 #terms.hydra #hydra-grid { display: grid; }
 #terms.hydra > .term-wrap { display: none; }
 #hydra-grid.single { grid-template-columns: 1fr; }
@@ -1875,6 +1899,83 @@ body.tl-open #timeline { display: flex; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+#handoff-dialog {
+  width: min(520px, calc(100vw - 32px));
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--popover-shadow);
+}
+#handoff-dialog::backdrop { background: rgba(8, 10, 14, 0.68); }
+#handoff-dialog form { padding: 20px; }
+.handoff-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.handoff-dialog-kicker {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: var(--fs-meta);
+  letter-spacing: 0.04em;
+}
+.handoff-dialog-head h2 { margin: 0; font-size: 20px; letter-spacing: -0.015em; }
+.handoff-dialog-close {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 22px;
+  cursor: pointer;
+}
+.handoff-dialog-close:hover { background: var(--raise-2); color: var(--ink); }
+.handoff-dialog-close:focus-visible,
+.handoff-context-option:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.handoff-dialog-route {
+  margin: 18px 0 5px;
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.handoff-dialog-detail { margin: 0 0 14px; color: var(--muted); font-size: var(--fs-label); }
+.handoff-context-options { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; }
+.handoff-context-option {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--raise);
+  cursor: pointer;
+}
+.handoff-context-option:has(input:checked) {
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
+  background: var(--accent-soft);
+}
+.handoff-context-option:has(input:disabled) { cursor: not-allowed; opacity: 0.52; }
+.handoff-context-option input { margin: 2px 0 0; accent-color: var(--accent); }
+.handoff-context-option span { display: grid; gap: 3px; }
+.handoff-context-option strong { font-size: var(--fs-label); }
+.handoff-context-option small { color: var(--muted); font-size: var(--fs-meta); line-height: var(--lh-snug); }
+.handoff-dialog-note {
+  margin: 10px 0 0;
+  color: var(--warning);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-snug);
+}
+.handoff-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 #hydra-handoff-status.is-error { color: var(--critical); }
 #hydra-handoff-status.is-success { color: var(--good); }
 #hydra-handoff-status.is-handoff .ico { width: 13px; height: 13px; }
@@ -1912,6 +2013,7 @@ body.session-magnet-dragging * { cursor: grabbing !important; user-select: none 
   .hydra-head .hh-magnet,
   .hydra-head .hh-max,
   .hydra-head .hh-kill { transition: none; }
+  #hydra-handoff-panel[aria-busy="true"] .ico { animation: none; }
 }
 
 .proj-head .pname { cursor: pointer; }

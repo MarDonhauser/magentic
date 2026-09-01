@@ -79,6 +79,7 @@
         <div id="stats-view"></div>
         <div id="terms">
             <div id="term-bar"></div>
+            <section id="hydra-handoff-panel" role="status" aria-live="polite" aria-atomic="true" hidden></section>
             <div id="hydra-grid"></div>
             <section id="term-session-state" aria-live="polite">
                 <span class="term-state-icon" id="term-state-icon" aria-hidden="true"></span>
@@ -110,7 +111,99 @@
         <div id="tl-body"><div class="none">lade…</div></div>
     </aside>
 </div>
+<dialog id="handoff-dialog" aria-labelledby="handoff-dialog-title" aria-describedby="handoff-dialog-detail">
+    <form id="handoff-dialog-form">
+        <header class="handoff-dialog-head">
+            <div>
+                <span class="handoff-dialog-kicker">Session-Wechsel</span>
+                <h2 id="handoff-dialog-title">Zu einer anderen KI wechseln?</h2>
+            </div>
+            <button type="button" class="handoff-dialog-close" id="handoff-dialog-close" aria-label="Wechsel abbrechen">×</button>
+        </header>
+        <p id="handoff-dialog-route" class="handoff-dialog-route"></p>
+        <p id="handoff-dialog-detail" class="handoff-dialog-detail">Soll die neue Session den bisherigen Arbeitsstand erhalten?</p>
+        <fieldset class="handoff-context-options">
+            <legend class="sr-only">Umfang der Kontextübergabe</legend>
+            <label class="handoff-context-option">
+                <input type="radio" name="handoff-context" value="with-history" checked>
+                <span><strong>Mit kompaktem Verlauf</strong><small>Ziel, Entscheidungen, Änderungen, Tests, offene Punkte und nächster Schritt.</small></span>
+            </label>
+            <label class="handoff-context-option">
+                <input type="radio" name="handoff-context" value="without-history">
+                <span><strong>Ohne Verlauf wechseln</strong><small>Die Zielsession öffnet ohne Kontext aus der bisherigen Session.</small></span>
+            </label>
+        </fieldset>
+        <p id="handoff-dialog-note" class="handoff-dialog-note" hidden></p>
+        <footer class="handoff-dialog-actions">
+            <button type="button" class="btn" id="handoff-dialog-cancel">Abbrechen</button>
+            <button type="submit" class="btn primary" id="handoff-dialog-submit">Session wechseln</button>
+        </footer>
+    </form>
+</dialog>
 <div id="toast"></div>
+<dialog id="automation-dialog" aria-labelledby="automation-title">
+    <div class="automation-sheet">
+        <header class="automation-head">
+            <span class="automation-symbol" aria-hidden="true">
+                <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            </span>
+            <span class="automation-heading">
+                <h2 id="automation-title">Automatisierung</h2>
+                <span id="automation-session-name"></span>
+            </span>
+            <button type="button" class="automation-close" id="automation-close" aria-label="Automatisierung schließen">
+                <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+        </header>
+        <form id="automation-form">
+            <div class="automation-loading" id="automation-loading" role="status">Zeitplan wird geladen …</div>
+            <div class="automation-fields" id="automation-fields" hidden>
+                <label class="automation-field" for="automation-name">
+                    <span>Name</span>
+                    <input id="automation-name" name="automation-name" maxlength="80" autocomplete="off" required placeholder="z. B. Build regelmäßig prüfen">
+                </label>
+                <fieldset class="automation-section">
+                    <legend>Zeitplan</legend>
+                    <div class="automation-schedule">
+                        <label class="automation-field" for="automation-cadence">
+                            <span>Wiederholen</span>
+                            <select id="automation-cadence" name="automation-cadence">
+                                <option value="15">Alle 15 Minuten</option>
+                                <option value="30">Alle 30 Minuten</option>
+                                <option value="60">Stündlich</option>
+                                <option value="120">Alle 2 Stunden</option>
+                                <option value="240">Alle 4 Stunden</option>
+                                <option value="480">Alle 8 Stunden</option>
+                                <option value="1440">Täglich</option>
+                                <option value="10080">Wöchentlich</option>
+                            </select>
+                        </label>
+                        <label class="automation-field" for="automation-next-run">
+                            <span>Erster nächster Lauf</span>
+                            <input id="automation-next-run" name="automation-next-run" type="datetime-local" required>
+                        </label>
+                    </div>
+                    <p class="automation-help">Danach wird die Anweisung im gewählten Abstand erneut an dieselbe Session gesendet.</p>
+                </fieldset>
+                <label class="automation-field" for="automation-instructions">
+                    <span>Anweisungen</span>
+                    <textarea id="automation-instructions" name="automation-instructions" rows="6" required placeholder="Was soll der Agent bei jedem Lauf prüfen oder erledigen?"></textarea>
+                </label>
+                <label class="automation-enabled" for="automation-enabled">
+                    <input id="automation-enabled" name="automation-enabled" type="checkbox" checked>
+                    <span><strong>Automatisierung aktiv</strong><small>Wenn pausiert, bleibt der Zeitplan gespeichert, führt aber nichts aus.</small></span>
+                </label>
+                <p class="automation-meta" id="automation-meta" aria-live="polite"></p>
+            </div>
+            <footer class="automation-actions">
+                <button type="button" class="btn danger" id="automation-delete" hidden>Entfernen</button>
+                <span class="automation-action-spacer"></span>
+                <button type="button" class="btn" id="automation-cancel">Abbrechen</button>
+                <button type="submit" class="btn primary" id="automation-save">Automatisierung speichern</button>
+            </footer>
+        </form>
+    </div>
+</dialog>
 <script src="./src/main.js" type="module"></script>
 </body>
 </html>

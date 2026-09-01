@@ -856,10 +856,69 @@ for (const id of ['graph-view', 'board-view']) {
 }
 
 const hydraGridEl = $('hydra-grid');
+
+const handoffDialogEl = $('handoff-dialog');
+const handoffDialogFormEl = $('handoff-dialog-form');
+let resolveHandoffDecision = null;
+
+function finishHandoffDecision(mode = null) {
+  const resolve = resolveHandoffDecision;
+  resolveHandoffDecision = null;
+  if (handoffDialogEl.open) handoffDialogEl.close();
+  resolve?.(mode);
+}
+
+function confirmHandoff(source, target) {
+  finishHandoffDecision();
+  const sourceAgent = agentInfo(source.name, source.id);
+  const targetAgent = agentInfo(target.name, target.id);
+  const sourceTool = sessionToolLabel(sourceAgent);
+  const targetTool = sessionToolLabel(targetAgent);
+  $('handoff-dialog-title').textContent = `Zu ${target.name} wechseln?`;
+  $('handoff-dialog-route').textContent = `${sourceTool} · ${source.name}  →  ${targetTool} · ${target.name}`;
+
+  const historyInput = handoffDialogFormEl.elements.namedItem('handoff-context')[0];
+  const withoutHistoryInput = handoffDialogFormEl.elements.namedItem('handoff-context')[1];
+  const canTransferHistory = targetAgent?.handoffTarget === true;
+  historyInput.disabled = !canTransferHistory;
+  historyInput.checked = canTransferHistory;
+  withoutHistoryInput.checked = !canTransferHistory;
+  const note = $('handoff-dialog-note');
+  note.hidden = canTransferHistory;
+  note.textContent = canTransferHistory
+    ? ''
+    : `Eine sichere Verlaufsübergabe an ${targetTool} ist noch nicht verfügbar. Der Wechsel ohne Verlauf bleibt möglich.`;
+
+  handoffDialogEl.showModal();
+  requestAnimationFrame(() => (canTransferHistory ? historyInput : withoutHistoryInput).focus());
+  return new Promise(resolve => { resolveHandoffDecision = resolve; });
+}
+
+handoffDialogFormEl.addEventListener('submit', event => {
+  event.preventDefault();
+  const selected = new FormData(handoffDialogFormEl).get('handoff-context');
+  finishHandoffDecision(String(selected || ''));
+});
+$('handoff-dialog-close').onclick = () => finishHandoffDecision();
+$('handoff-dialog-cancel').onclick = () => finishHandoffDecision();
+handoffDialogEl.addEventListener('cancel', event => {
+  event.preventDefault();
+  finishHandoffDecision();
+});
+handoffDialogEl.addEventListener('click', event => {
+  if (event.target !== handoffDialogEl) return;
+  const box = handoffDialogEl.getBoundingClientRect();
+  if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) {
+    finishHandoffDecision();
+  }
+});
+
 const hydraHandoff = createHydraHandoff({
   root: hydraGridEl,
-  statusElement: () => $('hydra-handoff-status'),
+  statusElement: () => $('hydra-handoff-panel'),
   submit: (sourceId, targetId) => HandoffSession(sourceId, targetId),
+  confirm: confirmHandoff,
+  openTarget: target => openSession(target.id, target.name),
   notify: toast,
   renderIcon: () => icon('magnet'),
   formatError: errorText,
@@ -899,7 +958,7 @@ function updateHydraBar() {
     `<button class="btn tiny" id="tb-back" title="Übersicht (⌘0)">‹ Übersicht</button>` +
     `<span class="dot" style="background:var(--accent)"></span>` +
     `<span class="tb-name">${developerIcon('claude')} Hydra · ${esc(hydraProject)}</span>` +
-    `<span class="tb-st" id="hydra-handoff-status" role="status" aria-live="polite" aria-atomic="true"></span>` +
+    `<span class="tb-st">${agents.length} ${agents.length === 1 ? 'Session' : 'Sessions'} parallel</span>` +
     `<span class="tb-actions">` +
     `<button class="btn tiny" id="tb-add" title="Neue Session in ${esc(hydraProject)} — erscheint direkt im Raster">${developerIcon('claude')} Session</button>` +
     `<button class="btn tiny" id="tb-term" title="Reines Terminal in ${esc(hydraProject)} — Shell statt Claude">${developerIcon('bash')} Terminal</button></span>`;

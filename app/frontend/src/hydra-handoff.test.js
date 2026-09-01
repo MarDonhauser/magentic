@@ -55,7 +55,7 @@ test('a stale request cannot overwrite a newer handoff after a forced reset', as
   assert.equal(coordinator.snapshot().target.id, 'target-b');
 
   second.resolve();
-  assert.deepEqual(await requestB, { ok: true });
+  assert.deepEqual(await requestB, { ok: true, mode: 'with-history', target: { id: 'target-b', name: 'Ziel B' } });
   assert.equal(coordinator.snapshot().kind, 'idle');
   assert.equal(coordinator.snapshot().feedback.kind, 'success');
   assert.match(coordinator.snapshot().feedback.message, /Aufbereitungsauftrag.*zugestellt/);
@@ -83,7 +83,7 @@ test('leaving and reconciling cannot unlock a request that is still in flight', 
   assert.deepEqual(requests, [['source-a', 'target-a']]);
 
   running.resolve();
-  assert.deepEqual(await request, { ok: true });
+  assert.deepEqual(await request, { ok: true, mode: 'with-history', target: { id: 'target-a', name: 'Ziel A' } });
   assert.equal(coordinator.snapshot().kind, 'idle');
   assert.deepEqual(requests, [['source-a', 'target-a']]);
 });

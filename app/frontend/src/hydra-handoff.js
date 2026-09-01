@@ -48,14 +48,27 @@ export function handoffTargetReason(sourceId, agent) {
   return '';
 }
 
+function switchTargetReason(sourceId, agent) {
+  if (!agent) return 'Zielsession nicht gefunden';
+  if (!agent.id) return 'Für dieses Ziel ist keine stabile Session-ID verfügbar';
+  if (agent.id === sourceId) return 'Quelle und Ziel müssen verschieden sein';
+  if (['exited', 'dead'].includes(agent.status)) return `${agent.name} läuft nicht mehr`;
+  if (agent.term && agent.tool === 'bash') return 'Ein reines Terminal ist kein KI-Ziel';
+  return '';
+}
+
 // This is the deterministic core of the interaction. It knows stable session
 // identity and async request ordering, but nothing about DOM or pointer events.
 export function createHandoffCoordinator({
   submit,
+  confirm = () => 'with-history',
+  openTarget = () => {},
   formatError = defaultErrorText,
   onChange = () => {},
 } = {}) {
   if (typeof submit !== 'function') throw new TypeError('submit must be a function');
+  if (typeof confirm !== 'function') throw new TypeError('confirm must be a function');
+  if (typeof openTarget !== 'function') throw new TypeError('openTarget must be a function');
 
   let agents = new Map();
   let state = idleState();
@@ -127,12 +140,52 @@ export function createHandoffCoordinator({
     const sourceId = state.sourceId;
     const source = agents.get(sourceId);
     const target = agents.get(targetId);
-    const reason = handoffTargetReason(sourceId, target);
+    const reason = switchTargetReason(sourceId, target);
     if (reason) return reject(reason, sourceId);
 
     const requestId = ++requestEpoch;
     const sourceSnapshot = sessionRef(source);
     const targetSnapshot = sessionRef(target);
+    state = {
+      kind: 'confirming',
+      sourceId,
+      targetId,
+      source: sourceSnapshot,
+      target: targetSnapshot,
+      requestId,
+      feedback: null,
+    };
+    emit();
+
+    let mode;
+    try {
+      mode = confirm(sourceSnapshot, targetSnapshot);
+      if (mode && typeof mode.then === 'function') mode = await mode;
+    } catch (error) {
+      if (requestId !== requestEpoch) return { ok: false, stale: true };
+      return reject(`Wechsel konnte nicht bestätigt werden: ${formatError(error)}`, sourceId);
+    }
+    if (requestId !== requestEpoch || state.kind !== 'confirming' || state.requestId !== requestId) {
+      return { ok: false, stale: true };
+    }
+    if (mode !== 'with-history' && mode !== 'without-history') {
+      state = { kind: 'armed', sourceId, source: sourceSnapshot, feedback: null };
+      emit();
+      return { ok: false, cancelled: true };
+    }
+    if (mode === 'without-history') {
+      state = idleState(feedback(
+        'success',
+        `Zu „${targetSnapshot.name}“ gewechselt — ohne Verlauf`,
+        { source: sourceSnapshot, target: targetSnapshot },
+      ));
+      emit();
+      openTarget(targetSnapshot);
+      return { ok: true, mode, target: targetSnapshot };
+    }
+
+    const handoffReason = handoffTargetReason(sourceId, target);
+    if (handoffReason) return reject(handoffReason, sourceId);
     state = {
       kind: 'submitting',
       sourceId,
@@ -155,7 +208,8 @@ export function createHandoffCoordinator({
         { source: sourceSnapshot, target: targetSnapshot },
       ));
       emit();
-      return { ok: true };
+      openTarget(targetSnapshot);
+      return { ok: true, mode, target: targetSnapshot };
     } catch (error) {
       if (requestId !== requestEpoch || state.kind !== 'submitting' || state.requestId !== requestId) {
         return { ok: false, stale: true };
@@ -165,7 +219,7 @@ export function createHandoffCoordinator({
   };
 
   const activate = id => {
-    if (state.kind === 'submitting') return Promise.resolve({ ok: false, busy: true });
+    if (state.kind === 'submitting' || state.kind === 'confirming') return Promise.resolve({ ok: false, busy: true });
     if (state.kind === 'armed') {
       if (state.sourceId === id) {
         cancel();
@@ -200,6 +254,14 @@ export function createHandoffCoordinator({
 
 function statusPresentation(state, count) {
   const feedback = state.feedback;
+  if (state.kind === 'confirming') {
+    return {
+      active: true,
+      busy: false,
+      tone: '',
+      message: `${state.source?.name || 'Quelle'} → ${state.target?.name || 'Ziel'}: Verlauf auswählen`,
+    };
+  }
   if (state.kind === 'submitting') {
     return {
       active: true,
@@ -244,6 +306,8 @@ export function createHydraHandoff({
   root,
   statusElement,
   submit,
+  confirm,
+  openTarget,
   notify = () => {},
   renderIcon = () => '',
   formatError = defaultErrorText,
@@ -265,6 +329,8 @@ export function createHydraHandoff({
 
   const coordinator = createHandoffCoordinator({
     submit,
+    confirm,
+    openTarget,
     formatError,
     onChange: state => {
       if (disposed) return;
@@ -292,6 +358,7 @@ export function createHydraHandoff({
     const element = statusElement();
     if (!element) return;
     const presentation = statusPresentation(state, agentCount);
+    element.hidden = !presentation.active;
     element.classList.toggle('is-handoff', presentation.active);
     element.classList.toggle('is-error', presentation.tone === 'is-error');
     element.classList.toggle('is-success', presentation.tone === 'is-success');
@@ -310,7 +377,7 @@ export function createHydraHandoff({
     const state = providedState || coordinator.snapshot();
     const sourceId = state.source?.id || state.sourceId || '';
     const targetId = state.target?.id || state.targetId || '';
-    const busy = state.kind === 'submitting';
+    const busy = state.kind === 'submitting' || state.kind === 'confirming';
     const status = statusElement();
 
     for (const wrap of root.querySelectorAll('.term-wrap')) {
@@ -321,7 +388,7 @@ export function createHydraHandoff({
       if (!button) continue;
       const isSource = !!sourceId && id === sourceId;
       const sourceReason = handoffSourceReason(agent);
-      const targetReason = sourceId ? handoffTargetReason(sourceId, agent) : '';
+      const targetReason = sourceId ? switchTargetReason(sourceId, agent) : '';
       const isTarget = !!sourceId && (busy ? id === targetId : !targetReason);
       const unavailable = sourceId ? !!targetReason && !isSource : !!sourceReason;
 
@@ -392,7 +459,7 @@ export function createHydraHandoff({
 
   function onPointerDown(event) {
     const button = magnetButton(event.target);
-    if (!button || event.button !== 0 || coordinator.snapshot().kind === 'submitting') return;
+    if (!button || event.button !== 0 || ['submitting', 'confirming'].includes(coordinator.snapshot().kind)) return;
     const session = pointerSession(button);
     const state = coordinator.snapshot();
     if (state.kind === 'armed' && state.source?.id !== session.id) return;
@@ -448,7 +515,7 @@ export function createHydraHandoff({
     const candidate = doc.elementFromPoint(event.clientX, event.clientY)?.closest?.('.term-wrap');
     const wrap = candidate && root.contains(candidate) ? candidate : null;
     const nextId = wrap?.dataset.sessionId || '';
-    const validId = nextId && !coordinator.targetReason(drag.sourceId, nextId) ? nextId : '';
+    const validId = nextId && !switchTargetReason(drag.sourceId, agentsById.get(nextId)) ? nextId : '';
     if (validId !== drag.overId) {
       drag.overId = validId;
       render();
@@ -494,7 +561,7 @@ export function createHydraHandoff({
     const button = magnetButton(event.target);
     if (!button) return;
     event.stopPropagation();
-    if (suppressClick || coordinator.snapshot().kind === 'submitting') {
+    if (suppressClick || ['submitting', 'confirming'].includes(coordinator.snapshot().kind)) {
       event.preventDefault();
       return;
     }
@@ -502,7 +569,7 @@ export function createHydraHandoff({
     const state = coordinator.snapshot();
     if (state.kind !== 'armed') sourceTrigger = button;
     const reason = state.kind === 'armed'
-      ? handoffTargetReason(state.source?.id || state.sourceId, session.agent)
+      ? switchTargetReason(state.source?.id || state.sourceId, session.agent)
       : handoffSourceReason(session.agent);
     if (reason) {
       coordinator.reject(reason, state.kind === 'armed' ? state.source?.id || state.sourceId : '');
@@ -514,6 +581,7 @@ export function createHydraHandoff({
   function onKeyDown(event) {
     const state = coordinator.snapshot();
     if (event.key !== 'Escape' || (!drag && state.kind === 'idle')) return;
+    if (state.kind === 'confirming') return;
     event.preventDefault();
     event.stopImmediatePropagation();
     if (state.kind === 'submitting') return;
