@@ -636,6 +636,27 @@ body.reordering .pname { pointer-events: none; }
   font-weight: var(--fw-semibold);
 }
 .usage-source .dev-icon { width: 13px; height: 13px; }
+.usage-track {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+.usage-track::-webkit-scrollbar { display: none; }
+.usage-page { flex: 0 0 100%; min-width: 100%; scroll-snap-align: start; }
+.usage-dots { display: flex; justify-content: center; gap: 5px; margin-top: 7px; }
+.usage-dot {
+  width: 5px;
+  height: 5px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--grid);
+  cursor: pointer;
+  transition: background .15s ease;
+}
+.usage-dot.on { background: var(--ink-2); }
 .ubar-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
 .ulabel { color: var(--muted); font-size: var(--fs-meta); width: 20px; }
 .ubar { flex: 1; height: 5px; background: var(--grid); border-radius: 3px; overflow: hidden; }
@@ -754,6 +775,23 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
   border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px;
 }
 .tb-branch.wt { color: var(--info); border-color: rgba(94,183,232,0.4); }
+.tb-vendors {
+  display: inline-flex; flex: none; align-items: center;
+  border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+  background: var(--raise);
+}
+.tb-vendor {
+  display: flex; align-items: center; justify-content: center;
+  width: 26px; height: 22px; padding: 0;
+  border: 0; border-left: 1px solid var(--border);
+  background: transparent; cursor: pointer; opacity: .5;
+  transition: opacity .15s ease, background .15s ease;
+}
+.tb-vendor:first-child { border-left: 0; }
+.tb-vendor:hover { opacity: .9; background: var(--raise-2); }
+.tb-vendor.on { opacity: 1; background: var(--raise-2); cursor: default; }
+.tb-vendor.ask { opacity: 1; background: rgba(224,108,117,0.18); }
+.tb-vendor .dev-icon { width: 14px; height: 14px; }
 .tb-st { color: var(--muted); font-size: var(--fs-label); }
 .tb-proj {
   color: var(--muted); font-size: var(--fs-meta);
@@ -1315,20 +1353,32 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
 .inline-input:focus { border-color: var(--accent); }
 .inline-input.wide { flex: 1; min-width: 160px; }
 
-.stamp { color: var(--muted); font-size: var(--fs-meta); text-align: right; padding-top: 4px; }
+/* Die letzte Aktion der Seite und ihr Zeitstempel teilen sich eine Zeile,
+   damit der Stand nicht frei im leeren Raum haengt. */
+.overview-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin-top: var(--space-md);
+}
+.stamp { color: var(--muted); font-size: var(--fs-meta); }
 
+/* Status und Bedienelement waren als identische Pillen nicht auseinander zu
+   halten. Ein Status ist jetzt reiner Text; eine Pille hat nur noch um sich,
+   was man auch anklicken kann. */
+.ds-service { display: inline-flex; align-items: center; gap: 6px; }
 .ds-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   font-size: var(--fs-meta);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 1.5px 9px;
+  color: var(--ink-2);
 }
 .ds-chip .dev-icon { width: 13px; height: 13px; }
-.ds-chip.ok { color: var(--good); border-color: rgba(152,195,121,0.45); }
-.ds-chip.bad { color: var(--critical); border-color: rgba(224,108,117,0.5); }
+.ds-chip .ico { width: 12px; height: 12px; }
+.ds-chip.ok { color: var(--good); }
+.ds-chip.bad { color: var(--critical); }
 
 .ds-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 22px; }
 @media (max-width: 900px) { .ds-cols { grid-template-columns: 1fr; } }
@@ -1433,7 +1483,7 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
 .git-state.clickable { cursor: pointer; }
 .git-state.clickable:hover { color: var(--accent); text-decoration: underline; }
 
-.ds-chip.watch { color: var(--accent); border-color: rgba(55,207,189,0.5); }
+.ds-chip.watch { color: var(--accent); }
 
 .ds-chip.sub {
   font: inherit; font-size: var(--fs-meta);
@@ -1441,6 +1491,16 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
   border: 1px solid var(--border); border-radius: 999px;
   padding: 1.5px 10px; cursor: pointer;
   max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ds-chip.sub::after {
+  content: "";
+  flex: none;
+  width: 5px;
+  height: 5px;
+  margin: -2px 1px 0 2px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
 }
 .ds-chip.sub:hover { border-color: var(--accent); color: var(--accent); }
 

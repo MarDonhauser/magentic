@@ -17,6 +17,7 @@ import {
   MarkSeen, GitGraph, Board, BoardArchive, Stats, StartBoardItem, NewDockSession, MigrateDockSessions, BuildInfo,
   Breaks, BreakHeartbeat, TakeBreak, EndBreak, SnoozeBreak, BreakConfig, SetBreakConfig, BreakOver,
 } from '../wailsjs/go/main/App';
+import { usagePages, clampUsagePage } from './usage-state.js';
 import { EventsOn, EventsOff, BrowserOpenURL, ClipboardSetText } from '../wailsjs/runtime/runtime';
 import {
   developerIcon,
@@ -354,6 +355,45 @@ function openSessionByName(name) {
   return openSession(session.id, session.name);
 }
 
+// Die installierten Agenten stehen als Segmentleiste neben dem Namen: der
+// laufende ist markiert, ein Klick auf einen anderen wechselt ihn. Beendete
+// Sessions bekommen keine Leiste, dort gibt es nichts zu wechseln.
+function vendorSwitchHtml(agent) {
+  if (!agent || agent.term || ['exited', 'dead'].includes(agent.status)) return '';
+  const options = vendorCatalog.filter(option => option.available || option.vendor === agent.vendor);
+  if (options.length < 2) return '';
+  const current = agent.vendor || 'claude';
+  return `<span class="tb-vendors" role="group" aria-label="Coding-Agent">` +
+    options.map(option => {
+      const active = option.vendor === current;
+      const title = active
+        ? `${option.label} läuft in dieser Session`
+        : `Zu ${option.label} wechseln — der laufende Prozess wird beendet`;
+      return `<button type="button" class="tb-vendor${active ? ' on' : ''}" data-vendor="${esc(option.vendor)}"` +
+        `${active ? ' aria-current="true"' : ''} title="${esc(title)}">${developerIcon(option.vendor)}</button>`;
+    }).join('') + '</span>';
+}
+
+function wireVendorSwitch(sessionID, sessionName) {
+  for (const button of termBarEl.querySelectorAll('.tb-vendor:not(.on)')) {
+    button.onclick = async () => {
+      if (!button.dataset.confirm) {
+        button.dataset.confirm = '1';
+        button.classList.add('ask');
+        setTimeout(() => {
+          if (button.isConnected) { delete button.dataset.confirm; button.classList.remove('ask'); }
+        }, 3000);
+        return;
+      }
+      try {
+        await act(SwitchSessionVendor(sessionID, button.dataset.vendor),
+          `„${sessionName}" läuft jetzt mit einem anderen Agenten`);
+      } catch { /* toast zeigt den Fehler */ }
+      await refresh(true);
+    };
+  }
+}
+
 function updateTermBar() {
   if (view !== 'term' || !activeTerm || !activeSessionID) return;
   const sessionID = activeSessionID;
@@ -370,6 +410,7 @@ function updateTermBar() {
     `<span class="tb-avatar">${agentPortrait(activeTerm, 24, a)}</span>` +
     `<span class="dot" style="background:${v.color}"></span>` +
     `<span class="tb-name">${esc(activeTerm)}</span>` +
+    vendorSwitchHtml(a) +
     (a?.branch ? `<span class="tb-branch${a.worktree ? ' wt' : ''}" title="Branch ${esc(a.branch)}${a.worktree ? ' · eigener Worktree' : ''}">${icon('gitbranch')}${esc(a.branch)}</span>` : '') +
     `<span class="tb-st">${visHtml(v)}</span>` +
     (a?.project && a.project !== '(ohne Projekt)' ? `<span class="tb-proj">${esc(a.project)}</span>` : '') +
@@ -389,6 +430,7 @@ function updateTermBar() {
         `/done + /deploy an „${sessionName}" gesendet — Plan in der Session bestätigen`)
         .then(startDeployWatch).catch(() => {});
   }
+  wireVendorSwitch(sessionID, sessionName);
   $('tb-links').onclick = e => openLinksMenu(e.currentTarget);
   $('tb-later').onclick = () => parkSession(sessionID, sessionName);
   $('tb-kill').onclick = e => {
@@ -1245,12 +1287,7 @@ function renderSidebar() {
     }
   }
 
-  const u = ov?.usage;
-  usageBoxEl.innerHTML = u
-    ? `<div class="usage-source">${developerIcon('claude')}<span>Claude-Limits</span></div>` +
-      usageBar('5h', u.fiveHour, '↻ ' + u.fiveHourReset) +
-      usageBar('7d', u.sevenDay, '↻ ' + u.sevenDayReset)
-    : '';
+  renderUsage();
   attentionBar();
   syncDockNav();
 }
@@ -1259,12 +1296,55 @@ function usageColor(pct) {
   return pct >= 90 ? 'var(--critical)' : pct >= 70 ? 'var(--warning)' : 'var(--good)';
 }
 
-function usageBar(label, pct, reset) {
-  const p = Math.round(pct);
-  return `<div class="ubar-row" title="Claude-Limit ${label} · ${esc(reset)}">` +
-    `<span class="ulabel">${label}</span>` +
-    `<div class="ubar"><div class="ufill" style="width:${Math.min(p,100)}%;background:${usageColor(p)}"></div></div>` +
-    `<span class="upct">${p}%</span></div>`;
+function usageBar(page, window) {
+  const reset = window.reset ? ` · füllt sich ${esc(window.reset)}` : '';
+  return `<div class="ubar-row" title="${esc(page.label)} ${esc(window.label)}${reset}">` +
+    `<span class="ulabel">${esc(window.label)}</span>` +
+    `<div class="ubar"><div class="ufill" style="width:${window.percent}%;background:${usageColor(window.percent)}"></div></div>` +
+    `<span class="upct">${window.percent}%</span></div>`;
+}
+
+// Die Limits mehrerer Anbieter liegen nebeneinander auf einer Blätterfläche.
+// Gescrollt wird nativ, damit Trackpad-Wischen und Ziehen ohne eigene
+// Gestenerkennung funktionieren; die Punkte zeigen und wählen die Seite.
+let usagePage = 0;
+
+function renderUsage() {
+  const pages = usagePages(ov);
+  if (!pages.length) {
+    usageBoxEl.innerHTML = '';
+    return;
+  }
+  usagePage = clampUsagePage(usagePage, pages.length);
+  const track = pages.map(page =>
+    `<div class="usage-page" data-provider="${esc(page.provider)}">` +
+      `<div class="usage-source">${developerIcon(page.provider)}<span>${esc(page.label)}</span></div>` +
+      page.windows.map(window => usageBar(page, window)).join('') +
+    '</div>').join('');
+  const dots = pages.length > 1
+    ? `<div class="usage-dots">` + pages.map((page, index) =>
+        `<button type="button" class="usage-dot${index === usagePage ? ' on' : ''}" data-page="${index}" ` +
+        `aria-label="${esc(page.label)} zeigen"></button>`).join('') + '</div>'
+    : '';
+  usageBoxEl.innerHTML = `<div class="usage-track">${track}</div>${dots}`;
+
+  const trackEl = usageBoxEl.querySelector('.usage-track');
+  const pageWidth = () => trackEl.clientWidth || 1;
+  trackEl.scrollLeft = usagePage * pageWidth();
+  trackEl.onscroll = () => {
+    const index = clampUsagePage(Math.round(trackEl.scrollLeft / pageWidth()), pages.length);
+    if (index === usagePage) return;
+    usagePage = index;
+    for (const dot of usageBoxEl.querySelectorAll('.usage-dot')) {
+      dot.classList.toggle('on', Number(dot.dataset.page) === index);
+    }
+  };
+  for (const dot of usageBoxEl.querySelectorAll('.usage-dot')) {
+    dot.onclick = () => {
+      usagePage = Number(dot.dataset.page) || 0;
+      trackEl.scrollTo({ left: usagePage * pageWidth(), behavior: 'smooth' });
+    };
+  }
 }
 
 let zg = null;
@@ -1712,15 +1792,15 @@ function deployCard() {
       `<span class="path">lade…</span></div></div>`;
   }
   const azChip = ds.azOk
-    ? `<span class="ds-chip ok">${developerIcon('azure')} Azure ✓</span>`
-    : `<span class="ds-chip bad" title="${esc(ds.azErr)}">${developerIcon('azure')} Azure ✗</span>` +
+    ? `<span class="ds-chip ok">${developerIcon('azure')} Azure ${icon('check')}</span>`
+    : `<span class="ds-chip bad" title="${esc(ds.azErr)}">${developerIcon('azure')} Azure ${icon('x')}</span>` +
       `<button class="btn tiny" data-act="azlogin">az login</button>`;
   const subChip = ds.azSub
-    ? `<button class="ds-chip sub" data-act="azsub" title="Azure-Subscription wechseln · ${esc(ds.azSub)}\n${esc(ds.azSubId)}">${developerIcon('azure')} ${esc(shortSub(ds.azSub))} ▾</button>`
+    ? `<button class="ds-chip sub" data-act="azsub" title="Azure-Subscription wechseln · ${esc(ds.azSub)}\n${esc(ds.azSubId)}">${developerIcon('azure')} ${esc(shortSub(ds.azSub))}</button>`
     : '';
   const argoChip = ds.argoOk
-    ? `<span class="ds-chip ok" title="${esc(ds.argoServer)}">Argo ✓</span>`
-    : `<span class="ds-chip bad" title="${esc(ds.argoErr)}">Argo ✗</span>` +
+    ? `<span class="ds-chip ok" title="${esc(ds.argoServer)}">${developerIcon('kubernetes')} Argo ${icon('check')}</span>`
+    : `<span class="ds-chip bad" title="${esc(ds.argoErr)}">${developerIcon('kubernetes')} Argo ${icon('x')}</span>` +
       `<button class="btn tiny" data-act="argologin">argocd login</button>`;
   const builds = (ds.builds || []).map(buildRow).join('') ||
     (ds.azOk ? '<div class="none">keine Builds</div>' : `<div class="none">${esc(ds.azErr)}</div>`);
@@ -1738,7 +1818,8 @@ function deployCard() {
   const watching = Date.now() < dsWatchUntil
     ? `<span class="ds-chip watch">${icon('clock')} verfolge Deploy (10s-Takt)</span>` : '';
   return `<div class="card" id="deploy-card"><div class="card-head"><h2>${icon('rocket')} Pipelines &amp; Argo</h2>` +
-    `${azChip}${subChip}${argoChip}${watching}` +
+    `<span class="ds-service">${azChip}${subChip}</span>` +
+    `<span class="ds-service">${argoChip}</span>${watching}` +
     `<span class="actions"><span class="path">${esc(deployStamp)}</span>` +
     `<button class="btn tiny" data-act="dsrefresh" title="Status neu laden">↻</button></span></div>` +
     `${deploySyncState()}${deployRemoteCoverageState(ds.azRemoteCoverage)}` +
@@ -1809,8 +1890,9 @@ function renderOverview() {
   }
   const cards = (ov.projects || []).map(projectCard).join('');
   overviewEl.innerHTML = `${overviewSyncState()}${attentionOverview()}${cards}${deployCard()}` +
-    `<div class="add-repo"><button class="btn" data-act="addproject" title="Git-Repository als Projekt hinzufügen">+ Repository hinzufügen…</button></div>` +
-    `<div class="stamp">Stand ${esc(ov.generatedAt || '')}</div>`;
+    `<div class="overview-foot">` +
+    `<button class="btn" data-act="addproject" title="Git-Repository als Projekt hinzufügen">+ Repository hinzufügen…</button>` +
+    `<span class="stamp">Stand ${esc(ov.generatedAt || '')}</span></div>`;
 }
 
 function renderAll() {
