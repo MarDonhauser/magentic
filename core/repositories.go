@@ -431,12 +431,42 @@ func (r *Repositories) Survey(ctx context.Context, projects []Project) (Reposito
 	return survey, nil
 }
 
-func (r *Repositories) surveyProject(ctx context.Context, project Project) (RepositoryProjectSurvey, error) {
+// SurveyTopology takes one cheap pass over every Project: which Worktrees exist,
+// which branch each is on, and which branch counts as main. It observes no
+// working tree, so its cost stays at one command per Project instead of growing
+// with the number of Worktrees. The working-tree facts it cannot know are
+// explicitly unknown; callers that need them inspect the checkouts they read.
+func (r *Repositories) SurveyTopology(ctx context.Context, projects []Project) (RepositoriesSurvey, error) {
+	survey := RepositoriesSurvey{ObservedAt: r.now()}
+	projects = append([]Project(nil), projects...)
+	observed := make([]RepositoryProjectSurvey, len(projects))
+	failures := make([]error, len(projects))
+	repositoriesInParallel(len(projects), func(index int) {
+		if err := ctx.Err(); err != nil {
+			failures[index] = err
+			return
+		}
+		observed[index], _, failures[index] = r.surveyTopologyProject(ctx, projects[index])
+	})
+	for index := range projects {
+		if failures[index] != nil {
+			return RepositoriesSurvey{}, failures[index]
+		}
+		survey.Projects = append(survey.Projects, observed[index])
+	}
+	return survey, nil
+}
+
+// surveyTopologyProject returns the Project's Worktrees as topology alone knows
+// them, together with the raw records a full Survey still needs.
+func (r *Repositories) surveyTopologyProject(
+	ctx context.Context, project Project,
+) (RepositoryProjectSurvey, []repositoriesTopologyWorktree, error) {
 	result := RepositoryProjectSurvey{ID: project.ID, Name: project.Name, Path: filepath.Clean(project.Path)}
 	topology, err := r.loadTopology(ctx, project.Path)
 	if err != nil {
 		if ctxErr := repositoryContextError(ctx, err); ctxErr != nil {
-			return result, ctxErr
+			return result, nil, ctxErr
 		}
 		state := RepositoryUnknown
 		if errors.Is(err, errRepositoriesNotRepository) {
@@ -446,18 +476,33 @@ func (r *Repositories) surveyProject(ctx context.Context, project Project) (Repo
 		result.Problem = repositoryProblem("worktree_topology", err)
 		result.MainBranch = repositoryFactForError[string]("main_branch", err)
 		result.Worktrees = repositoryFactForError[[]RepositoryWorktree]("worktree_topology", err)
-		return result, nil
+		return result, nil, nil
 	}
 
 	result.Presence = RepositoryKnown
 	worktrees := make([]RepositoryWorktree, len(topology))
-	statusFailures := make([]error, len(topology))
+	notObserved := errors.New("working tree was not observed")
 	for index, raw := range topology {
 		wt := repositoryWorktreeFromTopology(project.Path, raw)
 		wt.Reference = repositoryWorktreeReference(project, wt.Path)
 		wt.Location = repositoryWorktreeLocation(project.Path, wt.Path)
+		wt.Changes = repositoryUnknownFact[RepositoryWorkingChanges]("status", notObserved)
+		wt.Divergence = repositoryUnknownFact[RepositoryDivergence]("divergence", notObserved)
 		worktrees[index] = wt
 	}
+	result.MainBranch = resolveRepositoryMainBranch(project, worktrees)
+	result.Worktrees = repositoryKnownFact(worktrees)
+	return result, topology, nil
+}
+
+func (r *Repositories) surveyProject(ctx context.Context, project Project) (RepositoryProjectSurvey, error) {
+	result, topology, err := r.surveyTopologyProject(ctx, project)
+	if err != nil || result.Presence != RepositoryKnown {
+		return result, err
+	}
+
+	worktrees := append([]RepositoryWorktree(nil), result.Worktrees.Value...)
+	statusFailures := make([]error, len(topology))
 	repositoriesInParallel(len(topology), func(index int) {
 		status, statusErr := r.loadStatus(ctx, topology[index].Path)
 		if statusErr != nil {
@@ -571,7 +616,137 @@ func resolveRepositoryMainBranch(project Project, worktrees []RepositoryWorktree
 // Survey result, so baseline and lifecycle decisions cannot inherit display
 // cache state when callers migrate to this Interface.
 func (r *Repositories) Inspect(ctx context.Context, request RepositoryInspectRequest) (RepositoryInspection, error) {
-	dir := strings.TrimSpace(request.Directory)
+	result, err := r.observeCheckout(ctx, request.Directory, request.MainBranch)
+	if err != nil {
+		return RepositoryInspection{}, err
+	}
+	if request.Against == nil {
+		return result, nil
+	}
+	return r.withBaselineDelta(ctx, result, *request.Against)
+}
+
+// InspectAll observes several checkouts in one coherent pass. Requests naming
+// the same directory and main branch share a single status and divergence
+// observation, while every request still receives its own baseline delta. This
+// is a fresh observation like Inspect, not a cache: nothing is carried across
+// passes. Results follow request order.
+func (r *Repositories) InspectAll(ctx context.Context, requests []RepositoryInspectRequest) ([]RepositoryInspection, error) {
+	results := make([]RepositoryInspection, len(requests))
+	failures := make([]error, len(requests))
+	if len(requests) == 0 {
+		return results, nil
+	}
+
+	type checkoutKey struct{ directory, mainBranch string }
+	shared := map[checkoutKey][]int{}
+	order := make([]checkoutKey, 0, len(requests))
+	for index, request := range requests {
+		// Clean only a directory that exists: filepath.Clean turns the empty
+		// string into the current directory, which would silently observe a
+		// checkout the caller never named.
+		directory := strings.TrimSpace(request.Directory)
+		if directory != "" {
+			directory = filepath.Clean(directory)
+		}
+		key := checkoutKey{directory: directory, mainBranch: strings.TrimSpace(request.MainBranch)}
+		if _, seen := shared[key]; !seen {
+			order = append(order, key)
+		}
+		shared[key] = append(shared[key], index)
+	}
+
+	observed := make([]RepositoryInspection, len(order))
+	observeFailures := make([]error, len(order))
+	repositoriesInParallel(len(order), func(position int) {
+		observed[position], observeFailures[position] =
+			r.observeCheckout(ctx, order[position].directory, order[position].mainBranch)
+	})
+
+	for position, key := range order {
+		// One unusable request must not blank every other checkout, so only a
+		// cancelled pass is an error of the pass; anything else is that one
+		// request's explicitly unknown answer.
+		inspection, failure := observed[position], observeFailures[position]
+		if failure != nil {
+			if ctxErr := repositoryContextError(ctx, failure); ctxErr != nil {
+				return nil, ctxErr
+			}
+			inspection = unobservableCheckout(r.now(), key.directory, failure)
+		}
+		for _, index := range shared[key] {
+			results[index] = inspection
+		}
+	}
+
+	// Only the baseline comparison is per request, so it is the only step that
+	// still costs one command per Session.
+	repositoriesInParallel(len(requests), func(index int) {
+		if requests[index].Against == nil {
+			return
+		}
+		results[index], failures[index] = r.withBaselineDelta(ctx, results[index], *requests[index].Against)
+	})
+	for _, failure := range failures {
+		if failure != nil {
+			return nil, failure
+		}
+	}
+	return results, nil
+}
+
+// unobservableCheckout states plainly that a checkout could not be read. Every
+// fact stays unknown rather than defaulting to a clean or absent repository.
+func unobservableCheckout(observedAt time.Time, directory string, err error) RepositoryInspection {
+	return RepositoryInspection{
+		ObservedAt: observedAt,
+		Directory:  directory,
+		Presence:   RepositoryUnknown,
+		Problem:    repositoryProblem("inspect", err),
+		Checkout:   repositoryUnknownFact[RepositoryCheckout]("inspect", err),
+		Head:       repositoryUnknownFact[string]("inspect", err),
+		Changes:    repositoryUnknownFact[RepositoryWorkingChanges]("inspect", err),
+		Divergence: repositoryUnknownFact[RepositoryDivergence]("inspect", err),
+		Baseline:   repositoryUnknownFact[RepositoryBaseline]("inspect", err),
+	}
+}
+
+func (r *Repositories) withBaselineDelta(
+	ctx context.Context, current RepositoryInspection, baseline RepositoryBaseline,
+) (RepositoryInspection, error) {
+	if current.Presence != RepositoryKnown {
+		// A checkout that could not be observed keeps the very distinction the
+		// Module exists for: a missing repository is not an unknown one.
+		problem := errors.New(repositoryInspectionProblemMessage(current))
+		paths := repositoryUnknownFact[[]string]("baseline_delta", problem)
+		commits := repositoryUnknownFact[int]("baseline_delta", problem)
+		if current.Presence == RepositoryNotRepository {
+			paths = repositoryNotRepositoryFact[[]string]("baseline_delta", problem)
+			commits = repositoryNotRepositoryFact[int]("baseline_delta", problem)
+		}
+		current.Delta = &RepositoryBaselineDelta{Paths: paths, Commits: commits}
+		return current, nil
+	}
+	current.Delta = r.baselineDelta(ctx, current.Directory, current, baseline)
+	if err := ctx.Err(); err != nil {
+		return RepositoryInspection{}, err
+	}
+	return current, nil
+}
+
+func repositoryInspectionProblemMessage(inspection RepositoryInspection) string {
+	if inspection.Problem != nil && strings.TrimSpace(inspection.Problem.Message) != "" {
+		return inspection.Problem.Message
+	}
+	return "checkout knowledge unavailable"
+}
+
+// observeCheckout reads the facts that belong to a directory rather than to a
+// single caller: presence, checkout, HEAD, working changes and divergence.
+func (r *Repositories) observeCheckout(
+	ctx context.Context, directory, mainBranch string,
+) (RepositoryInspection, error) {
+	dir := strings.TrimSpace(directory)
 	if dir == "" {
 		return RepositoryInspection{}, errors.New("repository directory is required")
 	}
@@ -593,12 +768,6 @@ func (r *Repositories) Inspect(ctx context.Context, request RepositoryInspectReq
 		result.Changes = repositoryFactForError[RepositoryWorkingChanges]("status", err)
 		result.Divergence = repositoryFactForError[RepositoryDivergence]("status", err)
 		result.Baseline = repositoryFactForError[RepositoryBaseline]("baseline", err)
-		if request.Against != nil {
-			result.Delta = &RepositoryBaselineDelta{
-				Paths:   repositoryFactForError[[]string]("baseline_delta", err),
-				Commits: repositoryFactForError[int]("baseline_delta", err),
-			}
-		}
 		return result, nil
 	}
 
@@ -616,7 +785,7 @@ func (r *Repositories) Inspect(ctx context.Context, request RepositoryInspectReq
 		result.Baseline = repositoryKnownFact(RepositoryBaseline{Directory: dir, Head: status.Head, DirtyPaths: dirty})
 	}
 
-	main := repositoryKnownFact(strings.TrimSpace(request.MainBranch))
+	main := repositoryKnownFact(strings.TrimSpace(mainBranch))
 	if main.Value == "" {
 		main = repositoryUnknownFact[string]("main_branch", errors.New("main branch was not supplied"))
 	}
@@ -624,12 +793,6 @@ func (r *Repositories) Inspect(ctx context.Context, request RepositoryInspectReq
 	result.Divergence = r.divergence(ctx, wt, main)
 	if err := ctx.Err(); err != nil {
 		return RepositoryInspection{}, err
-	}
-	if request.Against != nil {
-		result.Delta = r.baselineDelta(ctx, dir, result, *request.Against)
-		if err := ctx.Err(); err != nil {
-			return RepositoryInspection{}, err
-		}
 	}
 	return result, nil
 }

@@ -80,7 +80,8 @@ const TERMINAL_THEMES = {
 // (OKLCH-Farbton -103°, gemittelt über --page bis --ink). Die Helligkeit jeder
 // Stufe bleibt exakt erhalten, der Kontrast also auch; die Rahmen und der
 // gedämpfte Text der Agenten stehen danach im selben Blaugrau wie die Anwendung
-// statt in einem neutralen Grau, das zu nichts im Fenster gehört.
+// statt in einem neutralen Grau, das zu nichts im Fenster gehört. Lesbar macht
+// das den hellen Modus nicht — dafür sorgt terminalContrastFloor().
 const GREY_RAMP = [
   '#06080b', '#0f1217', '#181c22', '#22262d', '#2b3138', '#343b43',
   '#3e454e', '#484f59', '#515963', '#5b636d', '#656d78', '#6f7782',
@@ -141,6 +142,21 @@ export function currentTheme() {
 
 export function terminalTheme(theme = currentTheme()) {
   return { ...TERMINAL_THEMES[normaliseTheme(theme)], extendedAnsi: [...EXTENDED_ANSI] };
+}
+
+// Der 256er-Würfel, aus dem Claude Code malt, ist für ein schwarzes Terminal
+// entworfen. Auf unserem dunklen Grund geht das auf: der schwächste Wert, den
+// die Agenten tatsächlich benutzen, ist Grau 244 mit 3.51:1, und das ist eine
+// bewusst gedämpfte Rahmenfarbe — sie anzuheben würde Claudes eigene Hierarchie
+// einebnen. Auf hellem Grund bricht dagegen fast alles weg: Gelb 220 liegt bei
+// 1.37:1, Grün 114 bei 1.69:1, das Logo-Rosa bei 2.57:1.
+//
+// Diese 240 Farben lassen sich nicht sinnvoll pro Theme umschreiben, weil der
+// Würfel auch Hintergründe trägt. xterm.js kann stattdessen die Vordergrundfarbe
+// je Zelle gegen den echten Hintergrund anheben, und nur dort, wo sie durchfällt.
+// Deshalb bleibt der Boden im Dunklen aus und greift nur im Hellen.
+export function terminalContrastFloor(theme = currentTheme()) {
+  return normaliseTheme(theme) === 'light' ? 4.5 : 1;
 }
 
 export function applyTheme(theme, { persist = false, notify = true } = {}) {

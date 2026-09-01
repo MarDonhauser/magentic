@@ -5,7 +5,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { BrowserOpenURL } from '../wailsjs/runtime/runtime';
 import { developerIcon } from './avatar.js';
-import { onThemeChange, terminalTheme } from './theme.js';
+import { onThemeChange, terminalTheme, terminalContrastFloor } from './theme.js';
 import { TERMINAL_OPTIONS, setUpTerminal } from './terminal-setup.js';
 import { dockRefKey, normalizeDockRef, normalizeDockState, resolveLegacyDockRefs } from './dock-state.js';
 
@@ -42,8 +42,11 @@ const tabs = new Map();
 
 onThemeChange(theme => {
   const nextTheme = terminalTheme(theme);
+  const nextFloor = terminalContrastFloor(theme);
   for (const tab of tabs.values()) {
-    if (tab.term) tab.term.options.theme = nextTheme;
+    if (!tab.term) continue;
+    tab.term.options.theme = nextTheme;
+    tab.term.options.minimumContrastRatio = nextFloor;
   }
 });
 
@@ -270,6 +273,7 @@ function ensureLive(t) {
     lineHeight: 1.1,
     scrollback: 10000,
     theme: terminalTheme(),
+    minimumContrastRatio: terminalContrastFloor(),
   });
   const fit = new FitAddon();
   term.loadAddon(fit);

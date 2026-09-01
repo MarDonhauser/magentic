@@ -14,22 +14,30 @@ type fakeTUIRepositories struct {
 	survey          core.RepositoriesSurvey
 	surveyErr       error
 	surveyCalls     int
+	inspectCalls    int
 	inspectRequests []core.RepositoryInspectRequest
 	inspections     map[string]core.RepositoryInspection
-	inspectErrors   map[string]error
+	inspectErr      error
 }
 
-func (f *fakeTUIRepositories) Survey(_ context.Context, _ []core.Project) (core.RepositoriesSurvey, error) {
+func (f *fakeTUIRepositories) SurveyTopology(_ context.Context, _ []core.Project) (core.RepositoriesSurvey, error) {
 	f.surveyCalls++
 	return f.survey, f.surveyErr
 }
 
-func (f *fakeTUIRepositories) Inspect(_ context.Context, request core.RepositoryInspectRequest) (core.RepositoryInspection, error) {
-	f.inspectRequests = append(f.inspectRequests, request)
-	if err := f.inspectErrors[request.Directory]; err != nil {
-		return core.RepositoryInspection{}, err
+func (f *fakeTUIRepositories) InspectAll(
+	_ context.Context, requests []core.RepositoryInspectRequest,
+) ([]core.RepositoryInspection, error) {
+	f.inspectCalls++
+	f.inspectRequests = append(f.inspectRequests, requests...)
+	if f.inspectErr != nil {
+		return nil, f.inspectErr
 	}
-	return f.inspections[request.Directory], nil
+	inspections := make([]core.RepositoryInspection, len(requests))
+	for index, request := range requests {
+		inspections[index] = f.inspections[request.Directory]
+	}
+	return inspections, nil
 }
 
 func tuiKnownFact[T any](value T) core.RepositoryFact[T] {
@@ -76,30 +84,39 @@ func TestCollectPollModuleFactsUsesOneObservationAndSurveyPass(t *testing.T) {
 			"/repo-wt": {Directory: "/repo-wt", Presence: core.RepositoryKnown},
 			"/repo":    {Directory: "/repo", Presence: core.RepositoryKnown},
 		},
-		inspectErrors: map[string]error{},
 	}
 
-	result := collectPollModuleFacts(context.Background(), state, &selected, observe, repositories)
+	result := collectPollModuleFacts(context.Background(), state, observe, repositories)
 
 	if observeCalls != 1 {
 		t.Fatalf("Observe calls = %d, want 1", observeCalls)
 	}
-	if repositories.surveyCalls != 1 {
-		t.Fatalf("Survey calls = %d, want 1", repositories.surveyCalls)
+	if repositories.surveyCalls != 1 || repositories.inspectCalls != 1 {
+		t.Fatalf("Module passes = %d topology / %d inspect, want one each",
+			repositories.surveyCalls, repositories.inspectCalls)
 	}
-	if len(repositories.inspectRequests) != 2 {
-		t.Fatalf("Inspect requests = %#v, want baseline Session and selected Session", repositories.inspectRequests)
+	// One request per Project root and one per Session — the checkouts the TUI
+	// shows, and nothing else. Sharing a directory is the Module's job to fold.
+	if len(repositories.inspectRequests) != 3 {
+		t.Fatalf("Inspect requests = %#v, want Project root plus both Sessions", repositories.inspectRequests)
 	}
 	requests := map[string]core.RepositoryInspectRequest{}
 	for _, request := range repositories.inspectRequests {
+		if request.Against != nil {
+			requests[request.Directory+"|baseline"] = request
+			continue
+		}
 		requests[request.Directory] = request
 	}
-	if request := requests[baseline.Dir]; request.Against == nil || request.Against.Head != baseline.BaseCommit ||
+	if request := requests[baseline.Dir+"|baseline"]; request.Against == nil || request.Against.Head != baseline.BaseCommit ||
 		len(request.Against.DirtyPaths) != 1 || request.MainBranch != "main" {
 		t.Fatalf("baseline Inspect request = %#v", request)
 	}
 	if request := requests[selected.Dir]; request.Against != nil || request.MainBranch != "main" {
 		t.Fatalf("selected Inspect request = %#v", request)
+	}
+	if _, ok := result.projectInspections[repositoryDirectoryKey(project.Path)]; !ok {
+		t.Fatal("Project row received no inspection of its own checkout")
 	}
 	if got := result.observed[sessionKey(selected)]; got.Status != StatusIdle || got.Content != "ready" {
 		t.Fatalf("selected Observation = %#v", got)
@@ -118,12 +135,12 @@ func TestCollectPollModuleFactsAssignsCopyOnlyIDToLegacyFixture(t *testing.T) {
 		}}}
 	}
 	repositories := &fakeTUIRepositories{
-		surveyErr:     errors.New("git unavailable"),
-		inspections:   map[string]core.RepositoryInspection{},
-		inspectErrors: map[string]error{session.Dir: errors.New("git unavailable")},
+		surveyErr:   errors.New("git unavailable"),
+		inspections: map[string]core.RepositoryInspection{},
+		inspectErr:  errors.New("git unavailable"),
 	}
 
-	result := collectPollModuleFacts(context.Background(), state, &session, observe, repositories)
+	result := collectPollModuleFacts(context.Background(), state, observe, repositories)
 
 	if observedID == "" {
 		t.Fatal("Observe received an ID-less compatibility fixture")
@@ -238,9 +255,9 @@ func TestSeparatePollPassesKeepEachOthersFacts(t *testing.T) {
 		attention: core.NewAttentionPlanner(core.AttentionPlannerConfig{})}
 
 	updated, _ := m.Update(repositoryMsg(pollResult{
-		repositories: core.RepositoriesSurvey{Projects: []core.RepositoryProjectSurvey{{
-			Name: "repo", Path: "/repo", Presence: core.RepositoryKnown,
-		}}},
+		projectInspections: map[string]core.RepositoryInspection{
+			"/repo": {Directory: "/repo", Presence: core.RepositoryKnown},
+		},
 		inspections: map[tuiSessionKey]core.RepositoryInspection{
 			key: {Directory: "/repo", Presence: core.RepositoryKnown},
 		},

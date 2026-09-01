@@ -830,3 +830,110 @@ func TestRepositoryWorktreeForDirectoryPrefersContainingManagedWorktree(t *testi
 		t.Fatal("unrelated directory was assigned to a Worktree")
 	}
 }
+
+// Several Sessions commonly share one checkout. InspectAll must observe that
+// checkout once and still answer every Session's own baseline question, because
+// the status call is what makes a poll expensive.
+func TestInspectAllObservesEachCheckoutOnceAndKeepsPerRequestDeltas(t *testing.T) {
+	shared := filepath.Join(t.TempDir(), "shared")
+	other := filepath.Join(t.TempDir(), "other")
+	head := strings.Repeat("c", 40)
+	baseA := strings.Repeat("a", 40)
+	baseB := strings.Repeat("b", 40)
+	runner := &repositoriesRecordingRunner{t: t, steps: []repositoriesRunnerStep{
+		{dir: shared, args: []string{"status", "--porcelain=v2", "--branch"},
+			output: repositoriesStatusFixture(head, "main", "? new.go")},
+		{dir: other, args: []string{"status", "--porcelain=v2", "--branch"},
+			output: repositoriesStatusFixture(head, "feature/topic")},
+		{dir: other, args: []string{"rev-list", "--left-right", "--count", "main...HEAD"}, output: "1\t2\n"},
+		{dir: shared, args: []string{"rev-list", "--count", baseA + "..HEAD"}, output: "3\n"},
+		{dir: shared, args: []string{"rev-list", "--count", baseB + "..HEAD"}, output: "7\n"},
+	}}
+
+	inspections, err := newRepositories(runner).InspectAll(context.Background(), []RepositoryInspectRequest{
+		{Directory: shared, MainBranch: "main", Against: &RepositoryBaseline{Directory: shared, Head: baseA}},
+		{Directory: shared, MainBranch: "main", Against: &RepositoryBaseline{Directory: shared, Head: baseB}},
+		{Directory: shared, MainBranch: "main"},
+		{Directory: other, MainBranch: "main"},
+	})
+	if err != nil {
+		t.Fatalf("InspectAll() error = %v", err)
+	}
+	// assertDone is the actual budget assertion: one status per checkout, one
+	// rev-list per baseline, nothing else.
+	runner.assertDone()
+
+	if len(inspections) != 4 {
+		t.Fatalf("got %d inspections, want one per request", len(inspections))
+	}
+	for index, inspection := range inspections[:3] {
+		if inspection.Presence != RepositoryKnown || !inspection.Changes.Known() ||
+			inspection.Changes.Value.Untracked != 1 {
+			t.Fatalf("shared inspection %d = %#v", index, inspection)
+		}
+	}
+	if inspections[0].Delta == nil || !inspections[0].Delta.Commits.Known() || inspections[0].Delta.Commits.Value != 3 {
+		t.Fatalf("first baseline delta = %#v", inspections[0].Delta)
+	}
+	if inspections[1].Delta == nil || !inspections[1].Delta.Commits.Known() || inspections[1].Delta.Commits.Value != 7 {
+		t.Fatalf("second baseline delta = %#v", inspections[1].Delta)
+	}
+	if inspections[2].Delta != nil {
+		t.Fatalf("request without a baseline received a delta: %#v", inspections[2].Delta)
+	}
+	if !inspections[3].Divergence.Known() || inspections[3].Divergence.Value.Behind != 1 ||
+		inspections[3].Divergence.Value.Ahead != 2 {
+		t.Fatalf("second checkout divergence = %#v", inspections[3].Divergence)
+	}
+}
+
+// A checkout that is not a repository must not turn into an unknown baseline
+// delta: the Module's whole point is keeping a negative fact distinct from a
+// failed observation.
+func TestInspectAllKeepsNotARepositoryOutOfUnknownDeltas(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "plain")
+	runner := &repositoriesRecordingRunner{t: t, steps: []repositoriesRunnerStep{
+		{dir: dir, args: []string{"status", "--porcelain=v2", "--branch"},
+			err: fmt.Errorf("%w: missing .git", errRepositoriesNotRepository)},
+	}}
+	inspections, err := newRepositories(runner).InspectAll(context.Background(), []RepositoryInspectRequest{
+		{Directory: dir, Against: &RepositoryBaseline{Directory: dir, Head: strings.Repeat("a", 40)}},
+	})
+	if err != nil {
+		t.Fatalf("InspectAll() error = %v", err)
+	}
+	runner.assertDone()
+	if inspections[0].Presence != RepositoryNotRepository {
+		t.Fatalf("presence = %v, want not_repository", inspections[0].Presence)
+	}
+	if inspections[0].Delta == nil || inspections[0].Delta.Commits.State != RepositoryNotRepository {
+		t.Fatalf("delta = %#v, want not_repository rather than unknown", inspections[0].Delta)
+	}
+}
+
+// One Session without a usable directory must not cost every other Session its
+// repository facts.
+func TestInspectAllKeepsOneUnusableRequestFromBlankingTheRest(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "real")
+	runner := &repositoriesRecordingRunner{t: t, steps: []repositoriesRunnerStep{
+		{dir: dir, args: []string{"status", "--porcelain=v2", "--branch"},
+			output: repositoriesStatusFixture(strings.Repeat("a", 40), "main")},
+	}}
+	inspections, err := newRepositories(runner).InspectAll(context.Background(), []RepositoryInspectRequest{
+		{Directory: "   "},
+		{Directory: dir, MainBranch: "main"},
+	})
+	if err != nil {
+		t.Fatalf("InspectAll() error = %v, want a per-request answer instead", err)
+	}
+	runner.assertDone()
+	if inspections[0].Presence != RepositoryUnknown || inspections[0].Problem == nil {
+		t.Fatalf("unusable request = %#v, want explicitly unknown", inspections[0])
+	}
+	if inspections[0].Changes.Known() {
+		t.Fatal("unusable request reported known working changes")
+	}
+	if inspections[1].Presence != RepositoryKnown || !inspections[1].Changes.Known() {
+		t.Fatalf("usable request lost its facts: %#v", inspections[1])
+	}
+}

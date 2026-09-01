@@ -53,10 +53,10 @@ const (
 type pollResult struct {
 	observation       core.ObservationSnapshot
 	observed          map[tuiSessionKey]core.SessionObservation
-	repositories      core.RepositoriesSurvey
-	repositoryProblem string
-	inspections       map[tuiSessionKey]core.RepositoryInspection
-	inspectionProblem map[tuiSessionKey]string
+	repositoryProblem  string
+	projectInspections map[string]core.RepositoryInspection
+	inspections        map[tuiSessionKey]core.RepositoryInspection
+	inspectionProblem  map[tuiSessionKey]string
 	discovery         core.RegistryDiscovery
 	diskState         *State
 	zeitgeist         ZgInfo
@@ -83,8 +83,8 @@ func sameSession(a, b Agent) bool {
 type tuiObservationReader func(context.Context, []core.Session) core.ObservationSnapshot
 
 type tuiRepositoryReader interface {
-	Survey(context.Context, []core.Project) (core.RepositoriesSurvey, error)
-	Inspect(context.Context, core.RepositoryInspectRequest) (core.RepositoryInspection, error)
+	SurveyTopology(context.Context, []core.Project) (core.RepositoriesSurvey, error)
+	InspectAll(context.Context, []core.RepositoryInspectRequest) ([]core.RepositoryInspection, error)
 }
 
 type tickMsg time.Time
@@ -328,11 +328,11 @@ func observeCmd(state State) tea.Cmd {
 	}
 }
 
-func repositoryCmd(state State, selected *Agent) tea.Cmd {
+func repositoryCmd(state State) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), tuiPollTimeout)
 		defer cancel()
-		return repositoryMsg(collectRepositoryFacts(ctx, state, selected, core.NewRepositories()))
+		return repositoryMsg(collectRepositoryFacts(ctx, state, core.NewRepositories()))
 	}
 }
 
@@ -342,14 +342,13 @@ func repositoryCmd(state State, selected *Agent) tea.Cmd {
 func collectPollModuleFacts(
 	ctx context.Context,
 	state State,
-	selected *Agent,
 	observe tuiObservationReader,
 	repositories tuiRepositoryReader,
 ) pollResult {
 	result := collectObservationFacts(ctx, state, observe)
-	facts := collectRepositoryFacts(ctx, state, selected, repositories)
-	result.repositories = facts.repositories
+	facts := collectRepositoryFacts(ctx, state, repositories)
 	result.repositoryProblem = facts.repositoryProblem
+	result.projectInspections = facts.projectInspections
 	result.inspections = facts.inspections
 	result.inspectionProblem = facts.inspectionProblem
 	return result
@@ -374,35 +373,38 @@ func collectObservationFacts(ctx context.Context, state State, observe tuiObserv
 	return result
 }
 
-// collectRepositoryFacts reads only the Git side of one poll.
+// collectRepositoryFacts reads only the Git side of one poll. It observes the
+// checkouts the TUI actually shows — one per Project root and one per Session
+// directory — instead of every Worktree a Project happens to have. Topology
+// alone answers which branch counts as main, so the working tree is read once
+// per directory no matter how many Sessions share it.
 func collectRepositoryFacts(
 	ctx context.Context,
 	state State,
-	selected *Agent,
 	repositories tuiRepositoryReader,
 ) pollResult {
 	result := pollResult{
-		inspections:       make(map[tuiSessionKey]core.RepositoryInspection),
-		inspectionProblem: make(map[tuiSessionKey]string),
+		projectInspections: make(map[string]core.RepositoryInspection, len(state.Projects)),
+		inspections:        make(map[tuiSessionKey]core.RepositoryInspection, len(state.Agents)),
+		inspectionProblem:  make(map[tuiSessionKey]string),
 	}
 
-	survey, err := repositories.Survey(ctx, state.Projects)
+	topology, err := repositories.SurveyTopology(ctx, state.Projects)
 	if err != nil {
 		result.repositoryProblem = err.Error()
-	} else {
-		result.repositories = survey
 	}
 
+	requests := make([]core.RepositoryInspectRequest, 0, len(state.Projects)+len(state.Agents))
+	for _, project := range state.Projects {
+		requests = append(requests, core.RepositoryInspectRequest{
+			Directory:  project.Path,
+			MainBranch: topologyMainBranch(topology, project),
+		})
+	}
 	for _, session := range state.Agents {
-		_, representedBySurvey := surveyedWorktree(state, result.repositories, session)
-		needsInspection := session.BaseCommit != "" || !representedBySurvey ||
-			(selected != nil && sameSession(session, *selected))
-		if !needsInspection {
-			continue
-		}
 		request := core.RepositoryInspectRequest{
 			Directory:  session.Dir,
-			MainBranch: surveyedMainBranch(state, result.repositories, session),
+			MainBranch: sessionMainBranch(state, topology, session),
 		}
 		if session.BaseCommit != "" {
 			request.Against = &core.RepositoryBaseline{
@@ -411,15 +413,47 @@ func collectRepositoryFacts(
 				DirtyPaths: append([]string(nil), session.BaseDirty...),
 			}
 		}
-		inspection, inspectErr := repositories.Inspect(ctx, request)
-		key := sessionKey(session)
-		if inspectErr != nil {
-			result.inspectionProblem[key] = inspectErr.Error()
-			continue
+		requests = append(requests, request)
+	}
+
+	inspections, inspectErr := repositories.InspectAll(ctx, requests)
+	if inspectErr != nil {
+		problem := inspectErr.Error()
+		if result.repositoryProblem == "" {
+			result.repositoryProblem = problem
 		}
-		result.inspections[key] = inspection
+		for _, session := range state.Agents {
+			result.inspectionProblem[sessionKey(session)] = problem
+		}
+		return result
+	}
+	for index, project := range state.Projects {
+		result.projectInspections[repositoryDirectoryKey(project.Path)] = inspections[index]
+	}
+	for index, session := range state.Agents {
+		result.inspections[sessionKey(session)] = inspections[len(state.Projects)+index]
 	}
 	return result
+}
+
+// repositoryDirectoryKey is the TUI's stable lookup for a checkout. Sessions and
+// Projects reach the same inspection when they name the same directory.
+func repositoryDirectoryKey(directory string) string {
+	return filepath.Clean(strings.TrimSpace(directory))
+}
+
+func topologyMainBranch(topology core.RepositoriesSurvey, project Project) string {
+	if repository, ok := surveyedProject(topology, project); ok && repository.MainBranch.Known() {
+		return repository.MainBranch.Value
+	}
+	return strings.TrimSpace(project.MainBranch)
+}
+
+func sessionMainBranch(state State, topology core.RepositoriesSurvey, session Agent) string {
+	if repository, ok := surveyProject(state, topology, session); ok && repository.MainBranch.Known() {
+		return repository.MainBranch.Value
+	}
+	return ""
 }
 
 func prepareObservationSessions(sessions []Agent) []core.Session {
@@ -474,33 +508,7 @@ func surveyedProject(survey core.RepositoriesSurvey, project Project) (core.Repo
 	return core.RepositoryProjectSurvey{}, false
 }
 
-func surveyedWorktree(state State, survey core.RepositoriesSurvey, session Agent) (core.RepositoryWorktree, bool) {
-	repository, ok := surveyProject(state, survey, session)
-	if !ok || repository.Presence != core.RepositoryKnown || !repository.Worktrees.Known() {
-		return core.RepositoryWorktree{}, false
-	}
-	for _, worktree := range repository.Worktrees.Value {
-		if samePath(worktree.Path, session.Dir) {
-			return worktree, true
-		}
-	}
-	return core.RepositoryWorktree{}, false
-}
 
-func surveyedMainBranch(state State, survey core.RepositoriesSurvey, session Agent) string {
-	if repository, ok := surveyProject(state, survey, session); ok && repository.MainBranch.Known() {
-		return repository.MainBranch.Value
-	}
-	if session.ProjectID != "" {
-		if project := state.ProjectByID(session.ProjectID); project != nil {
-			return project.MainBranch
-		}
-	}
-	if project := state.ProjectByName(session.Project); project != nil {
-		return project.MainBranch
-	}
-	return ""
-}
 
 func samePath(a, b string) bool {
 	if strings.TrimSpace(a) == "" || strings.TrimSpace(b) == "" {
@@ -528,7 +536,7 @@ func (m model) Init() tea.Cmd {
 // pollNow refreshes both Modules at once. Actions call it because they change
 // runtime and repository facts together.
 func (m model) pollNow() tea.Cmd {
-	return tea.Batch(observeCmd(*m.state), repositoryCmd(*m.state, m.selectedAgent()))
+	return tea.Batch(observeCmd(*m.state), repositoryCmd(*m.state))
 }
 
 func (m *model) previewNow() tea.Cmd {
@@ -576,7 +584,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, repoTick()
 		}
 		m.repoBusy = true
-		return m, tea.Batch(repositoryCmd(*m.state, m.selectedAgent()), repoTick())
+		return m, tea.Batch(repositoryCmd(*m.state), repoTick())
 	case previewMsg:
 		m.previewPending = false
 		if a := m.selectedAgent(); a != nil && sessionKey(*a) == msg.key {
@@ -594,8 +602,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case repositoryMsg:
 		m.repoBusy = false
-		m.poll.repositories = msg.repositories
 		m.poll.repositoryProblem = msg.repositoryProblem
+		m.poll.projectInspections = msg.projectInspections
 		m.poll.inspections = msg.inspections
 		m.poll.inspectionProblem = msg.inspectionProblem
 		return m, nil

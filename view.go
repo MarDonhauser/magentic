@@ -433,75 +433,37 @@ type tuiRepositoryFacts struct {
 	delta      *core.RepositoryBaselineDelta
 }
 
+func tuiRepositoryFactsFrom(inspection core.RepositoryInspection) tuiRepositoryFacts {
+	return tuiRepositoryFacts{
+		presence:   inspection.Presence,
+		problem:    repositoryProblemMessage(inspection.Problem),
+		checkout:   inspection.Checkout,
+		changes:    inspection.Changes,
+		divergence: inspection.Divergence,
+		delta:      inspection.Delta,
+	}
+}
+
 func (m model) repositoryFactsForAgent(session Agent) tuiRepositoryFacts {
 	key := sessionKey(session)
 	if inspection, ok := m.poll.inspections[key]; ok {
-		return tuiRepositoryFacts{
-			presence:   inspection.Presence,
-			problem:    repositoryProblemMessage(inspection.Problem),
-			checkout:   inspection.Checkout,
-			changes:    inspection.Changes,
-			divergence: inspection.Divergence,
-			delta:      inspection.Delta,
-		}
+		return tuiRepositoryFactsFrom(inspection)
 	}
 	if problem, ok := m.poll.inspectionProblem[key]; ok {
 		return tuiRepositoryFacts{presence: core.RepositoryUnknown, problem: problem}
 	}
-	if worktree, ok := surveyedWorktree(*m.state, m.poll.repositories, session); ok {
-		return tuiRepositoryFacts{
-			presence:   core.RepositoryKnown,
-			checkout:   worktree.Checkout,
-			changes:    worktree.Changes,
-			divergence: worktree.Divergence,
-		}
-	}
-	if repository, ok := surveyProject(*m.state, m.poll.repositories, session); ok {
-		problem := repositoryProblemMessage(repository.Problem)
-		if problem == "" && repository.Worktrees.Problem != nil {
-			problem = repository.Worktrees.Problem.Message
-		}
-		return tuiRepositoryFacts{presence: repository.Presence, problem: problem}
+	return tuiRepositoryFacts{presence: core.RepositoryUnknown, problem: m.poll.repositoryProblem}
+}
+
+// Every checkout the TUI shows is inspected directly, so a Project row reads the
+// same kind of fact as a Session row rather than a pre-computed Survey entry.
+func (m model) repositoryFactsForProject(project Project) tuiRepositoryFacts {
+	if inspection, ok := m.poll.projectInspections[repositoryDirectoryKey(project.Path)]; ok {
+		return tuiRepositoryFactsFrom(inspection)
 	}
 	return tuiRepositoryFacts{presence: core.RepositoryUnknown, problem: m.poll.repositoryProblem}
 }
 
-func (m model) repositoryFactsForProject(project Project) tuiRepositoryFacts {
-	repository, ok := surveyedProject(m.poll.repositories, project)
-	if !ok {
-		return tuiRepositoryFacts{presence: core.RepositoryUnknown, problem: m.poll.repositoryProblem}
-	}
-	facts := tuiRepositoryFacts{
-		presence: repository.Presence,
-		problem:  repositoryProblemMessage(repository.Problem),
-	}
-	if repository.Presence != core.RepositoryKnown || !repository.Worktrees.Known() {
-		if facts.problem == "" && repository.Worktrees.Problem != nil {
-			facts.problem = repository.Worktrees.Problem.Message
-		}
-		return facts
-	}
-	var selected *core.RepositoryWorktree
-	for i := range repository.Worktrees.Value {
-		worktree := &repository.Worktrees.Value[i]
-		if samePath(worktree.Path, project.Path) {
-			selected = worktree
-			break
-		}
-		if selected == nil && worktree.Main {
-			selected = worktree
-		}
-	}
-	if selected == nil {
-		facts.presence = core.RepositoryUnknown
-		facts.problem = "Project checkout is missing from repository Survey"
-		return facts
-	}
-	facts.checkout = selected.Checkout
-	facts.changes = selected.Changes
-	facts.divergence = selected.Divergence
-	return facts
-}
 
 func repositoryProblemMessage(problem *core.RepositoryProblem) string {
 	if problem == nil {

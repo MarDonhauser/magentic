@@ -34,7 +34,7 @@ import { renderBoard } from './board.js';
 import { renderStats } from './stats.js';
 import { mountDock, toggleDock, isDockOpen, closeDockTab, dockTabs, refitDock } from './dock.js';
 import { mountBreaks, updateBreaks, openBreak, openBreakSettings, isBreakOpen } from './breaks.js';
-import { initThemeToggle, onThemeChange, terminalTheme } from './theme.js';
+import { initThemeToggle, onThemeChange, terminalTheme, terminalContrastFloor } from './theme.js';
 import { TERMINAL_OPTIONS, setUpTerminal } from './terminal-setup.js';
 import { createHydraHandoff } from './hydra-handoff.js';
 import { createVendorSwitchCoordinator } from './vendor-switch.js';
@@ -231,7 +231,11 @@ function termConnectionKey(sessionID, name) {
 
 onThemeChange(theme => {
   const nextTheme = terminalTheme(theme);
-  for (const entry of terms.values()) entry.term.options.theme = nextTheme;
+  const nextFloor = terminalContrastFloor(theme);
+  for (const entry of terms.values()) {
+    entry.term.options.theme = nextTheme;
+    entry.term.options.minimumContrastRatio = nextFloor;
+  }
 });
 
 function makeTerm(sessionID, name) {
@@ -246,6 +250,7 @@ function makeTerm(sessionID, name) {
     ...TERMINAL_OPTIONS,
     fontSize: 13,
     theme: terminalTheme(),
+    minimumContrastRatio: terminalContrastFloor(),
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
