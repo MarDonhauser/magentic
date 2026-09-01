@@ -18,7 +18,7 @@ import {
   Zeitgeist, ZeitgeistStart, ZeitgeistPause, ZeitgeistResume, ZeitgeistStop,
   MarkSeen, GitGraph, Board, BoardArchive, Stats, StartBoardItem, NewDockSession, MigrateDockSessions, BuildInfo,
   Breaks, BreakHeartbeat, TakeBreak, EndBreak, SnoozeBreak, BreakConfig, SetBreakConfig, BreakOver,
-  CompleteFiles, CompleteCommands,
+  CompleteFiles, CompleteCommands, PromptLinePattern,
 } from '../wailsjs/go/main/App';
 import { usagePages, clampUsagePage } from './usage-state.js';
 import { buildSidebar, flattenSidebar, canPlace, planMove } from './sidebar-layout.js';
@@ -34,6 +34,7 @@ import {
 } from './avatar.js';
 import { renderGitGraph } from './gitgraph.js';
 import { completionTrigger, applyCompletion } from './features/composer/completion-state.js';
+import { promptCoverRows } from './features/composer/prompt-cover.js';
 import { renderBoard } from './board.js';
 import { renderStats } from './stats.js';
 import { mountDock, toggleDock, isDockOpen, closeDockTab, dockTabs, refitDock } from './dock.js';
@@ -329,9 +330,38 @@ function makeTerm(sessionID, name) {
   term.onScroll(updateSb);
   term.onWriteParsed(updateSb);
 
-  const t = { term, fit, wrap, name, sessionID, connectionKey };
+  const cover = document.createElement('div');
+  cover.className = 'prompt-cover';
+  cover.style.height = '0px';
+  wrap.appendChild(cover);
+
+  const t = { term, fit, wrap, name, sessionID, connectionKey, cover, promptPattern: '' };
   terms.set(name, t);
+  inner.addEventListener('focusin', () => updatePromptCover(t, 'focus'));
+  inner.addEventListener('focusout', () => setTimeout(() => updatePromptCover(t, lastStatus.get(name)), 0));
   return t;
+}
+
+// Der zuletzt gesehene Status je Session. Beim Verlassen des Terminals muss die
+// Blende wissen, in welchen Zustand sie zurückfällt.
+const lastStatus = new Map();
+
+// updatePromptCover legt die Eingabezeile des Agenten unter eine Blende,
+// solange sie nicht gebraucht wird. Wartet die Session auf eine Entscheidung
+// oder hat das Terminal den Fokus, bleibt alles sichtbar.
+function updatePromptCover(t, status) {
+  if (!t?.cover) return;
+  const reveal = status === 'blocked' || status === 'focus' || t.wrap.contains(document.activeElement);
+  if (reveal || !t.promptPattern) { t.cover.style.height = '0px'; return; }
+  const buffer = t.term.buffer.active;
+  const lines = [];
+  for (let i = buffer.viewportY; i < buffer.viewportY + t.term.rows; i++) {
+    lines.push(buffer.getLine(i)?.translateToString(true) ?? '');
+  }
+  const rows = promptCoverRows(lines, t.promptPattern);
+  const cellHeight = t.term.element?.querySelector('.xterm-rows')?.firstElementChild?.offsetHeight
+    || t.term.options.fontSize * (t.term.options.lineHeight || 1);
+  t.cover.style.height = `${rows * cellHeight}px`;
 }
 
 const termBarEl = $('term-bar');
@@ -602,6 +632,9 @@ function updateTermComposer(a, visual, gone) {
   termStateDetailEl.textContent = detail;
   termPromptEl.placeholder = activeTerm ? `Nachricht an ${activeTerm} …` : 'Nachricht an die Session …';
   updateComposerControls(gone);
+  const status = gone ? 'exited' : a?.status;
+  lastStatus.set(activeTerm, status);
+  updatePromptCover(terms.get(activeTerm), status);
 }
 
 async function sendComposerMessage() {
@@ -876,6 +909,8 @@ async function openSession(sessionID, name) {
   if (fresh) {
     try { await OpenTerm(sessionID, name, t.term.cols, t.term.rows); }
     catch (err) { t.term.write('\x1b[31m' + err + '\x1b[0m\r\n'); }
+    try { t.promptPattern = await PromptLinePattern(String(sessionID)); }
+    catch { t.promptPattern = ''; }
   } else {
     ResizeTerm(t.connectionKey, t.term.cols, t.term.rows);
   }

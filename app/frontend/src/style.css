@@ -2152,3 +2152,12 @@ body.session-magnet-dragging * { cursor: grabbing !important; user-select: none 
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.term-wrap .prompt-cover {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--term-bg);
+  pointer-events: none;
+}
