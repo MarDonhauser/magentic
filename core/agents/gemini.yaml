@@ -1,0 +1,13 @@
+# Gemini CLI ist auf keiner Maschine beobachtet worden, auf der Magentic
+# entwickelt wurde. Solange niemand seine Bildschirme aufnimmt, bleibt sein
+# Status unbekannt: Magentic startet und verwaltet die Session, tippt aber
+# nichts hinein.
+kind: gemini
+label: Gemini CLI
+tool: gemini
+vendor: gemini
+screens_recorded: false
+tail: 25
+
+pane_commands:
+  - regex: '^gemini(-.*)?$'

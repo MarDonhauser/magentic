@@ -228,15 +228,15 @@ func handoffObservationForSession(snapshot ObservationSnapshot, session Session)
 }
 
 // handoffTargetToolSupported decides whether a handoff may aim at this tool at
-// all. Only a vendor whose screens were recorded can prove composer readiness;
-// for the others the live-TUI delivery Interface has no truthful signal and
-// would have to guess.
+// all. Only a kind whose screens were recorded and whose manifest names its
+// composer can prove input readiness; for the others the live-TUI delivery
+// Interface has no truthful signal and would have to guess.
 func handoffTargetToolSupported(name, tool string) error {
-	provider, known := providerForPaneCommand(tool)
+	kind, known := agentKindForPaneCommand(tool)
 	if !known {
 		return fmt.Errorf("in Ziel-Session %q läuft kein unterstütztes KI-Tool", name)
 	}
-	if !provider.ScreensRecorded() {
+	if !kind.screensRecorded || len(kind.composer) == 0 {
 		return fmt.Errorf("Eingabebereitschaft der Ziel-Session %q ist für %s unbekannt", name, tool)
 	}
 	return nil
@@ -247,8 +247,8 @@ func validateHandoffDeliveryReady(name string, observed promptTargetObservation)
 		return err
 	}
 	switch observed.Status {
-	case StatusIdle:
-		// Continue with Observation's provider-specific input fact below.
+	case StatusIdle, StatusDone:
+		// Continue with Observation's kind-specific input fact below.
 	case StatusBlocked:
 		return fmt.Errorf("Ziel-Session %q wartet auf eine Antwort — erst den offenen Dialog beantworten", name)
 	case StatusExited:

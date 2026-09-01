@@ -1,0 +1,85 @@
+# Claude Code. Die Regeln stammen aus beobachteten Bildschirmen der genannten
+# Version; wer sie ändert, sollte den Mitschnitt gleich mitliefern.
+kind: claude
+label: Claude Code
+tool: claude
+vendor: claude
+observed_version: "2.1.241"
+screens_recorded: true
+tail: 25
+
+pane_commands:
+  # Claude Code setzt seinen Prozesstitel seit etwa 2.1.237 auf die nackte
+  # Versionsnummer, tmux meldet also "2.1.241" statt "claude".
+  - regex: '^claude(-.*)?$'
+  - regex: '^[0-9]+\.[0-9]+\.[0-9]+$'
+
+states:
+  working:
+    # Der Spinner ist das sicherste Zeichen: eine Glyphe, ein Wort, ein Ellipsis.
+    - regex: '(?m)^\s*[·✢✳✶✻✽✺✹✸✷+*]\s+[^\n…]{1,80}…'
+    - literal: 'esc to interrupt'
+    - literal: 'ctrl+b to run in background'
+    - literal: '· thinking with'
+    # Hintergrund-Agents und Hintergrund-Shells sind ebenfalls laufende Arbeit.
+    - regex: '(?i)waiting for (\d+) background agent'
+    - regex: '(?m)^\s*[◯○◌]\s+\S+'
+    - regex: '(?i)(\d+)\s+shells?\s+still\s+running'
+    - regex: '(?im)·\s+(\d+)\s+shells?\s*$'
+  blocked:
+    - literal: 'do you want'
+    - literal: 'would you like'
+    - literal: '❯ 1.'
+    - literal: '(y/n)'
+    - literal: '[y/n]'
+    - literal: 'enter to confirm'
+    - literal: 'waiting for your'
+    - literal: 'press enter to'
+    - literal: 'trust this folder'
+  idle:
+    # Die eigene Eingabezeile in Ruhe. Ein Dialog trägt sie auch, wird aber
+    # vorher als blocked erkannt.
+    - regex: '(?m)^\s*❯'
+
+composer:
+  - literal: 'shift+tab to cycle'
+
+details:
+  blocked:
+    - label: Ordner-Freigabe
+      patterns:
+        - literal: 'trust this folder'
+        - literal: 'do you trust the files'
+    - label: Datei-Freigabe
+      patterns:
+        - literal: 'make this edit'
+        - literal: 'edit this file'
+        - literal: 'edit file'
+        - literal: 'create this file'
+        - literal: 'create file'
+        - literal: 'write this file'
+        - literal: 'write file'
+        - literal: 'apply this change'
+    - label: Shell-Freigabe
+      patterns:
+        - literal: 'bash command'
+        - literal: 'shell command'
+        - literal: 'run this command'
+        - literal: 'run the following command'
+        - literal: 'execute this command'
+    - label: Freigabe
+      patterns:
+        - literal: "don't ask again"
+        - literal: 'dont ask again'
+  working:
+    # Der Agent-Baum zählt direkt, die Wartezeile nennt die Zahl selbst.
+    - occurrences: '(?m)^\s*[◯○◌]\s+\S+'
+      capture: '(?i)waiting for (\d+) background agent'
+      singular: 'wartet auf %d Agent'
+      plural: 'wartet auf %d Agents'
+    - capture: '(?i)(\d+)\s+shells?\s+still\s+running'
+      singular: '%d Shell läuft'
+      plural: '%d Shells laufen'
+    - capture: '(?im)·\s+(\d+)\s+shells?\s*$'
+      singular: '%d Shell läuft'
+      plural: '%d Shells laufen'

@@ -23,6 +23,7 @@ const (
 	StatusExited  = core.StatusExited
 	StatusDead    = core.StatusDead
 	StatusTerm    = core.StatusTerm
+	StatusDone    = core.StatusDone
 
 	KindTerm = core.KindTerm
 )
@@ -39,13 +40,9 @@ var (
 	OpenRegistry    = core.OpenRegistry
 	RegisterProject = core.RegisterProject
 
-	lastLines            = core.LastLines
-	statusRank           = core.StatusRank
-	notifyDesktop        = core.NotifyDesktop
-	backgroundAgentCount = core.BackgroundAgentCount
-	agentsDetail         = core.AgentsDetail
-	backgroundShellCount = core.BackgroundShellCount
-	shellDetail          = core.ShellDetail
+	lastLines     = core.LastLines
+	statusRank    = core.StatusRank
+	notifyDesktop = core.NotifyDesktop
 
 	CachedUsage = core.CachedUsage
 

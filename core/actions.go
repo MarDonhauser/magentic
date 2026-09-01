@@ -752,7 +752,7 @@ func DoneSession(id SessionID) error {
 
 func validatePromptTargetStatus(name string, status AgentStatus) error {
 	switch status {
-	case StatusRunning, StatusAgents, StatusShell, StatusIdle:
+	case StatusRunning, StatusAgents, StatusShell, StatusIdle, StatusDone:
 		return nil
 	case StatusBlocked:
 		return fmt.Errorf("Ziel-Session %q wartet auf eine Antwort — erst den offenen Dialog beantworten", name)
@@ -783,14 +783,8 @@ func validatePromptTargetObservation(name string, observed promptTargetObservati
 	default:
 		return fmt.Errorf("in Ziel-Session %q läuft kein unterstütztes KI-Tool mehr", name)
 	}
-	if observed.Status == StatusUnknown {
-		// A vendor whose screens were never recorded cannot report a phase; its
-		// Adapter still supports literal queued input. For a recorded vendor an
-		// unknown status means an unfamiliar screen, and nothing goes into it.
-		if provider, known := providerForPaneCommand(observed.Tool); known && !provider.ScreensRecorded() {
-			return nil
-		}
-	}
+	// Unknown is fail-closed: a kind whose screens were never recorded is just
+	// as unproven as an unfamiliar screen, and nothing is typed into either.
 	return validatePromptTargetStatus(name, observed.Status)
 }
 

@@ -2,8 +2,6 @@ package core
 
 import (
 	"fmt"
-	"regexp"
-	"strconv"
 	"strings"
 )
 
@@ -19,6 +17,10 @@ const (
 	StatusExited
 	StatusDead
 	StatusTerm
+	// StatusDone is appended rather than inserted: AgentStatus is serialized by
+	// position, and an inserted member would silently renumber every Session
+	// the desktop app already holds.
+	StatusDone
 )
 
 func (s AgentStatus) Label() string {
@@ -31,6 +33,8 @@ func (s AgentStatus) Label() string {
 		return "Shell läuft"
 	case StatusBlocked:
 		return "wartet"
+	case StatusDone:
+		return "fertig"
 	case StatusIdle:
 		return "idle"
 	case StatusExited:
@@ -53,6 +57,8 @@ func (s AgentStatus) Icon() string {
 		return "⚙"
 	case StatusBlocked:
 		return "◆"
+	case StatusDone:
+		return "✓"
 	case StatusIdle:
 		return "○"
 	case StatusExited:
@@ -63,77 +69,6 @@ func (s AgentStatus) Icon() string {
 		return "⌨"
 	}
 	return "?"
-}
-
-var bgAgentsRe = regexp.MustCompile(`(?i)waiting for (\d+) background agent`)
-
-var agentTreeRe = regexp.MustCompile(`(?m)^\s*[◯○◌]\s+\S+`)
-
-func BackgroundAgentCount(content string) int {
-	if n := len(agentTreeRe.FindAllString(content, -1)); n > 0 {
-		return n
-	}
-	ms := bgAgentsRe.FindAllStringSubmatch(content, -1)
-	if len(ms) == 0 {
-		return 0
-	}
-	n, _ := strconv.Atoi(ms[len(ms)-1][1])
-	return n
-}
-
-func AgentsDetail(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	if n == 1 {
-		return "wartet auf 1 Agent"
-	}
-	return fmt.Sprintf("wartet auf %d Agents", n)
-}
-
-var bgShellRe = regexp.MustCompile(`(?i)(\d+)\s+shells?\s+still\s+running`)
-var bgShellBarRe = regexp.MustCompile(`(?im)·\s+(\d+)\s+shells?\s*$`)
-
-func BackgroundShellCount(content string) int {
-	if m := bgShellRe.FindStringSubmatch(content); m != nil {
-		n, _ := strconv.Atoi(m[1])
-		return n
-	}
-	if m := bgShellBarRe.FindStringSubmatch(content); m != nil {
-		n, _ := strconv.Atoi(m[1])
-		return n
-	}
-	return 0
-}
-
-func ShellDetail(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	if n == 1 {
-		return "1 Shell läuft"
-	}
-	return fmt.Sprintf("%d Shells laufen", n)
-}
-
-var spinnerRe = regexp.MustCompile(`(?m)^\s*[·✢✳✶✻✽✺✹✸✷+*]\s+[^\n…]{1,80}…`)
-
-var runningPatterns = []string{
-	"esc to interrupt",
-	"ctrl+b to run in background",
-	"· thinking with",
-}
-
-var blockedPatterns = []string{
-	"do you want",
-	"would you like",
-	"❯ 1.",
-	"(y/n)",
-	"[y/n]",
-	"enter to confirm",
-	"waiting for your",
-	"press enter to",
-	"trust this folder",
 }
 
 var shellCommands = map[string]bool{
@@ -156,28 +91,10 @@ func DetectAgentTool(paneCommand string, term bool) string {
 	if term {
 		return AgentToolBash
 	}
-	if provider, ok := providerForPaneCommand(paneCommand); ok {
-		return provider.Tool()
+	if kind, ok := agentKindForPaneCommand(paneCommand); ok {
+		return kind.tool
 	}
 	return ""
-}
-
-func looksLikeBareVersionNumber(command string) bool {
-	parts := strings.Split(command, ".")
-	if len(parts) != 3 {
-		return false
-	}
-	for _, part := range parts {
-		if part == "" {
-			return false
-		}
-		for _, r := range part {
-			if r < '0' || r > '9' {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 // observationSessions returns copy-only ephemeral IDs for legacy fixtures.
@@ -206,30 +123,6 @@ func observationSessions(sessions []Session) []Session {
 	return prepared
 }
 
-var permissionDetails = []struct {
-	label    string
-	patterns []string
-}{
-	{"Ordner-Freigabe", []string{"trust this folder", "do you trust the files"}},
-	{"Datei-Freigabe", []string{"make this edit", "edit this file", "edit file", "create this file", "create file", "write this file", "write file", "apply this change"}},
-	{"Shell-Freigabe", []string{"bash command", "shell command", "run this command", "run the following command", "execute this command"}},
-}
-
-func BlockedDetail(content string) string {
-	lc := strings.ToLower(content)
-	for _, d := range permissionDetails {
-		for _, p := range d.patterns {
-			if strings.Contains(lc, p) {
-				return d.label
-			}
-		}
-	}
-	if strings.Contains(lc, "don't ask again") || strings.Contains(lc, "dont ask again") {
-		return "Freigabe"
-	}
-	return ""
-}
-
 func LastLines(s string, n int) string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
 	if len(lines) > n {
@@ -243,34 +136,4 @@ func DetectTermStatus(sessionExists bool) AgentStatus {
 		return StatusDead
 	}
 	return StatusTerm
-}
-
-func DetectClaudeStatus(sessionExists bool, paneCommand, paneContent string) AgentStatus {
-	if !sessionExists {
-		return StatusDead
-	}
-	if shellCommands[paneCommand] {
-		return StatusExited
-	}
-	if spinnerRe.MatchString(paneContent) {
-		return StatusRunning
-	}
-	content := strings.ToLower(paneContent)
-	for _, p := range runningPatterns {
-		if strings.Contains(content, p) {
-			return StatusRunning
-		}
-	}
-	for _, p := range blockedPatterns {
-		if strings.Contains(content, p) {
-			return StatusBlocked
-		}
-	}
-	if bgAgentsRe.MatchString(paneContent) || agentTreeRe.MatchString(paneContent) {
-		return StatusAgents
-	}
-	if BackgroundShellCount(paneContent) > 0 {
-		return StatusShell
-	}
-	return StatusIdle
 }

@@ -1,0 +1,33 @@
+# Codex. Aufgenommen aus echten tmux-Panes von codex-cli 0.151.0: es dreht als
+# "• Working (12s • esc to interrupt)", fragt mit einer nummerierten "› 1."-Liste
+# und ruht hinter seinem Eingabe-Platzhalter.
+kind: codex
+label: Codex
+tool: codex
+vendor: codex
+observed_version: "0.151.0"
+screens_recorded: true
+tail: 25
+
+pane_commands:
+  - regex: '^codex(-.*)?$'
+
+states:
+  working:
+    - literal: 'esc to interrupt'
+  blocked:
+    - literal: '› 1.'
+    - literal: '❯ 1.'
+    - literal: 'press enter to continue'
+    - literal: 'do you trust the contents'
+  idle:
+    - literal: 'ask codex to do anything'
+
+composer:
+  - literal: 'ask codex to do anything'
+
+details:
+  blocked:
+    - label: Ordner-Freigabe
+      patterns:
+        - literal: 'do you trust the contents'

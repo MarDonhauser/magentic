@@ -38,6 +38,17 @@ const (
 	AttentionReview     AttentionState = "review"
 )
 
+// StatusSource names what produced a Session's status, so a consumer can tell
+// a confirmed reading from an inferred one without re-deriving it.
+type StatusSource string
+
+const (
+	StatusSourceNone     StatusSource = "none"
+	StatusSourcePresence StatusSource = "presence"
+	StatusSourceSnapshot StatusSource = "snapshot"
+	StatusSourceHook     StatusSource = "hook"
+)
+
 type OccupancyState string
 
 const (
@@ -53,6 +64,7 @@ type SessionObservation struct {
 	Availability  ObservationAvailability `json:"availability"`
 	Presence      SessionPresence         `json:"presence"`
 	Status        AgentStatus             `json:"status"`
+	StatusSource  StatusSource            `json:"statusSource"`
 	Content       string                  `json:"content,omitempty"`
 	ContentKnown  bool                    `json:"contentKnown"`
 	Activity      time.Time               `json:"activity,omitzero"`
@@ -148,16 +160,16 @@ func promptInputStateFromObservation(observed SessionObservation) promptInputSta
 		observed.Presence != SessionPresencePresent || !observed.ContentKnown {
 		return promptInputUnknown
 	}
-	// Only a vendor whose screens were actually recorded may claim readiness.
-	// An unfamiliar tool stays unknown rather than borrowing another vendor's
-	// composer markers.
-	provider, known := providerForPaneCommand(observed.Tool)
+	// Only a kind whose composer markers were actually recorded may claim
+	// readiness. An unfamiliar tool stays unknown rather than borrowing another
+	// kind's composer markers.
+	kind, known := agentKindForPaneCommand(observed.Tool)
 	if !known {
 		return promptInputUnknown
 	}
 	switch observed.Status {
-	case StatusIdle:
-		if provider.ComposerReady(observed.Content) {
+	case StatusIdle, StatusDone:
+		if agentKindComposerReady(kind, observed.Content) {
 			return promptInputReady
 		}
 		return promptInputUnknown
@@ -203,6 +215,7 @@ type observationConfig struct {
 	cycleTimeout time.Duration
 	probeTimeout time.Duration
 	now          func() time.Time
+	reports      *HookReportStore
 }
 
 func (c observationConfig) normalized() observationConfig {
@@ -217,6 +230,9 @@ func (c observationConfig) normalized() observationConfig {
 	}
 	if c.now == nil {
 		c.now = time.Now
+	}
+	if c.reports == nil {
+		c.reports = defaultHookReports
 	}
 	return c
 }
@@ -253,6 +269,7 @@ func observeWithRunner(ctx context.Context, sessions []Session, runner observati
 		snapshot.ObservedAt = config.now().UTC()
 		return snapshot
 	}
+	config.reports.DrainHookReportFile(HookReportPath(), sessions)
 
 	valid := make([]bool, len(sessions))
 	runtimeNames := make([]string, len(sessions))
@@ -262,6 +279,7 @@ func observeWithRunner(ctx context.Context, sessions []Session, runner observati
 			Availability: ObservationUnavailable,
 			Presence:     SessionPresenceUnknown,
 			Status:       StatusUnknown,
+			StatusSource: StatusSourceNone,
 			Attention:    AttentionUnknown,
 			WorktreePath: session.Dir,
 			Worktree:     session.Worktree,
@@ -352,6 +370,7 @@ func observeWithRunner(ctx context.Context, sessions []Session, runner observati
 			observed.Availability = ObservationAvailable
 			observed.Presence = SessionPresenceAbsent
 			observed.Status = StatusDead
+			observed.StatusSource = StatusSourcePresence
 			observed.Attention = AttentionNone
 			observed.Occupancy = OccupancyVacant
 			continue
@@ -399,7 +418,14 @@ func observeWithRunner(ctx context.Context, sessions []Session, runner observati
 		observed := &snapshot.Sessions[result.index]
 		if result.err != nil {
 			observed.Availability = ObservationPartial
-			observed.Status = statusWithoutPaneContent(session, pane.command)
+			resolved := resolveSessionStatus(statusInput{
+				session: session, present: true, paneCommand: pane.command,
+				activity: observed.Activity, activityKnown: observed.ActivityKnown,
+				now: config.now(), reports: config.reports,
+			})
+			observed.Status = resolved.Status
+			observed.StatusSource = resolved.Source
+			observed.Detail = resolved.Detail
 			observed.Attention = observationAttention(observed.Status)
 			observed.Unread = observationUnread(
 				observed.Status, session.SeenAt, observed.Activity, observed.ActivityKnown,
@@ -413,8 +439,15 @@ func observeWithRunner(ctx context.Context, sessions []Session, runner observati
 
 		observed.Content = normalizeObservedContent(result.content)
 		observed.ContentKnown = true
-		observed.Status = statusFromObservation(session, pane.command, observed.Content)
-		observed.Detail = observationDetail(observed.Status, observed.Content)
+		resolved := resolveSessionStatus(statusInput{
+			session: session, present: true, paneCommand: pane.command,
+			content: observed.Content, contentKnown: true,
+			activity: observed.Activity, activityKnown: observed.ActivityKnown,
+			now: config.now(), reports: config.reports,
+		})
+		observed.Status = resolved.Status
+		observed.StatusSource = resolved.Source
+		observed.Detail = resolved.Detail
 		observed.Attention = observationAttention(observed.Status)
 		observed.Unread = observationUnread(
 			observed.Status, session.SeenAt, observed.Activity, observed.ActivityKnown,
@@ -578,57 +611,84 @@ func observedSessionTool(session Session, paneCommand string) string {
 	return tool
 }
 
-func statusFromObservation(session Session, paneCommand, content string) AgentStatus {
-	tool := observedSessionTool(session, paneCommand)
-	if session.IsTerm() && tool == AgentToolBash {
-		return StatusTerm
-	}
-	return statusForAgentRuntime(true, tool, paneCommand, content)
+// statusInput is one Session's evidence for status resolution: what the runtime
+// proves about presence, what the vendor reported about itself, and what its
+// pane currently shows.
+type statusInput struct {
+	session       Session
+	present       bool
+	paneCommand   string
+	content       string
+	contentKnown  bool
+	activity      time.Time
+	activityKnown bool
+	now           time.Time
+	reports       *HookReportStore
 }
 
-// statusForAgentRuntime dispatches only to status semantics the Module knows.
-// Provider presence is not enough to infer that an unfamiliar UI is idle or
-// finished; unsupported provider Adapters therefore remain explicitly unknown.
-func statusForAgentRuntime(sessionExists bool, tool, paneCommand, content string) AgentStatus {
-	if !sessionExists {
-		return StatusDead
-	}
-	command := normalizedPaneCommand(paneCommand)
-	if shellCommands[command] {
-		return StatusExited
-	}
-	if provider, ok := providerForPaneCommand(tool); ok {
-		return provider.Status(LastLines(content, 25))
-	}
-	return StatusUnknown
+// statusOutcome is the resolved status together with the source that produced
+// it, so a consumer can tell a confirmed reading from an inferred one.
+type statusOutcome struct {
+	Status AgentStatus
+	Source StatusSource
+	Detail string
 }
 
-func statusWithoutPaneContent(session Session, paneCommand string) AgentStatus {
-	tool := observedSessionTool(session, paneCommand)
-	if session.IsTerm() && tool == AgentToolBash {
-		return StatusTerm
+// resolveSessionStatus applies the one precedence there is: runtime presence
+// first, then a fresh hook report, then manifest inference over the pane
+// snapshot, then unknown. Nothing that cannot be proven becomes idle or done.
+func resolveSessionStatus(in statusInput) statusOutcome {
+	tool := observedSessionTool(in.session, in.paneCommand)
+	if !in.present {
+		return statusOutcome{Status: StatusDead, Source: StatusSourcePresence}
 	}
-	if shellCommands[normalizedPaneCommand(paneCommand)] {
-		return StatusExited
+	if in.session.IsTerm() && tool == AgentToolBash {
+		return statusOutcome{Status: StatusTerm, Source: StatusSourcePresence}
 	}
-	return StatusUnknown
+	if shellCommands[normalizedPaneCommand(in.paneCommand)] {
+		return statusOutcome{Status: StatusExited, Source: StatusSourcePresence}
+	}
+	if record, fresh := in.reports.fresh(in.session.ID, in.now); fresh {
+		return statusOutcome{Status: record.status, Source: StatusSourceHook, Detail: record.detail}
+	}
+	if !in.contentKnown {
+		return statusOutcome{Status: StatusUnknown, Source: StatusSourceNone}
+	}
+	kind, known := agentKindForPaneCommand(tool)
+	if !known {
+		return statusOutcome{Status: StatusUnknown, Source: StatusSourceNone}
+	}
+	evaluated := evaluateAgentKind(kind, in.content)
+	if !evaluated.Matched {
+		return statusOutcome{Status: StatusUnknown, Source: StatusSourceNone}
+	}
+	status := evaluated.Status
+	// Most kinds have no distinguishable finished screen. A resting screen the
+	// developer has not looked at since the agent last moved is what "done"
+	// means for them; the signal is the one Unread already uses.
+	if status == StatusIdle && len(kind.done) == 0 &&
+		in.activityKnown && in.activity.After(in.session.SeenAt) {
+		status = StatusDone
+	}
+	return statusOutcome{Status: status, Source: StatusSourceSnapshot, Detail: evaluated.Detail}
+}
+
+// InferStatusFromPane resolves what one agent kind's manifest can prove about a
+// pane, without the presence and hook facts a full Observation carries.
+func InferStatusFromPane(paneCommand, content string) (AgentStatus, string) {
+	kind, known := agentKindForPaneCommand(paneCommand)
+	if !known {
+		return StatusUnknown, ""
+	}
+	evaluated := evaluateAgentKind(kind, content)
+	if !evaluated.Matched {
+		return StatusUnknown, ""
+	}
+	return evaluated.Status, evaluated.Detail
 }
 
 func normalizedPaneCommand(command string) string {
 	return strings.ToLower(strings.TrimSpace(command))
-}
-
-func observationDetail(status AgentStatus, content string) string {
-	switch status {
-	case StatusAgents:
-		return AgentsDetail(BackgroundAgentCount(LastLines(content, 25)))
-	case StatusShell:
-		return ShellDetail(BackgroundShellCount(LastLines(content, 25)))
-	case StatusBlocked:
-		return BlockedDetail(LastLines(content, 25))
-	default:
-		return ""
-	}
 }
 
 func observationAttention(status AgentStatus) AttentionState {
@@ -637,7 +697,7 @@ func observationAttention(status AgentStatus) AttentionState {
 		return AttentionWorking
 	case StatusBlocked:
 		return AttentionNeedsInput
-	case StatusIdle, StatusExited:
+	case StatusDone, StatusIdle, StatusExited:
 		return AttentionReview
 	case StatusDead, StatusTerm:
 		return AttentionNone
@@ -651,7 +711,7 @@ func observationUnread(status AgentStatus, seenAt, activity time.Time, activityK
 		return false
 	}
 	switch status {
-	case StatusIdle, StatusBlocked, StatusExited:
+	case StatusDone, StatusIdle, StatusBlocked, StatusExited:
 		return activity.After(seenAt)
 	default:
 		return false

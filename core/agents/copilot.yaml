@@ -1,0 +1,33 @@
+# GitHub Copilot. Aufgenommen aus echten tmux-Panes von Copilot 1.0.82. Seine
+# Spinner-Zeile lautet "● Working esc interrupt", ohne das "to", das Claude und
+# Codex schreiben.
+kind: copilot
+label: GitHub Copilot
+tool: copilot
+vendor: copilot
+observed_version: "1.0.82"
+screens_recorded: true
+tail: 25
+
+pane_commands:
+  - regex: '^copilot(-.*)?$'
+  - literal: 'github-copilot'
+
+states:
+  working:
+    - literal: 'working esc interrupt'
+  blocked:
+    - literal: '❯ 1.'
+    - literal: 'do you trust the files'
+    - literal: 'enter to select'
+  idle:
+    - literal: 'open sidebar'
+
+composer:
+  - literal: 'open sidebar'
+
+details:
+  blocked:
+    - label: Ordner-Freigabe
+      patterns:
+        - literal: 'do you trust the files'
