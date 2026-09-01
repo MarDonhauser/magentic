@@ -162,8 +162,24 @@ export function ReopenSession(arg1) {
   return window['go']['main']['App']['ReopenSession'](arg1);
 }
 
-export function ReorderProjects(arg1) {
-  return window['go']['main']['App']['ReorderProjects'](arg1);
+export function AddDivider(arg1) {
+  return window['go']['main']['App']['AddDivider'](arg1);
+}
+
+export function RenameDivider(arg1, arg2) {
+  return window['go']['main']['App']['RenameDivider'](arg1, arg2);
+}
+
+export function RemoveDivider(arg1) {
+  return window['go']['main']['App']['RemoveDivider'](arg1);
+}
+
+export function SetDividerCollapsed(arg1, arg2) {
+  return window['go']['main']['App']['SetDividerCollapsed'](arg1, arg2);
+}
+
+export function MoveSidebarItem(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['MoveSidebarItem'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function ResizeTerm(arg1, arg2, arg3) {

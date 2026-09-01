@@ -273,6 +273,11 @@ func (r *Registry) commit(ctx context.Context, apply func(*State) (bool, error),
 		if err != nil {
 			return err
 		}
+		// A change can strand a placement — a closed session, a removed
+		// project — so the arrangement is tidied before it is validated.
+		if normalizeSidebar(&state) {
+			changed = true
+		}
 		if err := validateRegistryState(&state); err != nil {
 			return err
 		}
@@ -805,7 +810,7 @@ func backupLegacyRegistry(path string, data []byte) error {
 	if len(data) == 0 {
 		return nil
 	}
-	backup := path + ".pre-registry-v2.bak"
+	backup := fmt.Sprintf("%s.pre-registry-v%d.bak", path, registrySchemaVersion)
 	if _, err := os.Stat(backup); err == nil {
 		return nil
 	} else if !os.IsNotExist(err) {

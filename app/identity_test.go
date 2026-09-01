@@ -194,7 +194,12 @@ func TestProjectFacadeRejectsStaleIDWhenNameIsReused(t *testing.T) {
 		{name: "worktree diff", call: func(app *App, id string) error { _, err := app.WorktreeDiff(id, "stale-worktree"); return err }},
 		{name: "set main branch", call: func(app *App, id string) error { return app.SetMainBranch(id, "trunk") }},
 		{name: "remove project", call: func(app *App, id string) error { return app.RemoveProject(id) }},
-		{name: "reorder projects", call: func(app *App, id string) error { return app.ReorderProjects([]string{"project-other", id}) }},
+		{name: "move sidebar item", call: func(app *App, id string) error {
+			return app.MoveSidebarItem("project", id, "", "", []core.SidebarRef{
+				{Kind: core.SidebarSlotProject, Ref: "project-other"},
+				{Kind: core.SidebarSlotProject, Ref: id},
+			})
+		}},
 	}
 
 	for _, action := range actions {

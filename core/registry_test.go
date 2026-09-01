@@ -46,7 +46,7 @@ func TestRegistryMigratesStableIdentitiesOnce(t *testing.T) {
 	if run, ok := session.AgentRun(AgentVendorClaude); !ok || run.ExternalID != "claude-run" {
 		t.Fatalf("legacy provider ID was not qualified: %+v", session.AgentRuns)
 	}
-	backup, err := os.ReadFile(path + ".pre-registry-v2.bak")
+	backup, err := os.ReadFile(path + ".pre-registry-v3.bak")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -16,6 +16,20 @@ export namespace core {
 	        this.available = source["available"];
 	    }
 	}
+	export class SidebarRef {
+	    kind: string;
+	    ref: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SidebarRef(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.ref = source["ref"];
+	    }
+	}
 	export class BoardTask {
 	    text: string;
 	    done: boolean;

@@ -13,12 +13,14 @@ import {
   SessionAutomation, SaveSessionAutomation, DeleteSessionAutomation,
   DeployStatus, AzLogin, ArgoLogin, AzAccounts, AzSetSubscription,
   WorktreeDiff, SessionPreview, SearchTranscripts, SessionLinks, SetActiveTerm,
-  PickFolder, AddProject, RemoveProject, ReorderProjects, SaveImage, Timeline,
+  PickFolder, AddProject, RemoveProject, SaveImage, Timeline,
+  AddDivider, RenameDivider, RemoveDivider, SetDividerCollapsed, MoveSidebarItem,
   Zeitgeist, ZeitgeistStart, ZeitgeistPause, ZeitgeistResume, ZeitgeistStop,
   MarkSeen, GitGraph, Board, BoardArchive, Stats, StartBoardItem, NewDockSession, MigrateDockSessions, BuildInfo,
   Breaks, BreakHeartbeat, TakeBreak, EndBreak, SnoozeBreak, BreakConfig, SetBreakConfig, BreakOver,
 } from '../wailsjs/go/main/App';
 import { usagePages, clampUsagePage } from './usage-state.js';
+import { buildSidebar, flattenSidebar, canPlace, planMove } from './sidebar-layout.js';
 import { EventsOn, EventsOff, BrowserOpenURL, ClipboardSetText } from '../wailsjs/runtime/runtime';
 import {
   developerIcon,
@@ -115,7 +117,9 @@ let editingMain = null;
 let composingSession = null;
 let sidebarSessions = [];
 let hydraProject = null;
-let pdrag = null;
+let sdrag = null;
+let sidebarTree = [];
+let renameDividerOnRender = null;
 let suppressHeadClick = false;
 
 function esc(s) {
@@ -150,6 +154,7 @@ const ICONS = {
   cloud: '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
   warn: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
   magnet: '<path d="M6 8v4a6 6 0 0 0 12 0V8"/><path d="M4 3h4v5H4z"/><path d="M16 3h4v5h-4z"/>',
+  chevron: '<path d="m6 9 6 6 6-6"/>',
 };
 
 function icon(name) {
@@ -1338,41 +1343,51 @@ async function syncHydra() {
 }
 
 
-function makeProjDraggable(head, id, name) {
-  head.classList.add('draggable');
-  head.dataset.projectId = id;
-  head.addEventListener('pointerdown', e => {
-    if (e.button !== 0 || e.target.closest('.proj-add')) return;
-    pdrag = { id, name, head, startY: e.clientY, active: false };
-    window.addEventListener('pointermove', onProjPointerMove);
-    window.addEventListener('pointerup', onProjPointerUp, { once: true });
+// Ziehen in der Sitzungsliste: Divider, Projekte und Sessions folgen derselben
+// Mechanik. Erlaubt ist nur, was canPlace durchlässt — ein Ziel, das die
+// gezogene Zeile nicht aufnehmen darf, bekommt gar keine Marke.
+function makeSidebarDraggable(el, item) {
+  el.classList.add('draggable');
+  el.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || e.target.closest('.proj-add, input')) return;
+    sdrag = { item, el, startY: e.clientY, active: false, drop: null };
+    window.addEventListener('pointermove', onSidebarPointerMove);
+    window.addEventListener('pointerup', onSidebarPointerUp, { once: true });
   });
 }
 
-function onProjPointerMove(e) {
-  if (!pdrag) return;
-  if (!pdrag.active) {
-    if (Math.abs(e.clientY - pdrag.startY) < 4) return;
-    pdrag.active = true;
-    pdrag.head.classList.add('dragging');
+function onSidebarPointerMove(e) {
+  if (!sdrag) return;
+  if (!sdrag.active) {
+    if (Math.abs(e.clientY - sdrag.startY) < 4) return;
+    sdrag.active = true;
+    sdrag.el.classList.add('dragging');
     document.body.classList.add('reordering');
   }
-  markDropAt(dropIndexAt(e.clientY));
+  sdrag.drop = dropCandidateAt(sdrag.item, e.clientY);
+  markDrop(sdrag.drop);
   autoScrollSidebar(e.clientY);
 }
 
-function onProjPointerUp(e) {
-  window.removeEventListener('pointermove', onProjPointerMove);
-  const d = pdrag;
-  pdrag = null;
+async function onSidebarPointerUp() {
+  window.removeEventListener('pointermove', onSidebarPointerMove);
+  const drag = sdrag;
+  sdrag = null;
   document.body.classList.remove('reordering');
-  if (!d) return;
-  d.head.classList.remove('dragging');
+  if (!drag) return;
+  drag.el.classList.remove('dragging');
   clearDropMarks();
-  if (d.active) {
-    suppressHeadClick = true;
-    setTimeout(() => { suppressHeadClick = false; }, 0);
-    reorderProjects(d.id, dropIndexAt(e.clientY));
+  if (!drag.active || !drag.drop) return;
+  suppressHeadClick = true;
+  setTimeout(() => { suppressHeadClick = false; }, 0);
+  const { parentKind, parent, index } = drag.drop;
+  const move = planMove(sidebarTree, drag.item, parentKind, parent, index);
+  if (!move) return;
+  try {
+    await MoveSidebarItem(move.kind, move.ref, move.parentKind, move.parent, move.order);
+    await refresh(true);
+  } catch (err) {
+    toast('Fehler: ' + err, true);
   }
 }
 
@@ -1382,46 +1397,51 @@ function autoScrollSidebar(clientY) {
   else if (clientY > r.bottom - 24) sessionsEl.scrollTop += 6;
 }
 
-function projHeads() {
-  return [...sessionsEl.querySelectorAll('.proj-head.draggable')];
-}
-
-function dropIndexAt(clientY) {
-  const heads = projHeads();
-  for (let i = 0; i < heads.length; i++) {
-    const r = heads[i].getBoundingClientRect();
-    if (clientY < r.top + r.height / 2) return i;
+// dropCandidates listet jede Stelle, an der eine Zeile landen kann: vor einer
+// Zeile, hinter ihr, und — bei Divider und Projekt — als erster Eintrag darin.
+function dropCandidates() {
+  const spots = [];
+  const rows = [...sessionsEl.querySelectorAll('[data-row]')];
+  for (const el of rows) {
+    const r = el.getBoundingClientRect();
+    const parentKind = el.dataset.parentKind;
+    const parent = el.dataset.parent;
+    const index = Number(el.dataset.index);
+    spots.push({ y: r.top, parentKind, parent, index, el, edge: 'before' });
+    const opens = el.dataset.kind === 'divider' || el.dataset.kind === 'project';
+    if (opens) spots.push({ y: r.bottom, parentKind: el.dataset.kind, parent: el.dataset.ref, index: 0, el, edge: 'into' });
+    else spots.push({ y: r.bottom, parentKind, parent, index: index + 1, el, edge: 'after' });
   }
-  return heads.length;
+  const last = rows[rows.length - 1];
+  if (last) {
+    const top = rows.filter(el => el.dataset.parentKind === '');
+    spots.push({
+      y: last.getBoundingClientRect().bottom,
+      parentKind: '', parent: '', index: top.length, el: last, edge: 'after',
+    });
+  }
+  return spots;
 }
 
-function markDropAt(idx) {
+function dropCandidateAt(item, clientY) {
+  let best = null;
+  for (const spot of dropCandidates()) {
+    if (!canPlace(item, spot.parentKind, spot.parent)) continue;
+    const distance = Math.abs(spot.y - clientY);
+    if (!best || distance < best.distance) best = { ...spot, distance };
+  }
+  return best;
+}
+
+function markDrop(spot) {
   clearDropMarks();
-  const heads = projHeads();
-  if (!heads.length) return;
-  if (idx < heads.length) heads[idx].classList.add('drop-before');
-  else heads[heads.length - 1].classList.add('drop-after');
+  if (!spot) return;
+  spot.el.classList.add(spot.edge === 'into' ? 'drop-into' : 'drop-' + spot.edge);
 }
 
 function clearDropMarks() {
-  for (const el of sessionsEl.querySelectorAll('.proj-head.drop-before, .proj-head.drop-after')) {
-    el.classList.remove('drop-before', 'drop-after');
-  }
-}
-
-async function reorderProjects(dragged, idx) {
-  if (!dragged) return;
-  const order = (ov?.projects || []).filter(p => p.path).map(p => p.id);
-  const from = order.indexOf(dragged);
-  if (from < 0) return;
-  order.splice(from, 1);
-  if (from < idx) idx -= 1;
-  order.splice(idx, 0, dragged);
-  try {
-    await ReorderProjects(order);
-    await refresh(true);
-  } catch (err) {
-    toast('Fehler: ' + err, true);
+  for (const el of sessionsEl.querySelectorAll('.drop-before, .drop-after, .drop-into')) {
+    el.classList.remove('drop-before', 'drop-after', 'drop-into');
   }
 }
 

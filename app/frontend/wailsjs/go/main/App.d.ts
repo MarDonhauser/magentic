@@ -83,7 +83,15 @@ export function RemoveWorktree(arg1:string,arg2:string):Promise<void>;
 
 export function ReopenSession(arg1:string):Promise<void>;
 
-export function ReorderProjects(arg1:Array<string>):Promise<void>;
+export function AddDivider(arg1:string):Promise<string>;
+
+export function RenameDivider(arg1:string,arg2:string):Promise<void>;
+
+export function RemoveDivider(arg1:string):Promise<void>;
+
+export function SetDividerCollapsed(arg1:string,arg2:boolean):Promise<void>;
+
+export function MoveSidebarItem(arg1:string,arg2:string,arg3:string,arg4:string,arg5:Array<core.SidebarRef>):Promise<void>;
 
 export function ResizeTerm(arg1:string,arg2:number,arg3:number):Promise<void>;
 
