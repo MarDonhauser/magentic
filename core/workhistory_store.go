@@ -596,3 +596,195 @@ func historyStrings[T ~string](values []T) []string {
 	}
 	return out
 }
+
+// historyActivityRow ist eine dauerhafte Zeile der Tabelle activity: eine
+// Kennzahl je Conversation (oder Quelle, wenn keine Conversation bekannt ist),
+// Tag, Stunde, Provider und Modell. Anders als events überlebt sie das
+// Aufbewahrungsfenster der Roh-Events.
+type historyActivityRow struct {
+	AggKey             string
+	Day                string
+	Hour               int
+	Provider           HistoryProvider
+	Model              string
+	SourceID           string
+	WrittenFromModTime int64
+	ConversationID     string
+	CWD                string
+	ProjectAlias       string
+	Prompts            int
+	Turns              int
+	Input              int64
+	Output             int64
+	CacheRead          int64
+	CacheWrite         int64
+	Cost               float64
+	PricedEvents       int
+	UnpricedEvents     int
+	// Trägt HistoryMeasure.Coverage: wie viele Ereignisse Tokenwerte kannten.
+	KnownUsageEvents   int
+	UnknownUsageEvents int
+}
+
+// historyActivityKey identifiziert eine Aggregatzeile innerhalb einer Quelle.
+// Anders als der Primärschlüssel der Tabelle activity trägt sie kein Modell:
+// eine Stunde einer Conversation hat praktisch ein Modell, aber Prompts (ohne
+// Modellangabe) und die zugehörigen Assistant-Ausgaben müssen in dieselbe
+// Zeile fallen, sonst zählt derselbe Turn doppelt.
+type historyActivityKey struct {
+	aggKey   string
+	day      string
+	hour     int
+	provider HistoryProvider
+}
+
+// historyActivityRowsFor verdichtet die Datensätze einer Quelle zu dauerhaften
+// Kennzahlen. Namen von Projekten und Sessions bleiben bewusst außen vor; sie
+// werden bei jeder Abfrage neu aufgelöst, damit Umbenennungen wirken.
+func historyActivityRowsFor(records []historyRecord, sourceID string, modTime int64, loc *time.Location) []historyActivityRow {
+	if loc == nil {
+		loc = time.Local
+	}
+	byKey := map[historyActivityKey]*historyActivityRow{}
+	order := make([]historyActivityKey, 0, len(records))
+	for _, record := range records {
+		if record.Timestamp == "" {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339, record.Timestamp)
+		if err != nil {
+			continue
+		}
+		local := parsed.In(loc)
+		aggKey := record.ConversationID
+		if aggKey == "" {
+			aggKey = sourceID
+		}
+		key := historyActivityKey{
+			aggKey: aggKey, day: local.Format(statsDateLayout), hour: local.Hour(),
+			provider: record.Provider,
+		}
+		row := byKey[key]
+		if row == nil {
+			row = &historyActivityRow{
+				AggKey: aggKey, Day: key.day, Hour: key.hour, Provider: record.Provider,
+				SourceID: sourceID, WrittenFromModTime: modTime,
+				ConversationID: record.ConversationID, CWD: record.CWD, ProjectAlias: record.ProjectAlias,
+			}
+			byKey[key] = row
+			order = append(order, key)
+		}
+		if row.CWD == "" {
+			row.CWD = record.CWD
+		}
+		if row.ProjectAlias == "" {
+			row.ProjectAlias = record.ProjectAlias
+		}
+		if row.Model == "" {
+			row.Model = record.Model
+		}
+		switch record.Kind {
+		case HistoryEventPrompt:
+			row.Prompts++
+			continue
+		case HistoryEventOutput:
+			row.Turns++
+		case HistoryEventUsage:
+		default:
+			continue
+		}
+		usage := publicHistoryUsage(record.Usage)
+		known, unknown := statsUsageFactState(usage)
+		row.Input += knownHistoryValue(usage.InputTokens)
+		row.Output += knownHistoryValue(usage.OutputTokens)
+		row.CacheRead += knownHistoryValue(usage.CacheReadTokens)
+		row.CacheWrite += knownHistoryValue(usage.CacheWriteTokens)
+		priced := false
+		if record.Provider == HistoryProviderClaude && known {
+			cost, ok := modelCost(record.Provider, record.Model,
+				knownHistoryValue(usage.InputTokens), knownHistoryValue(usage.OutputTokens),
+				knownHistoryValue(usage.CacheReadTokens), knownHistoryValue(usage.CacheWriteTokens))
+			row.Cost += cost
+			priced = ok
+		}
+		// Gezählt wird je Ereignis, nicht je Tokenfeld: kennt das Ereignis
+		// irgendeinen Tokenwert, zählt es als bekannt, auch wenn andere Felder
+		// (z. B. Cache) unbekannt bleiben.
+		switch {
+		case known:
+			row.KnownUsageEvents++
+		case unknown:
+			row.UnknownUsageEvents++
+		}
+		if priced {
+			row.PricedEvents++
+		}
+		if record.Provider != HistoryProviderClaude || unknown || (known && !priced) ||
+			(record.Kind == HistoryEventOutput && !known) {
+			row.UnpricedEvents++
+		}
+	}
+	out := make([]historyActivityRow, 0, len(order))
+	for _, key := range order {
+		out = append(out, *byKey[key])
+	}
+	return out
+}
+
+// writeActivity schreibt Aktivitätszeilen dauerhaft fest. Damit dieselbe
+// Conversation aus zwei Quellen (z. B. Codex' sessions und archived_sessions)
+// nicht doppelt zählt, gilt je agg_key ein Wasserzeichen: geschrieben wird nur,
+// wenn written_from_mod_time mindestens so groß ist wie das bereits
+// gespeicherte Maximum dieses agg_key, und dann ersetzen die neuen Zeilen alle
+// vorhandenen Zeilen dieses agg_key vollständig statt sie zu addieren.
+func (s *historyStore) writeActivity(ctx context.Context, rows []historyActivityRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("write activity: %w", err)
+	}
+	defer tx.Rollback()
+
+	byAggKey := map[string][]historyActivityRow{}
+	order := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if _, seen := byAggKey[row.AggKey]; !seen {
+			order = append(order, row.AggKey)
+		}
+		byAggKey[row.AggKey] = append(byAggKey[row.AggKey], row)
+	}
+
+	for _, aggKey := range order {
+		group := byAggKey[aggKey]
+		var stored sql.NullInt64
+		if err := tx.QueryRowContext(ctx, `SELECT max(written_from_mod_time) FROM activity WHERE agg_key = ?`, aggKey).Scan(&stored); err != nil {
+			return fmt.Errorf("read activity watermark: %w", err)
+		}
+		if stored.Valid && group[0].WrittenFromModTime < stored.Int64 {
+			// Eine ältere Fassung derselben Conversation. Die vorhandene ist
+			// mindestens so vollständig; nichts zu tun.
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM activity WHERE agg_key = ?`, aggKey); err != nil {
+			return fmt.Errorf("clear activity: %w", err)
+		}
+		for _, row := range group {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO activity
+				(agg_key, day, hour, provider, model, source_id, written_from_mod_time,
+				 conversation_id, cwd, project_alias, prompts, turns,
+				 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+				 cost, priced_events, unpriced_events, known_usage_events, unknown_usage_events)
+				VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+				row.AggKey, row.Day, row.Hour, string(row.Provider), row.Model, row.SourceID,
+				row.WrittenFromModTime, row.ConversationID, row.CWD, row.ProjectAlias,
+				row.Prompts, row.Turns, row.Input, row.Output, row.CacheRead, row.CacheWrite,
+				row.Cost, row.PricedEvents, row.UnpricedEvents,
+				row.KnownUsageEvents, row.UnknownUsageEvents); err != nil {
+				return fmt.Errorf("write activity: %w", err)
+			}
+		}
+	}
+	return tx.Commit()
+}

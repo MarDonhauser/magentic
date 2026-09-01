@@ -327,6 +327,93 @@ func TestHistoryStorePruneDropsOldEventsAndKeepsActivity(t *testing.T) {
 	}
 }
 
+func TestHistoryActivityRowsAggregateByHourAndModel(t *testing.T) {
+	records := []historyRecord{
+		{ID: "p1", Provider: HistoryProviderClaude, ConversationID: "conv-1", Timestamp: "2026-08-30T10:05:00Z",
+			Role: HistoryRoleDeveloper, Kind: HistoryEventPrompt, Lineage: HistoryLineagePrimary, Text: "frage", CWD: "/work/demo"},
+		{ID: "a1", Provider: HistoryProviderClaude, ConversationID: "conv-1", Timestamp: "2026-08-30T10:06:00Z",
+			Role: HistoryRoleAssistant, Kind: HistoryEventOutput, Lineage: HistoryLineagePrimary, Text: "antwort",
+			Model: "claude-opus-4-8", CWD: "/work/demo",
+			Usage: historyUsageRecord{Input: 10, InputKnown: true, Output: 5, OutputKnown: true}},
+		{ID: "a2", Provider: HistoryProviderClaude, ConversationID: "conv-1", Timestamp: "2026-08-30T11:00:00Z",
+			Role: HistoryRoleAssistant, Kind: HistoryEventOutput, Lineage: HistoryLineagePrimary, Text: "später",
+			Model: "claude-opus-4-8", CWD: "/work/demo"},
+	}
+	rows := historyActivityRowsFor(records, "claude:a", 500, time.UTC)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2 (zwei Stunden): %#v", len(rows), rows)
+	}
+	byHour := map[int]historyActivityRow{}
+	for _, row := range rows {
+		byHour[row.Hour] = row
+		if row.AggKey != "conv-1" || row.WrittenFromModTime != 500 || row.Day != "2026-08-30" {
+			t.Fatalf("row = %#v", row)
+		}
+	}
+	if byHour[10].KnownUsageEvents != 1 || byHour[10].UnknownUsageEvents != 0 {
+		t.Fatalf("hour 10 usage coverage = %#v", byHour[10])
+	}
+	if byHour[10].Prompts != 1 || byHour[10].Turns != 1 || byHour[10].Input != 10 || byHour[10].PricedEvents != 1 {
+		t.Fatalf("hour 10 = %#v", byHour[10])
+	}
+	// Eine Ausgabe ohne Tokenwerte ist unbepreisbar, zählt aber als Turn.
+	if byHour[11].Turns != 1 || byHour[11].PricedEvents != 0 || byHour[11].UnpricedEvents != 1 {
+		t.Fatalf("hour 11 = %#v", byHour[11])
+	}
+}
+
+func TestHistoryActivityRowsUseSourceIDWithoutConversation(t *testing.T) {
+	records := []historyRecord{
+		{ID: "p1", Provider: HistoryProviderCopilot, Timestamp: "2026-08-30T10:05:00Z",
+			Role: HistoryRoleDeveloper, Kind: HistoryEventPrompt, Lineage: HistoryLineagePrimary, Text: "frage"},
+	}
+	rows := historyActivityRowsFor(records, "copilot:a", 5, time.UTC)
+	if len(rows) != 1 || rows[0].AggKey != "copilot:a" {
+		t.Fatalf("rows = %#v", rows)
+	}
+}
+
+func TestHistoryStoreActivityNewerSourceWinsAndOlderIsIgnored(t *testing.T) {
+	store := openTestHistoryStore(t)
+	ctx := context.Background()
+	full := []historyActivityRow{{
+		AggKey: "conv-1", Day: "2026-08-30", Hour: 10, Provider: HistoryProviderCodex,
+		SourceID: "codex:live", WrittenFromModTime: 200, ConversationID: "conv-1", Prompts: 3, Turns: 3,
+	}}
+	partial := []historyActivityRow{{
+		AggKey: "conv-1", Day: "2026-08-30", Hour: 10, Provider: HistoryProviderCodex,
+		SourceID: "codex:archiv", WrittenFromModTime: 100, ConversationID: "conv-1", Prompts: 1, Turns: 1,
+	}}
+	if err := store.writeActivity(ctx, full); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.writeActivity(ctx, partial); err != nil {
+		t.Fatal(err)
+	}
+	var prompts int
+	if err := store.db.QueryRow(`SELECT prompts FROM activity WHERE agg_key = 'conv-1'`).Scan(&prompts); err != nil {
+		t.Fatal(err)
+	}
+	if prompts != 3 {
+		t.Fatalf("prompts = %d, want 3 — die ältere Quelle darf nicht überschreiben", prompts)
+	}
+
+	// Dieselbe Quelle erneut zu schreiben ersetzt, statt zu addieren.
+	if err := store.writeActivity(ctx, full); err != nil {
+		t.Fatal(err)
+	}
+	var rowCount int
+	if err := store.db.QueryRow(`SELECT count(*) FROM activity`).Scan(&rowCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT prompts FROM activity WHERE agg_key = 'conv-1'`).Scan(&prompts); err != nil {
+		t.Fatal(err)
+	}
+	if rowCount != 1 || prompts != 3 {
+		t.Fatalf("rows = %d prompts = %d, want 1 and 3", rowCount, prompts)
+	}
+}
+
 func openTestHistoryStore(t *testing.T) *historyStore {
 	t.Helper()
 	store, err := openHistoryStore(filepath.Join(t.TempDir(), "history.db"))
