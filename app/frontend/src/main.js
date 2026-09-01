@@ -18,6 +18,7 @@ import {
   Zeitgeist, ZeitgeistStart, ZeitgeistPause, ZeitgeistResume, ZeitgeistStop,
   MarkSeen, GitGraph, Board, BoardArchive, Stats, StartBoardItem, NewDockSession, MigrateDockSessions, BuildInfo,
   Breaks, BreakHeartbeat, TakeBreak, EndBreak, SnoozeBreak, BreakConfig, SetBreakConfig, BreakOver,
+  CompleteFiles, CompleteCommands,
 } from '../wailsjs/go/main/App';
 import { usagePages, clampUsagePage } from './usage-state.js';
 import { buildSidebar, flattenSidebar, canPlace, planMove } from './sidebar-layout.js';
@@ -32,6 +33,7 @@ import {
   sessionToolLabel,
 } from './avatar.js';
 import { renderGitGraph } from './gitgraph.js';
+import { completionTrigger, applyCompletion } from './features/composer/completion-state.js';
 import { renderBoard } from './board.js';
 import { renderStats } from './stats.js';
 import { mountDock, toggleDock, isDockOpen, closeDockTab, dockTabs, refitDock } from './dock.js';
@@ -48,6 +50,7 @@ const STATUS = {
   agents:  { color: 'var(--info)', label: 'Agents' },
   shell:   { color: 'var(--accent)', label: 'Shell läuft' },
   blocked: { color: 'var(--warning)', label: 'wartet' },
+  done:    { color: 'var(--good)', ico: 'check', label: 'fertig' },
   idle:    { color: 'var(--muted)', label: 'idle' },
   term:    { color: 'var(--info)', label: 'Terminal' },
   exited:  { color: 'var(--ink-2)', label: 'beendet' },
@@ -81,7 +84,7 @@ function pipelineRunningFor(project) {
 function agentVisual(a, project) {
   const proj = project ?? a?.project;
   const st = STATUS[a?.status] || STATUS.unknown;
-  const alive = ['running', 'agents', 'blocked', 'idle', 'term'].includes(a?.status);
+  const alive = ['running', 'agents', 'blocked', 'done', 'idle', 'term'].includes(a?.status);
   if (alive && (a?.phase === 'deploy' || a?.deployed) && pipelineRunningFor(proj)) {
     const p = PHASE.pipeline;
     return { color: p.color, ico: p.ico, label: p.label };
@@ -93,6 +96,9 @@ function agentVisual(a, project) {
   }
   if (a?.status === 'blocked' && a?.detail) {
     return { color: st.color, ico: 'lock', label: a.detail };
+  }
+  if (a?.status === 'done') {
+    return { color: STATUS.done.color, ico: 'check', label: a?.detail || STATUS.done.label };
   }
   if (['idle', 'exited', 'term'].includes(a?.status) && a?.known) {
     if (a.ownDirty > 0) return { color: 'var(--warning)', label: `± ${a.ownDirty} uncommitted` };
@@ -339,6 +345,98 @@ const termSendEl = $('term-send');
 const termAttachEl = $('term-attach');
 const termImageEl = $('term-image');
 const termComposeHintEl = $('term-compose-hint');
+const termCompletionsEl = $('term-completions');
+
+// Das Menü lebt allein von der Schreibmarke im Textfeld. token verwirft
+// Antworten, die zu einer älteren Eingabe gehören.
+let completionState = { trigger: null, items: [], index: 0, token: 0 };
+
+function renderCompletions() {
+  const { items, index } = completionState;
+  if (!items.length) {
+    termCompletionsEl.hidden = true;
+    termCompletionsEl.innerHTML = '';
+    return;
+  }
+  termCompletionsEl.innerHTML = items.map((item, i) => `
+    <div class="row" role="option" data-i="${i}" aria-selected="${i === index}">
+      <span class="name">${esc(item.name)}</span>
+      <span class="desc">${esc(item.description || '')}</span>
+    </div>`).join('');
+  termCompletionsEl.hidden = false;
+  termCompletionsEl.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
+}
+
+function closeCompletions() {
+  completionState = { trigger: null, items: [], index: 0, token: completionState.token + 1 };
+  renderCompletions();
+}
+
+async function refreshCompletions() {
+  const trigger = activeSessionID
+    ? completionTrigger(termPromptEl.value, termPromptEl.selectionStart)
+    : null;
+  if (!trigger) { closeCompletions(); return; }
+  const token = completionState.token + 1;
+  completionState = { ...completionState, trigger, token };
+  let items = [];
+  try {
+    items = trigger.kind === 'file'
+      ? (await CompleteFiles(String(activeSessionID), trigger.query)).map(path => ({ name: path, description: '' }))
+      : await CompleteCommands(String(activeSessionID), trigger.query);
+  } catch {
+    items = [];
+  }
+  if (token !== completionState.token) return;
+  completionState = { trigger, items: items || [], index: 0, token };
+  renderCompletions();
+}
+
+function acceptCompletion() {
+  const { trigger, items, index } = completionState;
+  if (!trigger || !items.length) return false;
+  const result = applyCompletion(termPromptEl.value, trigger, items[index].name);
+  termPromptEl.value = result.text;
+  termPromptEl.setSelectionRange(result.caret, result.caret);
+  closeCompletions();
+  const a = agentInfo(activeTerm, activeSessionID);
+  updateComposerControls(!a || ['exited', 'dead'].includes(a.status));
+  return true;
+}
+
+// Capture-Phase, damit Enter im offenen Menü übernimmt statt abzuschicken.
+// Bei geschlossenem Menü kehrt der Zuhörer sofort zurück.
+termPromptEl.addEventListener('keydown', e => {
+  if (!completionState.items.length) return;
+  const last = completionState.items.length - 1;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    const next = completionState.index + (e.key === 'ArrowDown' ? 1 : -1);
+    completionState = { ...completionState, index: next < 0 ? last : next > last ? 0 : next };
+    renderCompletions();
+    return;
+  }
+  if (e.key === 'Enter' || e.key === 'Tab') {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    acceptCompletion();
+    return;
+  }
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeCompletions();
+  }
+}, true);
+
+termPromptEl.addEventListener('blur', () => setTimeout(closeCompletions, 120));
+
+termCompletionsEl.addEventListener('mousedown', e => {
+  const row = e.target.closest('.row');
+  if (!row) return;
+  e.preventDefault();
+  completionState = { ...completionState, index: Number(row.dataset.i) };
+  acceptCompletion();
+});
 let composerBusy = false;
 let composerHintTimer = null;
 
@@ -492,6 +590,11 @@ function updateTermComposer(a, visual, gone) {
     stateIcon = 'clock';
     title = 'Session arbeitet';
     detail = 'Neue Nachrichten werden an dieselbe laufende Session gesendet.';
+  } else if (a?.status === 'done') {
+    termStateEl.className = 'is-done';
+    stateIcon = 'check';
+    title = 'Session ist fertig';
+    detail = 'Der Agent hat seine Runde beendet und du hast das Ergebnis noch nicht gesehen.';
   }
 
   termStateIconEl.innerHTML = icon(stateIcon);
@@ -565,6 +668,7 @@ termComposerEl.addEventListener('submit', e => {
 termPromptEl.addEventListener('input', () => {
   const a = agentInfo(activeTerm, activeSessionID);
   updateComposerControls(!a || ['exited', 'dead'].includes(a.status));
+  refreshCompletions();
 });
 termPromptEl.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
@@ -1470,6 +1574,7 @@ function attentionState() {
   return {
     waiting: sessions.filter(a => a.status === 'blocked'),
     active: sessions.filter(a => ['running', 'agents', 'shell', 'term'].includes(a.status)),
+    finished: sessions.filter(a => a.status === 'done'),
     unread: sessions.filter(a => a.unread && a.status !== 'blocked'),
     unknown: sessions.filter(a => !a.status || a.status === 'unknown'),
   };
@@ -1831,7 +1936,7 @@ function renderZg() {
 
 function agentPill(a, project) {
   const v = agentVisual(a, project);
-  const done = (a.status === 'idle' || a.status === 'running') && !a.phase
+  const done = ['idle', 'running', 'done'].includes(a.status) && !a.phase
     ? `<button class="btn tiny" data-act="done" data-session-id="${esc(a.id)}" data-agent="${esc(a.name)}" title="/done — Arbeit committen und auf dev bringen">${icon('check')} done</button>`
     : '';
   const open = a.status !== 'dead'
@@ -1949,7 +2054,7 @@ function worktreeActions(p, wt) {
   if (!p.path) return '';
 	const projectRef = p.id;
   const busy = (wt.agents || []).some(a => !a.dock && ['running', 'agents', 'blocked'].includes(a.status));
-  const anySession = (wt.agents || []).some(a => !a.dock && ['running', 'agents', 'blocked', 'idle'].includes(a.status));
+  const anySession = (wt.agents || []).some(a => !a.dock && ['running', 'agents', 'blocked', 'done', 'idle'].includes(a.status));
   let btns = '';
   if (!busy && wt.checkoutKnown && wt.divergenceKnown && p.mainBranchKnown && wt.ahead > 0 && wt.branch !== p.mainBranch) {
     btns += `<button class="btn" data-act="merge" data-project="${esc(p.id)}" data-source="${esc(wt.branch)}" data-target="${esc(p.mainBranch)}" ` +
@@ -2756,7 +2861,7 @@ function showMenu(x, y, sessionID, name, status) {
       `<div class="mi" data-mi="reopen">${icon('play')} Wieder öffnen</div>` +
       `<div class="mi danger" data-mi="kill">${icon('x')} Endgültig entfernen</div>`;
   } else {
-    const done = ['idle', 'running'].includes(status)
+    const done = ['idle', 'running', 'done'].includes(status)
       ? `<div class="mi" data-mi="done">${icon('check')} /done senden</div>` : '';
     const switchable = session && !session.term
       ? vendorCatalog
