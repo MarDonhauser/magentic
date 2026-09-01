@@ -276,6 +276,7 @@ body.dk-dragging .dk-body { pointer-events: none; }
 .dk-hint { margin-left: 4px; font-size: var(--fs-meta); color: var(--muted); opacity: .75; }
 
 .dk-topbar .dk-empty-title { flex: 1; }
+.dk-topbar .dk-actions { margin-left: auto; }
 
 .dk-dock.dk-blank .dk-leaf .dk-bar { display: none; }
 

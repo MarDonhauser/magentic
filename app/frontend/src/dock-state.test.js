@@ -17,6 +17,25 @@ test('Dock state builds a single-leaf layout from legacy flat tabs and keeps the
   assert.deepEqual(state.layout.tabs, [{ id: 'session-a', name: 'term alpha' }, { id: '', name: 'term legacy' }]);
   assert.equal(state.layout.activeKey, 'legacy:term legacy');
   assert.equal(dockRefKey(state.layout.tabs[0]), 'session:session-a');
+  assert.equal(state.focused, null);
+});
+
+test('Dock state passes through a persisted focused tab key, and defaults it to null when absent or invalid', () => {
+  const withFocused = normalizeDockState({
+    open: true,
+    height: 280,
+    tabs: [{ id: 'session-a', name: 'term alpha' }],
+    focused: 'session:session-a',
+  }, 280);
+  assert.equal(withFocused.focused, 'session:session-a');
+
+  const withInvalidFocused = normalizeDockState({
+    open: true,
+    height: 280,
+    tabs: [{ id: 'session-a', name: 'term alpha' }],
+    focused: 42,
+  }, 280);
+  assert.equal(withInvalidFocused.focused, null);
 });
 
 test('Dock state prefers a persisted split layout over legacy flat tabs', () => {

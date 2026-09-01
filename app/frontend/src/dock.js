@@ -71,6 +71,7 @@ let selfResize = false;
 let dragTab = null;
 let dropOverlayEl = null;
 let menuEl = null;
+let menuAbort = null;
 
 function maxHeight() {
   return Math.max(MIN_HEIGHT, Math.round(window.innerHeight * MAX_RATIO));
@@ -406,6 +407,8 @@ function applySplit(tabKey, targetLeafId, edge) {
 }
 
 function closeSplitMenu() {
+  menuAbort?.abort();
+  menuAbort = null;
   menuEl?.remove();
   menuEl = null;
 }
@@ -436,9 +439,10 @@ function showSplitMenu(x, y, tabKey, leafId) {
     menuEl.appendChild(item);
   }
   document.body.appendChild(menuEl);
+  menuAbort = new AbortController();
   requestAnimationFrame(() => {
-    window.addEventListener('click', closeSplitMenu, { once: true });
-    window.addEventListener('contextmenu', closeSplitMenu, { once: true });
+    window.addEventListener('click', closeSplitMenu, { signal: menuAbort.signal });
+    window.addEventListener('contextmenu', closeSplitMenu, { signal: menuAbort.signal });
   });
 }
 
@@ -803,6 +807,7 @@ export function toggleDock(next) {
   persist();
   notifyLayout();
   if (!open) return;
+  renderTree();
   const leaf = focusedLeaf();
   if (leaf.activeKey) activate(leaf.activeKey);
   else updateStatuses();
@@ -839,6 +844,7 @@ export function closeDockTab(value) {
   const order = leaf ? leaf.tabs.map(dockRefKey) : [];
   const i = order.indexOf(key);
   const wasFocused = focusedLeafId === t.leafId;
+  const wasActive = leaf?.activeKey === key;
 
   tabs.delete(key);
   rootNode = removeTab(rootNode, key);
@@ -854,7 +860,7 @@ export function closeDockTab(value) {
 
   renderTree();
 
-  if (!wasFocused) { persist(); return; }
+  if (!wasFocused || !wasActive) { persist(); return; }
 
   const stillThere = getNode(rootNode, t.leafId);
   if (stillThere) {

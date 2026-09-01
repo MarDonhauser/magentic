@@ -23,6 +23,7 @@ export function normalizeDockState(raw, defaultHeight) {
     open: !!raw.open,
     height: Number.isFinite(raw.height) ? raw.height : defaultHeight,
     layout,
+    focused: typeof raw.focused === 'string' ? raw.focused : null,
   };
 }
 
