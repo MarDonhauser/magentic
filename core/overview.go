@@ -54,6 +54,31 @@ type OvQueuedMessage struct {
 	Stuck   bool   `json:"stuck"`
 }
 
+// OvInboxEntry is one planned inbox entry joined with the names and the queued
+// messages the UI needs. It derives no attention fact of its own: kind, wait,
+// and excerpt come from the AttentionPlan unchanged.
+type OvInboxEntry struct {
+	SessionID         SessionID            `json:"sessionId"`
+	Session           string               `json:"session"`
+	Project           string               `json:"project"`
+	Kind              AttentionWaitingKind `json:"kind"`
+	WaitingSince      time.Time            `json:"waitingSince,omitzero"`
+	WaitingSinceKnown bool                 `json:"waitingSinceKnown"`
+	Age               string               `json:"age"`
+	Excerpt           string               `json:"excerpt,omitempty"`
+	ExcerptKnown      bool                 `json:"excerptKnown"`
+	Queued            []OvQueuedMessage    `json:"queued,omitempty"`
+	AwaitingDelivery  bool                 `json:"awaitingDelivery"`
+}
+
+// OvInbox projects the planned blocked inbox for a frontend. State says how
+// much of the list is known, so an empty Entries slice is never read as proof
+// that nothing waits.
+type OvInbox struct {
+	State   AttentionInboxState `json:"state"`
+	Entries []OvInboxEntry      `json:"entries"`
+}
+
 type OvWorktree struct {
 	Reference       WorktreeRef         `json:"reference,omitempty"`
 	Location        string              `json:"location,omitempty"`
@@ -559,6 +584,42 @@ func toOvAgent(a Agent, observed SessionObservation, branch string) OvAgent {
 		}
 	}
 	return agent
+}
+
+// BuildInbox joins the planned inbox with the Registry so an entry carries the
+// Project and Session the developer knows it by, plus the messages that are
+// still queued for it. The order the planner produced is kept as it is.
+func BuildInbox(st *State, inbox AttentionInbox) OvInbox {
+	out := OvInbox{State: inbox.State, Entries: []OvInboxEntry{}}
+	if out.State == "" {
+		out.State = AttentionInboxUnavailable
+	}
+	sessions := map[SessionID]Session{}
+	if st != nil {
+		for _, session := range st.Agents {
+			sessions[session.ID] = session
+		}
+	}
+	for _, planned := range inbox.Entries {
+		entry := OvInboxEntry{
+			SessionID:         planned.SessionID,
+			Session:           string(planned.SessionID),
+			Kind:              planned.Kind,
+			WaitingSince:      planned.WaitingSince,
+			WaitingSinceKnown: planned.WaitingSinceKnown,
+			Age:               FormatAge(planned.WaitingSince),
+			Excerpt:           planned.Excerpt,
+			ExcerptKnown:      planned.ExcerptKnown,
+		}
+		if session, known := sessions[planned.SessionID]; known {
+			entry.Session = session.Name
+			entry.Project = session.Project
+			entry.Queued = queuedMessagesOverview(session.Outbox)
+			entry.AwaitingDelivery = len(entry.Queued) > 0
+		}
+		out.Entries = append(out.Entries, entry)
+	}
+	return out
 }
 
 const queuedMessagePreviewLimit = 80

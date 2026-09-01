@@ -195,6 +195,7 @@ func (a *App) watchLoop() {
 			Quiet:         quiet,
 			Now:           time.Now(),
 		})
+		a.storeInbox(core.BuildInbox(st, plan.Inbox))
 		a.syncNotch(plan, snapshot)
 		executeAttentionPlan(plan)
 	}

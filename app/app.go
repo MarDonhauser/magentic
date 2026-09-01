@@ -30,6 +30,8 @@ type App struct {
 	attention        *core.AttentionPlanner
 	attentionEventMu sync.Mutex
 	attentionEvents  []core.AttentionEvent
+	inboxMu          sync.Mutex
+	inbox            core.OvInbox
 	notchMu          sync.Mutex
 	notchEvent       *NotchEvent
 	observationMu    sync.Mutex
@@ -140,6 +142,24 @@ func (a *App) Overview(fresh bool) (core.Overview, error) {
 	}
 	snapshot := a.observationFor(st.Agents, fresh)
 	return core.BuildOverviewFromObservation(st, snapshot), nil
+}
+
+// Inbox returns the blocked inbox of the last attention cycle: every Session
+// waiting on the developer, longest wait first. Before the first cycle the
+// waiting facts are unavailable rather than empty.
+func (a *App) Inbox() core.OvInbox {
+	a.inboxMu.Lock()
+	defer a.inboxMu.Unlock()
+	if a.inbox.State == "" {
+		return core.OvInbox{State: core.AttentionInboxUnavailable, Entries: []core.OvInboxEntry{}}
+	}
+	return a.inbox
+}
+
+func (a *App) storeInbox(inbox core.OvInbox) {
+	a.inboxMu.Lock()
+	a.inbox = inbox
+	a.inboxMu.Unlock()
 }
 
 func loadSessionByID(rawID string) (*core.State, core.Session, error) {

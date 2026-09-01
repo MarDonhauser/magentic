@@ -149,10 +149,51 @@ type AttentionDockBadge struct {
 	Label    string `json:"label"`
 }
 
+// AttentionWaitingKind names why a Session waits on the developer: it asks a
+// question or a permission (needs-input), or it finished and its work has not
+// been looked at (review).
+type AttentionWaitingKind string
+
+const (
+	AttentionWaitingInput  AttentionWaitingKind = "needs-input"
+	AttentionWaitingReview AttentionWaitingKind = "review"
+)
+
+// AttentionInboxState says how much of the waiting picture the list holds. An
+// empty list is only a claim that nothing waits when the state is complete.
+type AttentionInboxState string
+
+const (
+	AttentionInboxComplete    AttentionInboxState = "complete"
+	AttentionInboxIncomplete  AttentionInboxState = "incomplete"
+	AttentionInboxUnavailable AttentionInboxState = "unavailable"
+)
+
+// AttentionInboxEntry is one Session waiting on the developer. WaitingSinceKnown
+// false means the wait had already started when the planner first saw the
+// Session, so Since is a lower bound and never the moment the wait began.
+type AttentionInboxEntry struct {
+	SessionID         SessionID            `json:"sessionId"`
+	Kind              AttentionWaitingKind `json:"kind"`
+	WaitingSince      time.Time            `json:"waitingSince"`
+	WaitingSinceKnown bool                 `json:"waitingSinceKnown"`
+	Excerpt           string               `json:"excerpt,omitempty"`
+	ExcerptKnown      bool                 `json:"excerptKnown"`
+	StatusSource      StatusSource         `json:"statusSource"`
+}
+
+// AttentionInbox is the cross-Project list of waiting Sessions, ordered longest
+// wait first, produced by the same cycle as the notifications.
+type AttentionInbox struct {
+	State   AttentionInboxState   `json:"state"`
+	Entries []AttentionInboxEntry `json:"entries"`
+}
+
 type AttentionPlan struct {
 	Observation     AttentionObservationState     `json:"observation"`
 	Notifications   []AttentionNotificationIntent `json:"notifications"`
 	DockBadge       AttentionDockBadge            `json:"dockBadge"`
+	Inbox           AttentionInbox                `json:"inbox"`
 	NativeAttention NativeAttentionLevel          `json:"nativeAttention"`
 	BringToFront    bool                          `json:"bringToFront"`
 	Suppressions    []AttentionSuppression        `json:"suppressions"`
@@ -168,6 +209,8 @@ type attentionSessionMemory struct {
 	completionPending bool
 	needsEpisode      uint64
 	completeEpisode   uint64
+	waitingSince      time.Time
+	waitingSinceKnown bool
 }
 
 type attentionBreakMemory struct {
@@ -208,7 +251,11 @@ type attentionCandidate struct {
 
 func (p *AttentionPlanner) Plan(input AttentionInput) AttentionPlan {
 	if p == nil {
-		return finishAttentionPlan(AttentionPlan{Observation: AttentionObservationUnavailable, NativeAttention: NativeAttentionUnchanged})
+		return finishAttentionPlan(AttentionPlan{
+			Observation:     AttentionObservationUnavailable,
+			Inbox:           AttentionInbox{State: AttentionInboxUnavailable},
+			NativeAttention: NativeAttentionUnchanged,
+		})
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -221,13 +268,14 @@ func (p *AttentionPlanner) Plan(input AttentionInput) AttentionPlan {
 		NativeAttention: NativeAttentionUnchanged,
 	}
 	plan.DockBadge = attentionDockBadge(input.Observation)
+	plan.Inbox = AttentionInbox{State: attentionInboxState(plan.Observation)}
 	if plan.Observation == AttentionObservationUnavailable {
 		plan.Suppressions = append(plan.Suppressions, AttentionSuppression{Reason: AttentionSuppressedUnavailable})
 	} else if plan.Observation == AttentionObservationAllDead {
 		plan.Suppressions = append(plan.Suppressions, AttentionSuppression{Reason: AttentionSuppressedAllDead})
 	}
 
-	candidates := p.sessionCandidates(input, &plan)
+	candidates := p.sessionCandidates(input, now, &plan)
 	candidates = append(candidates, p.eventCandidates(input.Events, &plan)...)
 	breakCandidate := p.breakCandidate(input.Break, input.Quiet, now, &plan)
 	if breakCandidate != nil {
@@ -274,7 +322,7 @@ func (p *AttentionPlanner) Plan(input AttentionInput) AttentionPlan {
 	return finishAttentionPlan(plan)
 }
 
-func (p *AttentionPlanner) sessionCandidates(input AttentionInput, plan *AttentionPlan) []attentionCandidate {
+func (p *AttentionPlanner) sessionCandidates(input AttentionInput, now time.Time, plan *AttentionPlan) []attentionCandidate {
 	if input.Observation.Availability == ObservationUnavailable {
 		return nil
 	}
@@ -287,6 +335,11 @@ func (p *AttentionPlanner) sessionCandidates(input AttentionInput, plan *Attenti
 			plan.Suppressions = append(plan.Suppressions, AttentionSuppression{
 				SessionID: observed.SessionID, Reason: AttentionSuppressedInsufficientFacts,
 			})
+			// A Session whose facts do not carry is neither waiting nor not
+			// waiting, so the list it is missing from is incomplete.
+			if plan.Inbox.State == AttentionInboxComplete {
+				plan.Inbox.State = AttentionInboxIncomplete
+			}
 			continue
 		}
 		memory := p.sessions[observed.SessionID]
@@ -294,6 +347,8 @@ func (p *AttentionPlanner) sessionCandidates(input AttentionInput, plan *Attenti
 			memory.known = true
 			memory.attention = AttentionNone
 			memory.completionPending = false
+			memory.waitingSince = time.Time{}
+			memory.waitingSinceKnown = false
 			p.sessions[observed.SessionID] = memory
 			continue
 		}
@@ -301,11 +356,14 @@ func (p *AttentionPlanner) sessionCandidates(input AttentionInput, plan *Attenti
 			memory.known = true
 			memory.attention = observed.Attention
 			memory.completionPending = false
+			// The wait may be hours old; the planner only knows it exists now.
+			memory.waitingSince, memory.waitingSinceKnown = now, false
 			p.sessions[observed.SessionID] = memory
 			if observed.Attention == AttentionNeedsInput || observed.Attention == AttentionReview {
 				plan.Suppressions = append(plan.Suppressions, AttentionSuppression{
 					SessionID: observed.SessionID, Reason: AttentionSuppressedInitialState,
 				})
+				plan.Inbox.Entries = append(plan.Inbox.Entries, attentionInboxEntry(observed, memory))
 			}
 			continue
 		}
@@ -352,10 +410,81 @@ func (p *AttentionPlanner) sessionCandidates(input AttentionInput, plan *Attenti
 		default:
 			memory.completionPending = false
 		}
+		memory = attentionStampWaiting(memory, previous, observed.Attention, now)
+		if attentionWaiting(observed.Attention) {
+			plan.Inbox.Entries = append(plan.Inbox.Entries, attentionInboxEntry(observed, memory))
+		}
 		memory.attention = observed.Attention
 		p.sessions[observed.SessionID] = memory
 	}
 	return candidates
+}
+
+func attentionWaiting(state AttentionState) bool {
+	return state == AttentionNeedsInput || state == AttentionReview
+}
+
+// attentionStampWaiting records when the current wait began. A changed waiting
+// kind is a new wait, so it re-stamps; an unchanged one keeps its start,
+// including a start that is only a lower bound.
+func attentionStampWaiting(memory attentionSessionMemory, previous, current AttentionState, now time.Time) attentionSessionMemory {
+	if !attentionWaiting(current) {
+		memory.waitingSince, memory.waitingSinceKnown = time.Time{}, false
+		return memory
+	}
+	if previous != current || memory.waitingSince.IsZero() {
+		memory.waitingSince, memory.waitingSinceKnown = now, previous != current
+	}
+	return memory
+}
+
+func attentionInboxEntry(observed SessionObservation, memory attentionSessionMemory) AttentionInboxEntry {
+	kind := AttentionWaitingReview
+	if observed.Attention == AttentionNeedsInput {
+		kind = AttentionWaitingInput
+	}
+	entry := AttentionInboxEntry{
+		SessionID:         observed.SessionID,
+		Kind:              kind,
+		WaitingSince:      memory.waitingSince,
+		WaitingSinceKnown: memory.waitingSinceKnown,
+		ExcerptKnown:      observed.ContentKnown,
+		StatusSource:      observed.StatusSource,
+	}
+	if observed.ContentKnown {
+		entry.Excerpt = attentionInboxExcerpt(observed.Content)
+	}
+	return entry
+}
+
+// attentionInboxExcerptLines keeps the tail long enough to carry a permission
+// prompt and short enough to stay one entry in a list.
+const attentionInboxExcerptLines = 6
+
+// attentionInboxExcerpt takes the tail of the already-normalized pane content:
+// the last lines that carry text, in reading order.
+func attentionInboxExcerpt(content string) string {
+	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+	end := len(lines)
+	for end > 0 && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	start := end - attentionInboxExcerptLines
+	if start < 0 {
+		start = 0
+	}
+	return strings.TrimSpace(strings.Join(lines[start:end], "\n"))
+}
+
+func attentionInboxState(observation AttentionObservationState) AttentionInboxState {
+	switch observation {
+	case AttentionObservationUnavailable:
+		return AttentionInboxUnavailable
+	case AttentionObservationPartial:
+		return AttentionInboxIncomplete
+	default:
+		return AttentionInboxComplete
+	}
 }
 
 func attentionNeedsInputCandidate(id SessionID, label string, episode uint64) attentionCandidate {
@@ -708,6 +837,24 @@ func finishAttentionPlan(plan AttentionPlan) AttentionPlan {
 	if plan.Suppressions == nil {
 		plan.Suppressions = []AttentionSuppression{}
 	}
+	if plan.Inbox.State == "" {
+		plan.Inbox.State = AttentionInboxUnavailable
+	}
+	if plan.Inbox.Entries == nil {
+		plan.Inbox.Entries = []AttentionInboxEntry{}
+	}
+	// Longest wait first. A wait whose start is only a lower bound is at least
+	// as old as every known wait, so it sorts above them.
+	sort.SliceStable(plan.Inbox.Entries, func(i, j int) bool {
+		a, b := plan.Inbox.Entries[i], plan.Inbox.Entries[j]
+		if a.WaitingSinceKnown != b.WaitingSinceKnown {
+			return !a.WaitingSinceKnown
+		}
+		if !a.WaitingSince.Equal(b.WaitingSince) {
+			return a.WaitingSince.Before(b.WaitingSince)
+		}
+		return a.SessionID < b.SessionID
+	})
 	sort.SliceStable(plan.Suppressions, func(i, j int) bool {
 		a, b := plan.Suppressions[i], plan.Suppressions[j]
 		left := fmt.Sprintf("%s\x00%s\x00%s\x00%s", a.Reason, a.Kind, a.SessionID, a.DedupeKey)

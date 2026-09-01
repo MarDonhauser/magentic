@@ -1,13 +1,13 @@
 ## 1. Attention planner: inbox projection
 
-- [ ] 1.1 Add the inbox types to `core/attention.go` — an entry carrying SessionID, waiting kind, waiting-since with its known/lower-bound fact, the content excerpt with its known fact, and a completeness fact for the list — and verify `go build ./...` passes with no other package changed
-- [ ] 1.2 Extend `attentionSessionMemory` with `waitingSince` / `waitingSinceKnown` and stamp it when a Session enters `needs-input` or `review`; verify with a planner test that two cycles across a state change produce a known start at the moment of the change
-- [ ] 1.3 Stamp an unknown (lower-bound) start when a Session is already waiting on the first cycle the planner knows about it; verify with a test that a first-cycle waiting Session is reported as a lower bound, not as a fresh wait
-- [ ] 1.4 Re-stamp waiting-since when the waiting kind changes between `needs-input` and `review`; verify with a test that the entry keeps one row per Session and its wait restarts
-- [ ] 1.5 Emit `AttentionPlan.Inbox` from `Plan`, reusing the existing insufficient-facts gate so Sessions with unavailable Observation, unknown presence, or unknown Attention are not listed; verify with a test that such Sessions appear in neither the inbox nor as "not waiting"
-- [ ] 1.6 Implement the ordering — unknown-start entries first, then oldest known wait first, ties broken by SessionID — and verify with a test that two renderings of unchanged facts produce the identical order
-- [ ] 1.7 Derive the list-completeness fact from `AttentionObservationState` (available → complete, partial → incomplete, unavailable → no entries and unavailable) and verify with tests for all three states, including that an unavailable Observation does not produce an empty-but-complete inbox
-- [ ] 1.8 Verify with a test that one `Plan` call produces an inbox describing the same waiting Sessions as the notification and badge output of that same call, so no second attention derivation is introduced
+- [x] 1.1 Add the inbox types to `core/attention.go` — an entry carrying SessionID, waiting kind, waiting-since with its known/lower-bound fact, the content excerpt with its known fact, and a completeness fact for the list — and verify `go build ./...` passes with no other package changed
+- [x] 1.2 Extend `attentionSessionMemory` with `waitingSince` / `waitingSinceKnown` and stamp it when a Session enters `needs-input` or `review`; verify with a planner test that two cycles across a state change produce a known start at the moment of the change
+- [x] 1.3 Stamp an unknown (lower-bound) start when a Session is already waiting on the first cycle the planner knows about it; verify with a test that a first-cycle waiting Session is reported as a lower bound, not as a fresh wait
+- [x] 1.4 Re-stamp waiting-since when the waiting kind changes between `needs-input` and `review`; verify with a test that the entry keeps one row per Session and its wait restarts
+- [x] 1.5 Emit `AttentionPlan.Inbox` from `Plan`, reusing the existing insufficient-facts gate so Sessions with unavailable Observation, unknown presence, or unknown Attention are not listed; verify with a test that such Sessions appear in neither the inbox nor as "not waiting"
+- [x] 1.6 Implement the ordering — unknown-start entries first, then oldest known wait first, ties broken by SessionID — and verify with a test that two renderings of unchanged facts produce the identical order
+- [x] 1.7 Derive the list-completeness fact from `AttentionObservationState` (available → complete, partial → incomplete, unavailable → no entries and unavailable) and verify with tests for all three states, including that an unavailable Observation does not produce an empty-but-complete inbox
+- [x] 1.8 Verify with a test that one `Plan` call produces an inbox describing the same waiting Sessions as the notification and badge output of that same call, so no second attention derivation is introduced
 
 ## 2. Desktop app wiring
 
