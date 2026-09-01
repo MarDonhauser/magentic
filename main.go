@@ -38,7 +38,9 @@ func main() {
 		fmt.Fprintln(os.Stderr, "State konnte nicht geladen werden:", err)
 		os.Exit(1)
 	}
-	p := tea.NewProgram(newModel(s), tea.WithAltScreen(), tea.WithMouseAllMotion())
+	// Cell Motion statt All Motion: Die TUI wertet nur Mausrad und Linksklick aus,
+	// jedes reine Bewegungsevent würde nur einen kompletten View-Render kosten.
+	p := tea.NewProgram(newModel(s), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

@@ -226,3 +226,50 @@ func TestPreviewUsesObservationFact(t *testing.T) {
 		t.Fatalf("preview message = %#v", message)
 	}
 }
+
+// The runtime pass and the Git pass now run on separate cadences. Each message
+// must leave the other Module's facts in place, otherwise the slower pass would
+// blank the panel it does not own.
+func TestSeparatePollPassesKeepEachOthersFacts(t *testing.T) {
+	session := Agent{ID: "session-1", Name: "one", RuntimeName: "mgt-one", Dir: "/repo"}
+	state := State{Agents: []Agent{session}}
+	key := sessionKey(session)
+	m := model{state: &state, collapsed: map[string]bool{},
+		attention: core.NewAttentionPlanner(core.AttentionPlannerConfig{})}
+
+	updated, _ := m.Update(repositoryMsg(pollResult{
+		repositories: core.RepositoriesSurvey{Projects: []core.RepositoryProjectSurvey{{
+			Name: "repo", Path: "/repo", Presence: core.RepositoryKnown,
+		}}},
+		inspections: map[tuiSessionKey]core.RepositoryInspection{
+			key: {Directory: "/repo", Presence: core.RepositoryKnown},
+		},
+		inspectionProblem: map[tuiSessionKey]string{},
+	}))
+	updated, _ = updated.(model).Update(observationMsg(pollResult{
+		observation: core.ObservationSnapshot{Availability: core.ObservationAvailable},
+		observed: map[tuiSessionKey]core.SessionObservation{
+			key: {SessionID: session.ID, Availability: core.ObservationAvailable,
+				Presence: core.SessionPresencePresent, Status: StatusRunning},
+		},
+	}))
+
+	after := updated.(model)
+	if got := after.statusFor(session); got != StatusRunning {
+		t.Fatalf("status after repository pass = %v, want running", got)
+	}
+	if _, ok := after.poll.inspections[key]; !ok {
+		t.Fatal("runtime pass discarded the repository inspection")
+	}
+	if after.repoBusy || after.pollBusy {
+		t.Fatalf("busy flags not cleared: repo=%v poll=%v", after.repoBusy, after.pollBusy)
+	}
+
+	updated, _ = after.Update(repositoryMsg(pollResult{
+		inspections:       map[tuiSessionKey]core.RepositoryInspection{},
+		inspectionProblem: map[tuiSessionKey]string{},
+	}))
+	if got := updated.(model).statusFor(session); got != StatusRunning {
+		t.Fatalf("repository pass discarded the Observation: status = %v", got)
+	}
+}

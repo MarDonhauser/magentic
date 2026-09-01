@@ -88,7 +88,13 @@ type tuiRepositoryReader interface {
 }
 
 type tickMsg time.Time
-type pollMsg pollResult
+type repoTickMsg time.Time
+
+// observationMsg carries the cheap tmux pass, repositoryMsg the expensive git
+// pass. Both are partially filled pollResult values that Update merges into the
+// model's one coherent pollResult.
+type observationMsg pollResult
+type repositoryMsg pollResult
 type previewMsg struct {
 	key          tuiSessionKey
 	observation  core.SessionObservation
@@ -125,6 +131,7 @@ type model struct {
 	width          int
 	height         int
 	pollBusy       bool
+	repoBusy       bool
 	previewPending bool
 	usage          UsageInfo
 }
@@ -291,22 +298,41 @@ func (m *model) setFlash(msg string, isErr bool) {
 }
 
 func tick() tea.Cmd {
-	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
+	return tea.Tick(observationInterval, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
-const tuiPollTimeout = 5 * time.Second
+func repoTick() tea.Cmd {
+	return tea.Tick(repositoryInterval, func(t time.Time) tea.Msg { return repoTickMsg(t) })
+}
 
-func pollCmd(state State, selected *Agent) tea.Cmd {
+const (
+	tuiPollTimeout = 5 * time.Second
+	// The tmux pass is cheap enough to run continuously; one git pass costs
+	// several hundred milliseconds across every Project and Worktree, so it runs
+	// on its own slower cadence and additionally after every action.
+	observationInterval = 2 * time.Second
+	repositoryInterval  = 10 * time.Second
+)
+
+func observeCmd(state State) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), tuiPollTimeout)
 		defer cancel()
-		res := collectPollModuleFacts(ctx, state, selected, core.Observe, core.NewRepositories())
+		res := collectObservationFacts(ctx, state, core.Observe)
 		res.discovery = discoverNew(ctx, &state)
 		res.zeitgeist = zeitgeistInfo()
 		if disk, err := LoadState(); err == nil {
 			res.diskState = disk
 		}
-		return pollMsg(res)
+		return observationMsg(res)
+	}
+}
+
+func repositoryCmd(state State, selected *Agent) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), tuiPollTimeout)
+		defer cancel()
+		return repositoryMsg(collectRepositoryFacts(ctx, state, selected, core.NewRepositories()))
 	}
 }
 
@@ -320,12 +346,20 @@ func collectPollModuleFacts(
 	observe tuiObservationReader,
 	repositories tuiRepositoryReader,
 ) pollResult {
-	result := pollResult{
-		observed:          make(map[tuiSessionKey]core.SessionObservation, len(state.Agents)),
-		inspections:       make(map[tuiSessionKey]core.RepositoryInspection),
-		inspectionProblem: make(map[tuiSessionKey]string),
-	}
+	result := collectObservationFacts(ctx, state, observe)
+	facts := collectRepositoryFacts(ctx, state, selected, repositories)
+	result.repositories = facts.repositories
+	result.repositoryProblem = facts.repositoryProblem
+	result.inspections = facts.inspections
+	result.inspectionProblem = facts.inspectionProblem
+	return result
+}
 
+// collectObservationFacts reads only the runtime side of one poll.
+func collectObservationFacts(ctx context.Context, state State, observe tuiObservationReader) pollResult {
+	result := pollResult{
+		observed: make(map[tuiSessionKey]core.SessionObservation, len(state.Agents)),
+	}
 	prepared := prepareObservationSessions(state.Agents)
 	result.observation = observe(ctx, prepared)
 	observedByID := make(map[core.SessionID]core.SessionObservation, len(result.observation.Sessions))
@@ -336,6 +370,20 @@ func collectPollModuleFacts(
 		if observation, ok := observedByID[prepared[i].ID]; ok {
 			result.observed[sessionKey(session)] = observation
 		}
+	}
+	return result
+}
+
+// collectRepositoryFacts reads only the Git side of one poll.
+func collectRepositoryFacts(
+	ctx context.Context,
+	state State,
+	selected *Agent,
+	repositories tuiRepositoryReader,
+) pollResult {
+	result := pollResult{
+		inspections:       make(map[tuiSessionKey]core.RepositoryInspection),
+		inspectionProblem: make(map[tuiSessionKey]string),
 	}
 
 	survey, err := repositories.Survey(ctx, state.Projects)
@@ -474,11 +522,13 @@ func (m model) statusFor(session Agent) AgentStatus {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(m.pollNow(), tick(), fetchUsageCmd(), usageTick())
+	return tea.Batch(m.pollNow(), tick(), repoTick(), fetchUsageCmd(), usageTick())
 }
 
+// pollNow refreshes both Modules at once. Actions call it because they change
+// runtime and repository facts together.
 func (m model) pollNow() tea.Cmd {
-	return pollCmd(*m.state, m.selectedAgent())
+	return tea.Batch(observeCmd(*m.state), repositoryCmd(*m.state, m.selectedAgent()))
 }
 
 func (m *model) previewNow() tea.Cmd {
@@ -520,7 +570,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tick()
 		}
 		m.pollBusy = true
-		return m, tea.Batch(m.pollNow(), tick())
+		return m, tea.Batch(observeCmd(*m.state), tick())
+	case repoTickMsg:
+		if m.repoBusy {
+			return m, repoTick()
+		}
+		m.repoBusy = true
+		return m, tea.Batch(repositoryCmd(*m.state, m.selectedAgent()), repoTick())
 	case previewMsg:
 		m.previewPending = false
 		if a := m.selectedAgent(); a != nil && sessionKey(*a) == msg.key {
@@ -536,13 +592,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case usageMsg:
 		m.usage = UsageInfo(msg)
 		return m, nil
-	case pollMsg:
+	case repositoryMsg:
+		m.repoBusy = false
+		m.poll.repositories = msg.repositories
+		m.poll.repositoryProblem = msg.repositoryProblem
+		m.poll.inspections = msg.inspections
+		m.poll.inspectionProblem = msg.inspectionProblem
+		return m, nil
+	case observationMsg:
 		m.pollBusy = false
 		var selName string
 		if a := m.selectedAgent(); a != nil {
 			selName = a.Name
 		}
-		m.poll = pollResult(msg)
+		m.poll.observation = msg.observation
+		m.poll.observed = msg.observed
+		m.poll.discovery = msg.discovery
+		m.poll.diskState = msg.diskState
+		m.poll.zeitgeist = msg.zeitgeist
 		m.executeAttentionPlan()
 		if m.poll.diskState != nil {
 			m.state = m.poll.diskState

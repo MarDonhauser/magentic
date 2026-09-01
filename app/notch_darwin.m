@@ -53,6 +53,9 @@ static void dispatchNotchJavaScript(NSString *eventName, NSString *json) {
     if (![message.name isEqualToString:@"notchResponse"] ||
         ![NSJSONSerialization isValidJSONObject:message.body]) return;
 
+    // The overlay owns the 900 ms resolved flash. Forget the native replay
+    // payload here without dispatching notch://clear, which would cut it short.
+    mgtPendingNotchEvent = nil;
     NSData *data = [NSJSONSerialization dataWithJSONObject:message.body options:0 error:nil];
     NSString *payload = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     magenticNotchResponse((char *)payload.UTF8String);
@@ -135,5 +138,11 @@ void clearNotchEventC(const char *identifier) {
         NSData *data = [NSJSONSerialization dataWithJSONObject:@{ @"id": eventID } options:0 error:nil];
         NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
         dispatchNotchJavaScript(@"notch://clear", json);
+    });
+}
+
+void acknowledgeNotchEventC(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        mgtPendingNotchEvent = nil;
     });
 }

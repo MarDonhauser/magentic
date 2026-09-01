@@ -60,7 +60,11 @@ export function mountNotchOverlay(root) {
     )).join('');
     root.innerHTML = `<section class="notch-shell notch-shell--expanded" role="alertdialog" aria-modal="false" aria-labelledby="notch-title"${event.detail ? ' aria-describedby="notch-detail"' : ''}><div class="notch-card"><div class="notch-card-heading"><span class="notch-card-icon notch-card-icon--${escapeHTML(event.kind)}">${icon(event.kind)}</span><div class="notch-card-copy"><h1 id="notch-title">${escapeHTML(event.title)}</h1>${event.detail ? `<p id="notch-detail">${escapeHTML(event.detail)}</p>` : ''}</div></div><div class="notch-card-actions">${actions}</div></div></section>`;
     setInteractive(true);
-    window.requestAnimationFrame(() => root.querySelector('.notch-button--allow, .notch-button')?.focus());
+    // Keep the safe/deferring action as the initial keyboard target. Approval
+    // always requires an explicit move or click.
+    window.requestAnimationFrame(() => (
+      root.querySelector('.notch-button--deny, [data-option-id="later"], .notch-button')?.focus()
+    ));
   }
 
   async function choose(optionId) {
