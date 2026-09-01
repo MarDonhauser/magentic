@@ -40,6 +40,9 @@ states:
     # Die eigene Eingabezeile in Ruhe. Ein Dialog trägt sie auch, wird aber
     # vorher als blocked erkannt.
     - regex: '(?m)^\s*❯'
+    # Die Hinweiszeile unter dem Composer, dieselbe, an der die
+    # Eingabebereitschaft hängt.
+    - literal: 'shift+tab to cycle'
 
 composer:
   - literal: 'shift+tab to cycle'

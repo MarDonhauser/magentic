@@ -88,6 +88,7 @@ func (a *App) startup(ctx context.Context) {
 		})
 	}
 	go a.watchLoop()
+	go a.hookReportLoop()
 }
 
 func (a *App) onFileDrop(x, y int, paths []string) {

@@ -88,6 +88,43 @@ func observationCovers(snapshot core.ObservationSnapshot, cachedInput map[core.S
 	return true
 }
 
+// hookReportPollInterval keeps a vendor-reported transition well inside the
+// sub-second budget the status contract states. The observation cycle itself
+// stays at its own interval; this loop only refines the statuses it already
+// holds.
+const hookReportPollInterval = 200 * time.Millisecond
+
+// hookReportLoop applies hook-reported transitions to the Observation the app
+// already holds, so a blocked agent shows up without waiting for the next
+// cycle.
+func (a *App) hookReportLoop() {
+	for {
+		time.Sleep(hookReportPollInterval)
+		a.applyHookReportsOnce()
+	}
+}
+
+func (a *App) applyHookReportsOnce() bool {
+	st, err := core.LoadState()
+	if err != nil {
+		return false
+	}
+	a.observationMu.Lock()
+	held := cloneObservation(a.observation)
+	a.observationMu.Unlock()
+	if len(held.Sessions) == 0 {
+		return false
+	}
+	refined, changed := core.ApplyHookReports(held, st.Agents, time.Now())
+	if !changed {
+		return false
+	}
+	a.observationMu.Lock()
+	a.observation = refined
+	a.observationMu.Unlock()
+	return true
+}
+
 func (a *App) watchLoop() {
 	var lastErrLog time.Time
 	for {

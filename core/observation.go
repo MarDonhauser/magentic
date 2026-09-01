@@ -673,6 +673,44 @@ func resolveSessionStatus(in statusInput) statusOutcome {
 	return statusOutcome{Status: status, Source: StatusSourceSnapshot, Detail: evaluated.Detail}
 }
 
+// ApplyHookReports folds pending hook reports into the store and refines an
+// Observation Magentic already holds, so a vendor-reported transition becomes
+// visible without waiting for the next observation cycle.
+func ApplyHookReports(snapshot ObservationSnapshot, sessions []Session, now time.Time) (ObservationSnapshot, bool) {
+	defaultHookReports.DrainHookReportFile(HookReportPath(), sessions)
+	registered := make(map[SessionID]Session, len(sessions))
+	for _, session := range sessions {
+		registered[session.ID] = session
+	}
+	refined := snapshot
+	refined.Sessions = append([]SessionObservation(nil), snapshot.Sessions...)
+	changed := false
+	for i := range refined.Sessions {
+		observed := &refined.Sessions[i]
+		session, known := registered[observed.SessionID]
+		if !known || observed.Presence != SessionPresencePresent {
+			continue
+		}
+		record, fresh := defaultHookReports.fresh(observed.SessionID, now)
+		if !fresh {
+			continue
+		}
+		if observed.StatusSource == StatusSourceHook &&
+			observed.Status == record.status && observed.Detail == record.detail {
+			continue
+		}
+		observed.Status = record.status
+		observed.StatusSource = StatusSourceHook
+		observed.Detail = record.detail
+		observed.Attention = observationAttention(record.status)
+		observed.Unread = observationUnread(
+			record.status, session.SeenAt, observed.Activity, observed.ActivityKnown,
+		)
+		changed = true
+	}
+	return refined, changed
+}
+
 // InferStatusFromPane resolves what one agent kind's manifest can prove about a
 // pane, without the presence and hook facts a full Observation carries.
 func InferStatusFromPane(paneCommand, content string) (AgentStatus, string) {
