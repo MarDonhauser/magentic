@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWorkHistoryNormalizesAllProviderAdapters(t *testing.T) {
@@ -107,7 +108,7 @@ func TestWorkHistoryNormalizesAllProviderAdapters(t *testing.T) {
 	if indexInfo.Mode().Perm() != 0o700 {
 		t.Fatalf("index directory mode = %o, want 700", indexInfo.Mode().Perm())
 	}
-	for _, name := range []string{"index.json", "index.lock"} {
+	for _, name := range []string{"history.db", "index.lock"} {
 		info, err := os.Stat(filepath.Join(indexDir, name))
 		if err != nil {
 			t.Fatal(err)
@@ -116,7 +117,7 @@ func TestWorkHistoryNormalizesAllProviderAdapters(t *testing.T) {
 			t.Fatalf("%s mode = %o, want 600", name, info.Mode().Perm())
 		}
 	}
-	indexData, err := os.ReadFile(filepath.Join(indexDir, "index.json"))
+	indexData, err := os.ReadFile(filepath.Join(indexDir, "history.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,10 +382,16 @@ func openTestWorkHistory(t *testing.T) (*WorkHistory, string, string, string) {
 	home := filepath.Join(root, "home")
 	indexDir := filepath.Join(root, "private-index")
 	codexHome := filepath.Join(root, "codex-home")
-	history, err := OpenWorkHistory(WorkHistoryConfig{HomeDir: home, IndexDir: indexDir, CodexHome: codexHome})
+	history, err := OpenWorkHistory(WorkHistoryConfig{
+		HomeDir: home, IndexDir: indexDir, CodexHome: codexHome,
+		// Tests arbeiten mit festen Zeitstempeln in der Vergangenheit und
+		// erwarten vollständige, sofort sichtbare Ergebnisse.
+		Retention: 100 * 365 * 24 * time.Hour, SynchronousIndex: true,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { history.Close() })
 	return history, home, indexDir, codexHome
 }
 
@@ -394,6 +401,20 @@ func writeHistoryTestFile(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func touchHistoryTestFile(t *testing.T, path string, when time.Time) {
+	t.Helper()
+	if err := os.Chtimes(path, when, when); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func removeHistoryTestFile(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
 }

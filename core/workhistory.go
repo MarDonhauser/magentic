@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -291,6 +290,7 @@ type HistoryMeta struct {
 	AssociationRevision string                    `json:"associationRevision,omitempty"`
 	ObservedAt          time.Time                 `json:"observedAt"`
 	Coverage            []HistoryProviderCoverage `json:"coverage"`
+	Progress            HistoryIndexProgress      `json:"progress"`
 }
 
 type HistoryEventPage struct {
@@ -391,6 +391,12 @@ type WorkHistoryConfig struct {
 	IndexDir  string
 	HomeDir   string
 	CodexHome string
+	// Retention begrenzt, wie weit Roh-Events zurückreichen. Null bedeutet
+	// historyRetentionWindow.
+	Retention time.Duration
+	// SynchronousIndex lässt Abfragen auf einen vollständigen Lauf warten.
+	// Nur für Tests und einmalige Werkzeuge gedacht.
+	SynchronousIndex bool
 }
 
 type workHistoryFS interface {
@@ -417,7 +423,13 @@ type WorkHistory struct {
 	files    workHistoryFS
 	adapters []historyProviderAdapter
 	now      func() time.Time
-	mu       sync.Mutex
+	store    *historyStore
+
+	mu        sync.Mutex
+	indexing  bool
+	lastRunAt time.Time
+	progress  HistoryIndexProgress
+	counters  map[HistoryProvider]*historyRunCounters
 }
 
 func OpenWorkHistory(config WorkHistoryConfig) (*WorkHistory, error) {
@@ -449,6 +461,11 @@ func OpenWorkHistory(config WorkHistoryConfig) (*WorkHistory, error) {
 		now:    time.Now,
 	}
 	h.adapters = builtinHistoryAdapters(config)
+	store, err := openHistoryStore(h.dbPath())
+	if err != nil {
+		return nil, err
+	}
+	h.store = store
 	return h, nil
 }
 
@@ -463,12 +480,12 @@ func ensurePrivateHistoryDir(path string) error {
 }
 
 func (h *WorkHistory) Events(ctx context.Context, associations HistoryAssociations, query HistoryEventQuery) (HistoryEventPage, error) {
-	index, meta, err := h.refresh(ctx)
+	records, meta, err := h.read(ctx, query)
 	if err != nil {
 		return HistoryEventPage{}, err
 	}
 	meta.AssociationRevision = associations.Revision
-	events, total := queryHistoryEvents(index, associations, query, true)
+	events, total := queryHistoryRecords(records, associations, query, true)
 	if events == nil {
 		events = []HistoryEvent{}
 	}
@@ -476,14 +493,14 @@ func (h *WorkHistory) Events(ctx context.Context, associations HistoryAssociatio
 }
 
 func (h *WorkHistory) Links(ctx context.Context, associations HistoryAssociations, query HistoryLinkQuery) (HistoryLinkPage, error) {
-	index, meta, err := h.refresh(ctx)
+	eventQuery := query.Events
+	eventQuery.Limit, eventQuery.Offset = 0, 0
+	records, meta, err := h.read(ctx, eventQuery)
 	if err != nil {
 		return HistoryLinkPage{}, err
 	}
 	meta.AssociationRevision = associations.Revision
-	eventQuery := query.Events
-	eventQuery.Limit, eventQuery.Offset = 0, 0
-	events, _ := queryHistoryEvents(index, associations, eventQuery, false)
+	events, _ := queryHistoryRecords(records, associations, eventQuery, false)
 	seen := map[string]bool{}
 	var links []HistoryLink
 	for _, event := range events {
@@ -511,33 +528,38 @@ func (h *WorkHistory) Links(ctx context.Context, associations HistoryAssociation
 }
 
 func (h *WorkHistory) Summarize(ctx context.Context, associations HistoryAssociations, query HistorySummaryQuery) (HistorySummary, error) {
-	index, meta, err := h.refresh(ctx)
+	eventQuery := query.Events
+	eventQuery.Limit, eventQuery.Offset = 0, 0
+	records, meta, err := h.read(ctx, eventQuery)
 	if err != nil {
 		return HistorySummary{}, err
 	}
 	meta.AssociationRevision = associations.Revision
-	eventQuery := query.Events
-	eventQuery.Limit, eventQuery.Offset = 0, 0
-	events, _ := queryHistoryEvents(index, associations, eventQuery, false)
+	events, _ := queryHistoryRecords(records, associations, eventQuery, false)
 	return summarizeHistory(events, query.Location, meta, eventQuery.Providers), nil
 }
 
-const workHistoryIndexVersion = 1
-
-type historyIndex struct {
-	Version  int                         `json:"version"`
-	Revision uint64                      `json:"revision"`
-	Files    map[string]historyIndexFile `json:"files"`
+// read stößt bei Bedarf einen Indexlauf an und liest anschließend die passenden
+// Datensätze samt Zustandsbericht aus dem Speicher.
+func (h *WorkHistory) read(ctx context.Context, query HistoryEventQuery) ([]historyRecord, HistoryMeta, error) {
+	h.ensureIndexing(ctx)
+	records, err := h.store.records(ctx, historyFilterFor(query))
+	if err != nil {
+		return nil, HistoryMeta{}, err
+	}
+	meta, err := h.snapshotMeta(ctx)
+	if err != nil {
+		return nil, HistoryMeta{}, err
+	}
+	return records, meta, nil
 }
 
-type historyIndexFile struct {
-	Provider       HistoryProvider  `json:"provider"`
-	AdapterVersion int              `json:"adapterVersion"`
-	Digest         string           `json:"digest"`
-	Size           int64            `json:"size"`
-	ModTime        int64            `json:"modTime"`
-	Records        []historyRecord  `json:"records"`
-	Problems       []HistoryProblem `json:"problems,omitempty"`
+func historyFilterFor(query HistoryEventQuery) historyRecordFilter {
+	return historyRecordFilter{
+		Since: query.Since, Before: query.Before, IncludeUnknownTime: query.IncludeUnknownTime,
+		Providers: query.Providers, Roles: query.Roles, Kinds: query.Kinds,
+		Lineages: query.Lineages, Text: query.Text,
+	}
 }
 
 type historyUsageRecord struct {
@@ -567,193 +589,16 @@ type historyRecord struct {
 	NativeID       string             `json:"nativeId,omitempty"`
 }
 
-func (h *WorkHistory) indexPath() string { return filepath.Join(h.config.IndexDir, "index.json") }
-func (h *WorkHistory) lockPath() string  { return filepath.Join(h.config.IndexDir, "index.lock") }
+func (h *WorkHistory) dbPath() string   { return filepath.Join(h.config.IndexDir, "history.db") }
+func (h *WorkHistory) lockPath() string { return filepath.Join(h.config.IndexDir, "index.lock") }
+func (h *WorkHistory) Close() error     { return h.store.Close() }
 
-func (h *WorkHistory) refresh(ctx context.Context) (*historyIndex, HistoryMeta, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if err := ensurePrivateHistoryDir(h.config.IndexDir); err != nil {
-		return nil, HistoryMeta{}, err
+// retention liefert das wirksame Aufbewahrungsfenster der Roh-Events.
+func (h *WorkHistory) retention() time.Duration {
+	if h.config.Retention > 0 {
+		return h.config.Retention
 	}
-	var index *historyIndex
-	var meta HistoryMeta
-	err := withWorkHistoryFileLock(ctx, h.lockPath(), func() error {
-		var refreshErr error
-		index, meta, refreshErr = h.refreshIndex(ctx)
-		return refreshErr
-	})
-	return index, meta, err
-}
-
-func (h *WorkHistory) refreshIndex(ctx context.Context) (*historyIndex, HistoryMeta, error) {
-	index, existed, err := loadHistoryIndex(h.indexPath())
-	if err != nil {
-		return nil, HistoryMeta{}, err
-	}
-	dirty := !existed
-	observedAt := h.now().UTC()
-	coverage := make([]HistoryProviderCoverage, 0, len(h.adapters))
-
-	for _, adapter := range h.adapters {
-		if err := ctx.Err(); err != nil {
-			return nil, HistoryMeta{}, err
-		}
-		inventory := discoverHistoryFiles(ctx, h.files, adapter)
-		cov := inventory.coverage
-		seen := make(map[string]bool, len(inventory.files))
-		for _, path := range inventory.files {
-			if err := ctx.Err(); err != nil {
-				return nil, HistoryMeta{}, err
-			}
-			sourceID := historySourceID(adapter.Provider(), path)
-			seen[sourceID] = true
-			data, err := h.files.ReadFile(path)
-			if err != nil {
-				cov.Problems = append(cov.Problems, HistoryProblem{Provider: adapter.Provider(), SourceID: sourceID, Kind: "file-unreadable", Message: err.Error()})
-				continue
-			}
-			digest, err := adapter.Fingerprint(h.files, path, data)
-			if err != nil {
-				cov.Problems = append(cov.Problems, HistoryProblem{Provider: adapter.Provider(), SourceID: sourceID, Kind: "dependency-unreadable", Message: err.Error()})
-				continue
-			}
-			info, statErr := h.files.Stat(path)
-			if statErr != nil {
-				cov.Problems = append(cov.Problems, HistoryProblem{Provider: adapter.Provider(), SourceID: sourceID, Kind: "file-unavailable", Message: statErr.Error()})
-				continue
-			}
-			old, ok := index.Files[sourceID]
-			if ok && old.Provider == adapter.Provider() && old.AdapterVersion == adapter.Version() && old.Digest == digest {
-				cov.ReusedFiles++
-				if old.Size != info.Size() || old.ModTime != info.ModTime().UnixNano() {
-					old.Size, old.ModTime = info.Size(), info.ModTime().UnixNano()
-					index.Files[sourceID] = old
-					dirty = true
-				}
-				cov.Problems = append(cov.Problems, old.Problems...)
-				continue
-			}
-			records, problems, parseErr := adapter.Parse(ctx, h.files, path, data)
-			for i := range problems {
-				problems[i].Provider = adapter.Provider()
-				problems[i].SourceID = sourceID
-			}
-			if parseErr != nil {
-				cov.Problems = append(cov.Problems, HistoryProblem{Provider: adapter.Provider(), SourceID: sourceID, Kind: "parse-failed", Message: parseErr.Error()})
-				if ok {
-					cov.Problems = append(cov.Problems, old.Problems...)
-				}
-				continue
-			}
-			records = normalizeHistoryRecords(adapter.Provider(), sourceID, records)
-			index.Files[sourceID] = historyIndexFile{
-				Provider: adapter.Provider(), AdapterVersion: adapter.Version(),
-				Digest: digest, Size: info.Size(), ModTime: info.ModTime().UnixNano(),
-				Records: records, Problems: problems,
-			}
-			cov.ParsedFiles++
-			cov.Problems = append(cov.Problems, problems...)
-			dirty = true
-		}
-		if cov.State == HistorySourceAvailable || cov.State == HistorySourceAbsent {
-			for sourceID, file := range index.Files {
-				if file.Provider == adapter.Provider() && !seen[sourceID] {
-					delete(index.Files, sourceID)
-					dirty = true
-				}
-			}
-		}
-		for _, file := range index.Files {
-			if file.Provider == adapter.Provider() {
-				cov.IndexedFiles++
-			}
-		}
-		if len(cov.Problems) > 0 {
-			if cov.State == HistorySourceAvailable {
-				cov.State = HistorySourcePartial
-			} else if cov.State == HistorySourceAbsent {
-				cov.State = HistorySourceUnavailable
-			}
-		}
-		coverage = append(coverage, cov)
-	}
-	if dirty {
-		index.Revision++
-		if err := saveHistoryIndex(h.indexPath(), index); err != nil {
-			return nil, HistoryMeta{}, err
-		}
-	} else if err := protectHistoryIndex(h.indexPath()); err != nil {
-		return nil, HistoryMeta{}, err
-	}
-	return index, HistoryMeta{Revision: index.Revision, ObservedAt: observedAt, Coverage: coverage}, nil
-}
-
-func loadHistoryIndex(path string) (*historyIndex, bool, error) {
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return &historyIndex{Version: workHistoryIndexVersion, Files: map[string]historyIndexFile{}}, false, nil
-	}
-	if err != nil {
-		return nil, false, fmt.Errorf("read work history index: %w", err)
-	}
-	var index historyIndex
-	if err := json.Unmarshal(data, &index); err != nil {
-		return nil, false, fmt.Errorf("decode work history index: %w", err)
-	}
-	if index.Version != workHistoryIndexVersion {
-		return &historyIndex{Version: workHistoryIndexVersion, Files: map[string]historyIndexFile{}}, false, nil
-	}
-	if index.Files == nil {
-		index.Files = map[string]historyIndexFile{}
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return nil, false, fmt.Errorf("protect work history index: %w", err)
-	}
-	return &index, true, nil
-}
-
-func saveHistoryIndex(path string, index *historyIndex) error {
-	data, err := json.Marshal(index)
-	if err != nil {
-		return fmt.Errorf("encode work history index: %w", err)
-	}
-	tmp := fmt.Sprintf("%s.tmp.%d.%d", path, os.Getpid(), time.Now().UnixNano())
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("create work history index: %w", err)
-	}
-	ok := false
-	defer func() {
-		_ = f.Close()
-		if !ok {
-			_ = os.Remove(tmp)
-		}
-	}()
-	if _, err := f.Write(data); err != nil {
-		return fmt.Errorf("write work history index: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		return fmt.Errorf("sync work history index: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("close work history index: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("replace work history index: %w", err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("protect work history index: %w", err)
-	}
-	ok = true
-	return nil
-}
-
-func protectHistoryIndex(path string) error {
-	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("protect work history index: %w", err)
-	}
-	return nil
+	return historyRetentionWindow
 }
 
 func historySourceID(provider HistoryProvider, path string) string {
@@ -848,49 +693,21 @@ func mergeHistoryRecord(a, b historyRecord) historyRecord {
 	return a
 }
 
-func queryHistoryEvents(index *historyIndex, associations HistoryAssociations, query HistoryEventQuery, paginate bool) ([]HistoryEvent, int) {
+// queryHistoryRecords wendet die Filter an, die erst nach dem Auflösen der
+// Registry-Zuordnung entschieden werden können, und sortiert das Ergebnis. Die
+// Filter nach Provider, Rolle, Art, Abstammung, Zeitfenster und Text hat der
+// Speicher bereits erledigt.
+func queryHistoryRecords(records []historyRecord, associations HistoryAssociations, query HistoryEventQuery, paginate bool) ([]HistoryEvent, int) {
 	resolver := newHistoryAssociationResolver(associations)
-	byID := map[string]historyRecord{}
-	for _, file := range index.Files {
-		for _, record := range file.Records {
-			if old, ok := byID[record.ID]; ok {
-				byID[record.ID] = mergeHistoryRecord(old, record)
-			} else {
-				byID[record.ID] = record
-			}
-		}
-	}
-	providers := historySet(query.Providers)
 	projects := historySet(query.ProjectKeys)
 	sessions := historySet(query.SessionKeys)
-	roles := historySet(query.Roles)
-	kinds := historySet(query.Kinds)
-	lineages := historySet(query.Lineages)
-	needle := strings.ToLower(strings.TrimSpace(query.Text))
 	var events []HistoryEvent
-	for _, record := range byID {
-		if len(providers) > 0 && !providers[record.Provider] || len(roles) > 0 && !roles[record.Role] ||
-			len(kinds) > 0 && !kinds[record.Kind] || len(lineages) > 0 && !lineages[record.Lineage] {
-			continue
-		}
+	for _, record := range records {
 		event := historyEventFromRecord(record, resolver.resolve(record))
-		if !query.Since.IsZero() || !query.Before.IsZero() {
-			if event.OccurredAt.State != HistoryFactKnown {
-				if !query.IncludeUnknownTime {
-					continue
-				}
-			} else if !query.Since.IsZero() && event.OccurredAt.Value.Before(query.Since) ||
-				!query.Before.IsZero() && !event.OccurredAt.Value.Before(query.Before) {
-				continue
-			}
-		}
 		if len(projects) > 0 && (event.Attribution.ProjectKey.State != HistoryFactKnown || !projects[event.Attribution.ProjectKey.Value]) {
 			continue
 		}
 		if len(sessions) > 0 && (event.Attribution.SessionKey.State != HistoryFactKnown || !sessions[event.Attribution.SessionKey.Value]) {
-			continue
-		}
-		if needle != "" && !strings.Contains(strings.ToLower(event.Text.Value), needle) {
 			continue
 		}
 		events = append(events, event)

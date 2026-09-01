@@ -12,7 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const historySchemaVersion = 2
+const historySchemaVersion = 3
 
 // historyRetentionWindow begrenzt, wie lange Roh-Events vorgehalten werden.
 // Die dauerhaften Tagesaggregate in der Tabelle activity sind davon nicht
@@ -27,10 +27,16 @@ type historyStore struct {
 const historySchemaSQL = `
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
 
+-- index_state hält die Revision des Index: einen Zähler, der genau dann steigt,
+-- wenn ein Lauf tatsächlich Quellen geschrieben oder gelöscht hat.
+CREATE TABLE IF NOT EXISTS index_state (revision INTEGER NOT NULL);
+
+-- Der Pfad des Transkripts wird bewusst nicht gespeichert. Die Quelle wird über
+-- die gehashte source_id geführt; die Entdeckung läuft ohnehin bei jedem Lauf
+-- erneut über das Dateisystem.
 CREATE TABLE IF NOT EXISTS sources (
 	source_id      TEXT PRIMARY KEY,
 	provider       TEXT NOT NULL,
-	path           TEXT NOT NULL,
 	adapter_version INTEGER NOT NULL,
 	digest         TEXT NOT NULL,
 	size           INTEGER NOT NULL,
@@ -152,6 +158,10 @@ func openHistoryStoreOnce(path string) (*historyStore, error) {
 		db.Close()
 		return nil, historySchemaMismatch{found: version}
 	}
+	if err := stampHistoryRevision(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := os.Chmod(path, 0o600); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("protect work history index: %w", err)
@@ -159,13 +169,49 @@ func openHistoryStoreOnce(path string) (*historyStore, error) {
 	return &historyStore{path: path, db: db}, nil
 }
 
+// stampHistoryRevision legt die einzige Zeile der Tabelle index_state an, falls
+// sie noch fehlt.
+func stampHistoryRevision(db *sql.DB) error {
+	var revision int64
+	err := db.QueryRow(`SELECT revision FROM index_state`).Scan(&revision)
+	if err == sql.ErrNoRows {
+		if _, err := db.Exec(`INSERT INTO index_state(revision) VALUES(0)`); err != nil {
+			return fmt.Errorf("stamp work history revision: %w", err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read work history revision: %w", err)
+	}
+	return nil
+}
+
+// revision liefert den aktuellen Zählerstand des Index.
+func (s *historyStore) revision() (uint64, error) {
+	var revision int64
+	if err := s.db.QueryRow(`SELECT revision FROM index_state`).Scan(&revision); err != nil {
+		return 0, fmt.Errorf("read work history revision: %w", err)
+	}
+	return uint64(revision), nil
+}
+
+// bumpRevision erhöht den Zähler um eins. Der Indexer ruft dies einmal am Ende
+// eines Laufs auf, der tatsächlich etwas geändert hat, damit Leser einen
+// zwischenzeitlichen Neuaufbau erkennen können.
+func (s *historyStore) bumpRevision() error {
+	if _, err := s.db.Exec(`UPDATE index_state SET revision = revision + 1`); err != nil {
+		return fmt.Errorf("bump work history revision: %w", err)
+	}
+	return nil
+}
+
 func (s *historyStore) Close() error { return s.db.Close() }
 
-// historySourceRow spiegelt eine Zeile der Tabelle sources wider.
+// historySourceRow spiegelt eine Zeile der Tabelle sources wider. Der Pfad des
+// Transkripts gehört bewusst nicht dazu: der Index soll ihn nicht festhalten.
 type historySourceRow struct {
 	SourceID       string
 	Provider       HistoryProvider
-	Path           string
 	AdapterVersion int
 	Digest         string
 	Size           int64
@@ -196,14 +242,14 @@ func writeSourceRowTx(tx *sql.Tx, row historySourceRow) error {
 		return fmt.Errorf("encode source problems: %w", err)
 	}
 	_, err = tx.Exec(`INSERT INTO sources
-		(source_id, provider, path, adapter_version, digest, size, mod_time, indexed_at, problems)
-		VALUES(?,?,?,?,?,?,?,?,?)
+		(source_id, provider, adapter_version, digest, size, mod_time, indexed_at, problems)
+		VALUES(?,?,?,?,?,?,?,?)
 		ON CONFLICT(source_id) DO UPDATE SET
-			provider=excluded.provider, path=excluded.path,
+			provider=excluded.provider,
 			adapter_version=excluded.adapter_version, digest=excluded.digest,
 			size=excluded.size, mod_time=excluded.mod_time,
 			indexed_at=excluded.indexed_at, problems=excluded.problems`,
-		row.SourceID, string(row.Provider), row.Path, row.AdapterVersion, row.Digest,
+		row.SourceID, string(row.Provider), row.AdapterVersion, row.Digest,
 		row.Size, row.ModTime, row.IndexedAt, string(problems))
 	if err != nil {
 		return fmt.Errorf("write source: %w", err)
@@ -224,9 +270,9 @@ func historyProblemsOrEmpty(problems []HistoryProblem) []HistoryProblem {
 func (s *historyStore) source(sourceID string) (historySourceRow, bool, error) {
 	row := historySourceRow{SourceID: sourceID}
 	var provider, problems string
-	err := s.db.QueryRow(`SELECT provider, path, adapter_version, digest, size, mod_time, indexed_at, problems
+	err := s.db.QueryRow(`SELECT provider, adapter_version, digest, size, mod_time, indexed_at, problems
 		FROM sources WHERE source_id = ?`, sourceID).
-		Scan(&provider, &row.Path, &row.AdapterVersion, &row.Digest, &row.Size, &row.ModTime, &row.IndexedAt, &problems)
+		Scan(&provider, &row.AdapterVersion, &row.Digest, &row.Size, &row.ModTime, &row.IndexedAt, &problems)
 	if err == sql.ErrNoRows {
 		return historySourceRow{}, false, nil
 	}

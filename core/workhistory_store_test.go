@@ -54,8 +54,8 @@ func TestHistoryStoreRebuildsOnUnknownSchemaVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec(`INSERT INTO sources(source_id, provider, path, adapter_version, digest, size, mod_time, indexed_at, problems)
-		VALUES('claude:src', 'claude', '/x.jsonl', 1, 'd', 1, 1, 1, '[]')`); err != nil {
+	if _, err := store.db.Exec(`INSERT INTO sources(source_id, provider, adapter_version, digest, size, mod_time, indexed_at, problems)
+		VALUES('claude:src', 'claude', 1, 'd', 1, 1, 1, '[]')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.db.Exec(`UPDATE schema_version SET version = 999`); err != nil {
@@ -115,7 +115,7 @@ func TestHistoryStoreSchemaSurvivesReopenAtSameVersion(t *testing.T) {
 func TestHistoryStoreSourceRoundTripAndDeletion(t *testing.T) {
 	store := openTestHistoryStore(t)
 	row := historySourceRow{
-		SourceID: "claude:a", Provider: HistoryProviderClaude, Path: "/a.jsonl",
+		SourceID: "claude:a", Provider: HistoryProviderClaude,
 		AdapterVersion: 3, Digest: "digest-a", Size: 120, ModTime: 900, IndexedAt: 1000,
 		Problems: []HistoryProblem{{Provider: HistoryProviderClaude, SourceID: "claude:a", Kind: "malformed", Message: "1 Zeile"}},
 	}
@@ -137,7 +137,7 @@ func TestHistoryStoreSourceRoundTripAndDeletion(t *testing.T) {
 	// countSources müssen für Probleme und Anzahl unterschiedliche Zahlen
 	// liefern, und Problems: nil muss ohne Decode-Fehler als leer zurückkommen.
 	healthy := historySourceRow{
-		SourceID: "claude:b", Provider: HistoryProviderClaude, Path: "/b.jsonl",
+		SourceID: "claude:b", Provider: HistoryProviderClaude,
 		AdapterVersion: 3, Digest: "digest-b", Size: 80, ModTime: 950, IndexedAt: 1000,
 		Problems: nil,
 	}
@@ -191,10 +191,10 @@ func TestHistoryStoreMergesEventsAcrossSources(t *testing.T) {
 	withUsage.Model = "gpt-5"
 	withUsage.Usage = historyUsageRecord{Input: 10, InputKnown: true, Output: 4, OutputKnown: true}
 
-	if err := store.replaceSource(historySourceRow{SourceID: "codex:live", Provider: HistoryProviderCodex, Path: "/live.jsonl", ModTime: 100}, []historyRecord{withText}); err != nil {
+	if err := store.replaceSource(historySourceRow{SourceID: "codex:live", Provider: HistoryProviderCodex, ModTime: 100}, []historyRecord{withText}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.replaceSource(historySourceRow{SourceID: "codex:archiv", Provider: HistoryProviderCodex, Path: "/archiv.jsonl", ModTime: 90}, []historyRecord{withUsage}); err != nil {
+	if err := store.replaceSource(historySourceRow{SourceID: "codex:archiv", Provider: HistoryProviderCodex, ModTime: 90}, []historyRecord{withUsage}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -220,7 +220,7 @@ func TestHistoryStoreMergesEventsAcrossSources(t *testing.T) {
 
 func TestHistoryStoreReplaceSourceRemovesVanishedEvents(t *testing.T) {
 	store := openTestHistoryStore(t)
-	row := historySourceRow{SourceID: "claude:a", Provider: HistoryProviderClaude, Path: "/a.jsonl", ModTime: 10}
+	row := historySourceRow{SourceID: "claude:a", Provider: HistoryProviderClaude, ModTime: 10}
 	first := historyRecord{
 		ID: "claude:event:1", SourceID: "claude:a", Provider: HistoryProviderClaude,
 		Timestamp: "2026-08-30T10:00:00Z", Role: HistoryRoleDeveloper, Kind: HistoryEventPrompt,
@@ -246,7 +246,7 @@ func TestHistoryStoreReplaceSourceRemovesVanishedEvents(t *testing.T) {
 
 func TestHistoryStoreRecordsFilterAndSubstringSearch(t *testing.T) {
 	store := openTestHistoryStore(t)
-	base := historySourceRow{SourceID: "claude:a", Provider: HistoryProviderClaude, Path: "/a.jsonl", ModTime: 10}
+	base := historySourceRow{SourceID: "claude:a", Provider: HistoryProviderClaude, ModTime: 10}
 	records := []historyRecord{
 		{ID: "e1", SourceID: "claude:a", Provider: HistoryProviderClaude, Timestamp: "2026-08-30T10:00:00Z",
 			Role: HistoryRoleDeveloper, Kind: HistoryEventPrompt, Lineage: HistoryLineagePrimary, Text: "Kubernetes aufsetzen"},
@@ -315,8 +315,8 @@ func TestHistoryStoreRecordsFilterAndSubstringSearch(t *testing.T) {
 
 func TestHistoryStorePruneDropsOldEventsAndKeepsActivity(t *testing.T) {
 	store := openTestHistoryStore(t)
-	oldSource := historySourceRow{SourceID: "claude:alt", Provider: HistoryProviderClaude, Path: "/alt.jsonl", ModTime: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC).UnixNano()}
-	newSource := historySourceRow{SourceID: "claude:neu", Provider: HistoryProviderClaude, Path: "/neu.jsonl", ModTime: time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC).UnixNano()}
+	oldSource := historySourceRow{SourceID: "claude:alt", Provider: HistoryProviderClaude, ModTime: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC).UnixNano()}
+	newSource := historySourceRow{SourceID: "claude:neu", Provider: HistoryProviderClaude, ModTime: time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC).UnixNano()}
 
 	if err := store.replaceSource(oldSource, []historyRecord{
 		{ID: "alt-1", SourceID: "claude:alt", Provider: HistoryProviderClaude, Timestamp: "2026-07-01T10:00:00Z",
