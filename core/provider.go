@@ -141,7 +141,9 @@ func (claudeProvider) NewRunID() string    { return NewUUID() }
 func (claudeProvider) ScreensRecorded() bool { return true }
 
 func (claudeProvider) Matches(paneCommand string) bool {
-	return paneCommandMatches(paneCommand, "claude")
+	// Claude Code has set its process title to the bare version number since
+	// about 2.1.237, so tmux reports "2.1.241" instead of "claude".
+	return paneCommandMatches(paneCommand, "claude") || looksLikeBareVersionNumber(paneCommand)
 }
 
 // Claude keeps its long-standing detection, including background agents and

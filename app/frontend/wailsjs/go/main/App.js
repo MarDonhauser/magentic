@@ -58,8 +58,16 @@ export function Cleanup(arg1, arg2) {
   return window['go']['main']['App']['Cleanup'](arg1, arg2);
 }
 
+export function ClearNotch(arg1) {
+  return window['go']['main']['App']['ClearNotch'](arg1);
+}
+
 export function CloseTerm(arg1) {
   return window['go']['main']['App']['CloseTerm'](arg1);
+}
+
+export function DeleteSessionAutomation(arg1, arg2) {
+  return window['go']['main']['App']['DeleteSessionAutomation'](arg1, arg2);
 }
 
 export function Deploy(arg1) {
@@ -162,12 +170,20 @@ export function ResizeTerm(arg1, arg2, arg3) {
   return window['go']['main']['App']['ResizeTerm'](arg1, arg2, arg3);
 }
 
+export function RespondToNotch(arg1) {
+  return window['go']['main']['App']['RespondToNotch'](arg1);
+}
+
 export function RetryQueuedMessage(arg1, arg2) {
   return window['go']['main']['App']['RetryQueuedMessage'](arg1, arg2);
 }
 
 export function SaveImage(arg1) {
   return window['go']['main']['App']['SaveImage'](arg1);
+}
+
+export function SaveSessionAutomation(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
+  return window['go']['main']['App']['SaveSessionAutomation'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
 }
 
 export function SearchTranscripts(arg1) {
@@ -180,6 +196,10 @@ export function SendMessage(arg1, arg2) {
 
 export function SendSkill(arg1, arg2) {
   return window['go']['main']['App']['SendSkill'](arg1, arg2);
+}
+
+export function SessionAutomation(arg1) {
+  return window['go']['main']['App']['SessionAutomation'](arg1);
 }
 
 export function SessionLinks(arg1) {
@@ -200,6 +220,10 @@ export function SetBreakConfig(arg1) {
 
 export function SetMainBranch(arg1, arg2) {
   return window['go']['main']['App']['SetMainBranch'](arg1, arg2);
+}
+
+export function ShowNotchEvent(arg1) {
+  return window['go']['main']['App']['ShowNotchEvent'](arg1);
 }
 
 export function SnoozeBreak() {

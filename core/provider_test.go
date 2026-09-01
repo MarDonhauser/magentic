@@ -15,6 +15,9 @@ func TestDetectAgentTool(t *testing.T) {
 	}{
 		{name: "Codex", command: "codex", want: "codex"},
 		{name: "Claude", command: "claude", want: "claude"},
+		{name: "Claude mit Versions-Prozesstitel", command: "2.1.241", want: "claude"},
+		{name: "Versionsnummer mit Suffix bleibt neutral", command: "2.1.241-beta", want: ""},
+		{name: "Zweiteilige Version bleibt neutral", command: "2.1", want: ""},
 		{name: "Gemini", command: "gemini", want: "gemini"},
 		{name: "GitHub Copilot", command: "copilot", want: "copilot"},
 		{name: "Terminal gewinnt", command: "codex", term: true, want: "bash"},

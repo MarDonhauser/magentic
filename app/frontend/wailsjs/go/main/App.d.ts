@@ -31,7 +31,11 @@ export function BuildInfo():Promise<string>;
 
 export function Cleanup(arg1:string,arg2:string):Promise<string>;
 
+export function ClearNotch(arg1:string):Promise<void>;
+
 export function CloseTerm(arg1:string):Promise<void>;
+
+export function DeleteSessionAutomation(arg1:string,arg2:string):Promise<void>;
 
 export function Deploy(arg1:string):Promise<string>;
 
@@ -83,15 +87,21 @@ export function ReorderProjects(arg1:Array<string>):Promise<void>;
 
 export function ResizeTerm(arg1:string,arg2:number,arg3:number):Promise<void>;
 
+export function RespondToNotch(arg1:main.NotchResponse):Promise<void>;
+
 export function RetryQueuedMessage(arg1:string,arg2:string):Promise<void>;
 
 export function SaveImage(arg1:string):Promise<string>;
+
+export function SaveSessionAutomation(arg1:string,arg2:string,arg3:string,arg4:string,arg5:number,arg6:string,arg7:boolean):Promise<core.SessionAutomation>;
 
 export function SearchTranscripts(arg1:string):Promise<main.SearchResult>;
 
 export function SendMessage(arg1:string,arg2:string):Promise<void>;
 
 export function SendSkill(arg1:string,arg2:string):Promise<void>;
+
+export function SessionAutomation(arg1:string):Promise<core.SessionAutomation>;
 
 export function SessionLinks(arg1:string):Promise<main.SessionLinksResult>;
 
@@ -102,6 +112,8 @@ export function SetActiveTerm(arg1:string):Promise<void>;
 export function SetBreakConfig(arg1:core.BreakConfig):Promise<void>;
 
 export function SetMainBranch(arg1:string,arg2:string):Promise<void>;
+
+export function ShowNotchEvent(arg1:main.NotchEvent):Promise<void>;
 
 export function SnoozeBreak():Promise<void>;
 

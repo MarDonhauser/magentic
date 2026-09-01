@@ -162,6 +162,24 @@ func DetectAgentTool(paneCommand string, term bool) string {
 	return ""
 }
 
+func looksLikeBareVersionNumber(command string) bool {
+	parts := strings.Split(command, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		for _, r := range part {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // observationSessions returns copy-only ephemeral IDs for legacy fixtures.
 // Observe itself remains strict: production Sessions must have durable IDs.
 func observationSessions(sessions []Session) []Session {

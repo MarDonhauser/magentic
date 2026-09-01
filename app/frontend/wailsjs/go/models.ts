@@ -460,6 +460,48 @@ export namespace core {
 		    return a;
 		}
 	}
+	export class OvAutomation {
+	    id: string;
+	    name: string;
+	    enabled: boolean;
+	    everyMinutes: number;
+	    // Go type: time
+	    nextRunAt: any;
+	    // Go type: time
+	    lastRunAt: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new OvAutomation(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.enabled = source["enabled"];
+	        this.everyMinutes = source["everyMinutes"];
+	        this.nextRunAt = this.convertValues(source["nextRunAt"], null);
+	        this.lastRunAt = this.convertValues(source["lastRunAt"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class OvQueuedMessage {
 	    id: string;
 	    kind: string;
@@ -503,6 +545,7 @@ export namespace core {
 	    handoffSource: boolean;
 	    handoffTarget: boolean;
 	    queued?: OvQueuedMessage[];
+	    automation?: OvAutomation;
 	
 	    static createFrom(source: any = {}) {
 	        return new OvAgent(source);
@@ -532,6 +575,7 @@ export namespace core {
 	        this.handoffSource = source["handoffSource"];
 	        this.handoffTarget = source["handoffTarget"];
 	        this.queued = this.convertValues(source["queued"], OvQueuedMessage);
+	        this.automation = this.convertValues(source["automation"], OvAutomation);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -552,6 +596,7 @@ export namespace core {
 		    return a;
 		}
 	}
+	
 	export class OvLater {
 	    id: string;
 	    name: string;
@@ -782,6 +827,50 @@ export namespace core {
 		}
 	}
 	
+	export class SessionAutomation {
+	    id: string;
+	    name: string;
+	    instructions: string;
+	    every_minutes: number;
+	    // Go type: time
+	    next_run_at: any;
+	    // Go type: time
+	    last_run_at: any;
+	    enabled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new SessionAutomation(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.instructions = source["instructions"];
+	        this.every_minutes = source["every_minutes"];
+	        this.next_run_at = this.convertValues(source["next_run_at"], null);
+	        this.last_run_at = this.convertValues(source["last_run_at"], null);
+	        this.enabled = source["enabled"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class StatsTotals {
 	    days: number;
 	    prompts: number;
@@ -1348,6 +1437,77 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.url = source["url"];
 	        this.time = source["time"];
+	    }
+	}
+	export class NotchOption {
+	    id: string;
+	    label: string;
+	    tone?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NotchOption(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.label = source["label"];
+	        this.tone = source["tone"];
+	    }
+	}
+	export class NotchEvent {
+	    id: string;
+	    kind: string;
+	    title: string;
+	    detail?: string;
+	    options: NotchOption[];
+	    sessionId?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NotchEvent(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.kind = source["kind"];
+	        this.title = source["title"];
+	        this.detail = source["detail"];
+	        this.options = this.convertValues(source["options"], NotchOption);
+	        this.sessionId = source["sessionId"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class NotchResponse {
+	    id: string;
+	    optionId: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NotchResponse(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.optionId = source["optionId"];
 	    }
 	}
 	export class SearchHit {
