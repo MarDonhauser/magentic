@@ -134,10 +134,6 @@ export function PickFolder() {
   return window['go']['main']['App']['PickFolder']();
 }
 
-export function QueueMessage(arg1, arg2) {
-  return window['go']['main']['App']['QueueMessage'](arg1, arg2);
-}
-
 export function RemoveProject(arg1) {
   return window['go']['main']['App']['RemoveProject'](arg1);
 }
@@ -158,16 +154,16 @@ export function ResizeTerm(arg1, arg2, arg3) {
   return window['go']['main']['App']['ResizeTerm'](arg1, arg2, arg3);
 }
 
+export function RetryQueuedMessage(arg1, arg2) {
+  return window['go']['main']['App']['RetryQueuedMessage'](arg1, arg2);
+}
+
 export function SaveImage(arg1) {
   return window['go']['main']['App']['SaveImage'](arg1);
 }
 
 export function SearchTranscripts(arg1) {
   return window['go']['main']['App']['SearchTranscripts'](arg1);
-}
-
-export function RetryQueuedMessage(arg1, arg2) {
-  return window['go']['main']['App']['RetryQueuedMessage'](arg1, arg2);
 }
 
 export function SendMessage(arg1, arg2) {
