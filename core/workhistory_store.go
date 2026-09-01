@@ -249,29 +249,37 @@ func (s *historyStore) sourceIDsByProvider(provider HistoryProvider) (map[string
 	return out, rows.Err()
 }
 
-// sourceProblems liefert alle Probleme der Quellen eines Providers sowie die
-// Anzahl der betroffenen Quellen.
-func (s *historyStore) sourceProblems(provider HistoryProvider) ([]HistoryProblem, int, error) {
+// sourceProblems liefert die gemeldeten Probleme aller Quellen eines Providers.
+func (s *historyStore) sourceProblems(provider HistoryProvider) ([]HistoryProblem, error) {
 	rows, err := s.db.Query(`SELECT problems FROM sources WHERE provider = ?`, string(provider))
 	if err != nil {
-		return nil, 0, fmt.Errorf("read source problems: %w", err)
+		return nil, fmt.Errorf("read source problems: %w", err)
 	}
 	defer rows.Close()
 	var out []HistoryProblem
-	count := 0
 	for rows.Next() {
 		var encoded string
 		if err := rows.Scan(&encoded); err != nil {
-			return nil, 0, fmt.Errorf("read source problems: %w", err)
+			return nil, fmt.Errorf("read source problems: %w", err)
 		}
-		count++
 		var problems []HistoryProblem
 		if err := json.Unmarshal([]byte(encoded), &problems); err != nil {
-			return nil, 0, fmt.Errorf("decode source problems: %w", err)
+			return nil, fmt.Errorf("decode source problems: %w", err)
 		}
 		out = append(out, problems...)
 	}
-	return out, count, rows.Err()
+	return out, rows.Err()
+}
+
+// countSources zählt die indexierten Quellen eines Providers, unabhängig davon,
+// ob sie Probleme gemeldet haben.
+func (s *historyStore) countSources(provider HistoryProvider) (int, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT count(*) FROM sources WHERE provider = ?`, string(provider)).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count sources: %w", err)
+	}
+	return count, nil
 }
 
 // deleteSources entfernt Quellen samt ihrer Events und Volltextindex-Einträge.

@@ -95,17 +95,41 @@ func TestHistoryStoreSourceRoundTripAndDeletion(t *testing.T) {
 		t.Fatalf("problems = %#v", got.Problems)
 	}
 
+	// Zweite, gesunde Quelle desselben Providers: sourceProblems und
+	// countSources müssen für Probleme und Anzahl unterschiedliche Zahlen
+	// liefern, und Problems: nil muss ohne Decode-Fehler als leer zurückkommen.
+	healthy := historySourceRow{
+		SourceID: "claude:b", Provider: HistoryProviderClaude, Path: "/b.jsonl",
+		AdapterVersion: 3, Digest: "digest-b", Size: 80, ModTime: 950, IndexedAt: 1000,
+		Problems: nil,
+	}
+	if err := store.writeSourceRow(healthy); err != nil {
+		t.Fatal(err)
+	}
+	gotHealthy, ok, err := store.source("claude:b")
+	if err != nil || !ok {
+		t.Fatalf("source: ok=%v err=%v", ok, err)
+	}
+	if len(gotHealthy.Problems) != 0 {
+		t.Fatalf("problems for nil-write = %#v", gotHealthy.Problems)
+	}
+
 	ids, err := store.sourceIDsByProvider(HistoryProviderClaude)
-	if err != nil || !ids["claude:a"] || len(ids) != 1 {
+	if err != nil || !ids["claude:a"] || !ids["claude:b"] || len(ids) != 2 {
 		t.Fatalf("ids = %#v err = %v", ids, err)
 	}
 
-	problems, count, err := store.sourceProblems(HistoryProviderClaude)
-	if err != nil || count != 1 || len(problems) != 1 {
-		t.Fatalf("problems = %#v count = %d err = %v", problems, count, err)
+	problems, err := store.sourceProblems(HistoryProviderClaude)
+	if err != nil || len(problems) != 1 {
+		t.Fatalf("problems = %#v err = %v", problems, err)
 	}
 
-	if err := store.deleteSources([]string{"claude:a"}); err != nil {
+	count, err := store.countSources(HistoryProviderClaude)
+	if err != nil || count != 2 {
+		t.Fatalf("count = %d err = %v", count, err)
+	}
+
+	if err := store.deleteSources([]string{"claude:a", "claude:b"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, err := store.source("claude:a"); ok || err != nil {
