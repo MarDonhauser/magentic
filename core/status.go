@@ -156,20 +156,10 @@ func DetectAgentTool(paneCommand string, term bool) string {
 	if term {
 		return AgentToolBash
 	}
-	command := strings.ToLower(strings.TrimSpace(paneCommand))
-	command = strings.TrimPrefix(command, "-")
-	switch {
-	case command == "claude" || strings.HasPrefix(command, "claude-"):
-		return AgentToolClaude
-	case command == "codex" || strings.HasPrefix(command, "codex-"):
-		return AgentToolCodex
-	case command == "gemini" || strings.HasPrefix(command, "gemini-"):
-		return AgentToolGemini
-	case command == "copilot", command == "github-copilot":
-		return AgentToolCopilot
-	default:
-		return ""
+	if provider, ok := providerForPaneCommand(paneCommand); ok {
+		return provider.Tool()
 	}
+	return ""
 }
 
 // observationSessions returns copy-only ephemeral IDs for legacy fixtures.

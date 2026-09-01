@@ -68,3 +68,67 @@ func TestOverviewCarriesDetectedAgentTool(t *testing.T) {
 		t.Fatalf("reine Shell darf nicht Handoff-fähig sein: %#v", shell)
 	}
 }
+
+func TestClaudeProviderStartCommand(t *testing.T) {
+	session := Session{Name: "navi", RuntimeName: "mgt-navi"}
+	provider, ok := providerForVendor(AgentVendorClaude)
+	if !ok {
+		t.Fatal("kein Claude-Provider registriert")
+	}
+	run := AgentRunRef{Vendor: AgentVendorClaude, ExternalID: "abc-123"}
+	tests := []struct {
+		name string
+		run  *AgentRunRef
+		mode string
+		want string
+	}{
+		{name: "neu ohne Run", mode: "new", want: "claude --name 'mgt-navi'"},
+		{name: "neu mit Run", run: &run, mode: "new", want: "claude --name 'mgt-navi' --session-id 'abc-123'"},
+		{name: "resume mit Run", run: &run, mode: "resume", want: "claude --name 'mgt-navi' --resume 'abc-123'"},
+		{name: "resume ohne Run", mode: "resume", want: "claude --name 'mgt-navi' --continue"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := provider.StartCommand(session, tt.run, tt.mode)
+			if err != nil {
+				t.Fatalf("StartCommand: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("StartCommand = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProviderForPaneCommand(t *testing.T) {
+	tests := []struct {
+		command string
+		want    AgentVendor
+		found   bool
+	}{
+		{command: "claude", want: AgentVendorClaude, found: true},
+		{command: "-claude", want: AgentVendorClaude, found: true},
+		{command: "CLAUDE", want: AgentVendorClaude, found: true},
+		{command: "claude-code", want: AgentVendorClaude, found: true},
+		{command: "node", found: false},
+		{command: "", found: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.command, func(t *testing.T) {
+			provider, ok := providerForPaneCommand(tt.command)
+			if ok != tt.found {
+				t.Fatalf("providerForPaneCommand(%q) gefunden = %v, want %v", tt.command, ok, tt.found)
+			}
+			if ok && provider.Vendor() != tt.want {
+				t.Fatalf("providerForPaneCommand(%q) = %q, want %q", tt.command, provider.Vendor(), tt.want)
+			}
+		})
+	}
+}
+
+func TestClaudeProviderSuppliesRunID(t *testing.T) {
+	provider, _ := providerForVendor(AgentVendorClaude)
+	if provider.NewRunID() == "" {
+		t.Fatal("Claude nimmt eine vorgegebene Run-Identität an")
+	}
+}
