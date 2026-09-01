@@ -113,21 +113,28 @@ denselben Feldern; `occurred_at` als Unix-Nanosekunden und nullbar, damit
 
 | Spalte | Bedeutung |
 |---|---|
-| `source_id` | Quelle, aus der die Zeile stammt |
+| `agg_key` | `conversation_id`, sonst `source_id` |
+| `source_id` | Quelle, aus der die Zeile zuletzt geschrieben wurde |
+| `written_from_mod_time` | Änderungszeit dieser Quelle, entscheidet über Überschreiben |
 | `day` | lokaler Tag als `YYYY-MM-DD` |
 | `hour` | lokale Stunde 0–23, für Tagesverlauf und Wochen-Heatmap |
 | `provider`, `conversation_id`, `cwd`, `project_alias`, `model` | Merkmale für die spätere Zuordnung |
 | `prompts`, `turns` | Zähler |
 | `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` | Summen |
 | `cost` | summierte Kosten der bepreisten Ereignisse |
-| `unpriced_events` | Anzahl der Ereignisse ohne belastbaren Preis |
+| `priced_events`, `unpriced_events` | Zähler für den Kostenzustand |
+| `known_usage_events`, `unknown_usage_events` | Zähler für die Abdeckung der Tokenwerte |
 
-Primärschlüssel ist
-`(source_id, day, hour, provider, conversation_id, model)`.
+Primärschlüssel ist `(agg_key, day, hour, provider, model)`, wobei `agg_key`
+die `conversation_id` ist, solange sie bekannt ist, und sonst die `source_id`.
+Die Spalte `written_from_mod_time` entscheidet, welche Quelle schreiben darf —
+siehe den Abschnitt über dieselbe Conversation in zwei Quellen.
 
-`hour`, `cost` und `unpriced_events` sind nicht optional: `statsAcc.addEvent`
-(`core/stats.go:268`) baut daraus heute den Stundenverlauf, die Heatmap und den
-Kostenzustand. Ohne diese Merkmale wären sie jenseits von 14 Tagen leer.
+Diese Zähler sind nicht optional: `statsAcc.addEvent` (`core/stats.go:268`) baut
+daraus heute den Stundenverlauf, die Heatmap und den Kostenzustand, und
+`HistoryMeasure` (`core/workhistory.go:331`) trägt eine Abdeckung, die sich
+allein aus Summen nicht rekonstruieren ließe. Ohne sie wären Verlauf, Heatmap
+und Vollständigkeitsangaben jenseits von 14 Tagen leer oder falsch.
 
 ### Warum die Aggregate keine Namen speichern
 
@@ -139,13 +146,37 @@ aufgelöst. Sonst würden umbenannte oder später übernommene Projekte in alten
 Statistiken einfrieren — genau die Eigenschaft, die der Kommentar bei
 `HistoryAssociations` (`core/workhistory.go:158`) heute zusichert.
 
-### Warum die Aggregate an der Quelle hängen
+### Dieselbe Conversation in zwei Quellen
 
-Weil der Primärschlüssel `source_id` enthält, ist erneutes Parsen derselben
-Datei idempotent: die Zeilen dieser Quelle werden in einer Transaktion
-gelöscht und neu geschrieben, nicht addiert. Ein Transkript, das noch wächst,
-wird bei jedem Lauf neu geparst, ohne dass die Statistik doppelt zählt.
-Abfragen summieren über `source_id` hinweg.
+`stableHistoryRecordID` (`core/workhistory.go:799`) lässt die Quelle aus der
+Identität weg, sobald eine Conversation bekannt ist — ausdrücklich, um Provider
+zu entdoppeln, die eine Interaktion zweimal ablegen. Bei Codex passiert das
+real, weil `sessions` und `archived_sessions` dieselbe Conversation enthalten
+können.
+
+Für `events` löst das die Zusammenführung über den Primärschlüssel
+`event_id`. Die Aggregate brauchen eine eigene Regel, sonst zählte dieselbe
+Interaktion je Quelle einmal. Deshalb:
+
+- Der Aggregatschlüssel `agg_key` ist `conversation_id`, wenn bekannt, sonst
+  `source_id`.
+- Jede `activity`-Zeile trägt `written_from_mod_time`, die Änderungszeit der
+  Quelle, aus der sie geschrieben wurde.
+- Beim Indexieren einer Quelle werden ihre Buckets je `agg_key` nur dann
+  geschrieben, wenn die Änderungszeit dieser Quelle größer oder gleich der
+  höchsten bereits gespeicherten `written_from_mod_time` desselben `agg_key`
+  ist. Dann werden alle Zeilen dieses `agg_key` ersetzt, nicht ergänzt.
+
+Damit gewinnt immer die zuletzt geschriebene, also vollständigste Fassung einer
+Conversation, unabhängig davon, in welcher Reihenfolge der Indexer die Dateien
+abarbeitet.
+
+### Warum erneutes Parsen nicht doppelt zählt
+
+Erneutes Parsen derselben Datei ist idempotent: die Zeilen ihres `agg_key`
+werden in einer Transaktion gelöscht und neu geschrieben, nicht addiert. Ein
+Transkript, das noch wächst, wird bei jedem Lauf neu geparst, ohne dass die
+Statistik doppelt zählt. Abfragen summieren über `agg_key` hinweg.
 
 ## Aufbewahrung
 
@@ -225,16 +256,16 @@ type HistoryActivityBucket struct {
 dieselben Zahlen liefern; genau das prüft ein Test innerhalb des
 14-Tage-Fensters, in dem beide Quellen vorhanden sind.
 
-Zwei Folgen sind hinzunehmen und gehören in die Abnahme:
+Die Attribution bleibt exakt erhalten: weil `activity` `conversation_id`, `cwd`
+und `project_alias` mitführt, lässt sich je Bucket ein `historyRecord`
+rekonstruieren und durch denselben `newHistoryAssociationResolver` schicken, den
+`Events` benutzt. Projektzuordnung und Sessionzählung (`statsEventSession`,
+`core/stats.go:344`) verhalten sich damit unverändert.
 
-- Die Zahl gleichzeitiger Sessions je Tag zählt fortan verschiedene
-  Conversations statt aufgelöster Sessionschlüssel. Innerhalb eines Providers
-  ist das dieselbe Menge; über Provider hinweg kann eine Session, die den
-  Vendor gewechselt hat, doppelt zählen.
-- `pagedStatsHistory` und die Revisionsschleife `coherentStatsHistory`
-  (`core/stats.go:579`) entfallen für den Aggregatpfad. Kohärenz entsteht
-  stattdessen dadurch, dass Summen und Buckets in einer Lesetransaktion
-  derselben Datenbank ermittelt werden.
+Eine Folge ist hinzunehmen: `pagedStatsHistory` und die Revisionsschleife
+`coherentStatsHistory` (`core/stats.go:579`) entfallen für den Aggregatpfad.
+Kohärenz entsteht stattdessen dadurch, dass Summen und Buckets in einer
+Lesetransaktion derselben Datenbank ermittelt werden.
 
 ### Neue Abfrage: Conversations
 
