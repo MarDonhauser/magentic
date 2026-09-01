@@ -741,7 +741,7 @@ func SendSkillByIDWithObserver(id SessionID, cmd string, observe func(context.Co
 // dispatcher delivers it as soon as the Session is input-ready again.
 func sendSkillToSession(session Session, cmd string, observe observationReader) error {
 	if session.IsTerm() {
-		return fmt.Errorf("%s ist eine Terminal-Session — dort läuft kein Claude", session.Name)
+		return fmt.Errorf("%s ist eine Terminal-Session — dort läuft kein Coding-Agent", session.Name)
 	}
 	return SendQueuedMessageWithObserver(session.ID, QueuedMessageKindSkill, cmd, observe)
 }

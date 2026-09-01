@@ -175,7 +175,7 @@ func SendQueuedMessageWithObserver(sessionID SessionID, kind QueuedMessageKind, 
 		return err
 	}
 	if session.IsTerm() {
-		return fmt.Errorf("%s ist eine Terminal-Session — dort läuft kein Claude", session.Name)
+		return fmt.Errorf("%s ist eine Terminal-Session — dort läuft kein Coding-Agent", session.Name)
 	}
 	message := QueuedMessage{ID: NewUUID(), Kind: kind, Text: text, EnqueuedAt: time.Now()}
 	ctx := context.Background()
