@@ -161,6 +161,10 @@ func DetectAgentTool(paneCommand string, term bool) string {
 	switch {
 	case command == "claude" || strings.HasPrefix(command, "claude-"):
 		return AgentToolClaude
+	// Claude Code setzt seit ~2.1.237 seinen Prozesstitel auf die nackte
+	// Versionsnummer; tmux meldet dann z. B. "2.1.241" statt "claude".
+	case looksLikeBareVersionNumber(command):
+		return AgentToolClaude
 	case command == "codex" || strings.HasPrefix(command, "codex-"):
 		return AgentToolCodex
 	case command == "gemini" || strings.HasPrefix(command, "gemini-"):
@@ -170,6 +174,24 @@ func DetectAgentTool(paneCommand string, term bool) string {
 	default:
 		return ""
 	}
+}
+
+func looksLikeBareVersionNumber(command string) bool {
+	parts := strings.Split(command, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		for _, r := range part {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // observationSessions returns copy-only ephemeral IDs for legacy fixtures.

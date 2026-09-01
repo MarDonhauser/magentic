@@ -134,6 +134,10 @@ export function PickFolder() {
   return window['go']['main']['App']['PickFolder']();
 }
 
+export function QueueMessage(arg1, arg2) {
+  return window['go']['main']['App']['QueueMessage'](arg1, arg2);
+}
+
 export function RemoveProject(arg1) {
   return window['go']['main']['App']['RemoveProject'](arg1);
 }

@@ -171,9 +171,12 @@ func promptInputStateFromObservation(observed SessionObservation) promptInputSta
 	}
 }
 
+// Im Login-Sturm nach dem Boot (Autostart + ~20 frisch restaurierte claude-
+// Prozesse) braucht tmux teils Sekunden pro Antwort; knappere Timeouts ließen
+// minutenlang jede Beobachtung scheitern und die Sidebar leer erscheinen.
 const (
-	defaultObservationCycleTimeout = 1500 * time.Millisecond
-	defaultObservationProbeTimeout = 500 * time.Millisecond
+	defaultObservationCycleTimeout = 6 * time.Second
+	defaultObservationProbeTimeout = 2 * time.Second
 	observationScrollbackLines     = 200
 )
 

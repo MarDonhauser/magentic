@@ -323,14 +323,6 @@ const termStateEl = $('term-session-state');
 const termStateIconEl = $('term-state-icon');
 const termStateTitleEl = $('term-state-title');
 const termStateDetailEl = $('term-state-detail');
-const termComposerEl = $('term-composer');
-const termPromptEl = $('term-prompt');
-const termSendEl = $('term-send');
-const termAttachEl = $('term-attach');
-const termImageEl = $('term-image');
-const termComposeHintEl = $('term-compose-hint');
-let composerBusy = false;
-let composerHintTimer = null;
 
 function agentInfo(name, sessionID = '') {
   for (const p of ov?.projects || []) {
@@ -362,6 +354,7 @@ function updateTermBar() {
   const v = agentVisual(a, a?.project);
   const gone = !a || ['exited', 'dead'].includes(a.status);
   const claudeActions = a?.term ? '' :
+    `<button class="btn tiny" id="tb-queue"${gone ? ' disabled' : ''} title="Nachricht einreihen — wird erst getippt und abgeschickt, wenn die Session ihre aktuelle Arbeit beendet hat">${icon('clock')} queue</button>` +
     `<button class="btn tiny" id="tb-done"${gone ? ' disabled' : ''} title="/done in diese Session senden — committen und auf dev bringen">${icon('check')} done</button>` +
     `<button class="btn tiny" id="tb-deploy"${gone ? ' disabled' : ''} title="/deploy in diese Session senden">${icon('rocket')} deploy</button>` +
     `<button class="btn tiny" id="tb-dd"${gone ? ' disabled' : ''} title="/done senden und danach automatisch /deploy">${icon('check')}+${icon('rocket')} beides</button>`;
@@ -379,6 +372,7 @@ function updateTermBar() {
     `<button class="btn tiny danger" id="tb-kill" title="Session endgültig beenden">${icon('x')}</button></span>`;
   $('tb-back').onclick = showOverview;
   if (!a?.term) {
+    $('tb-queue').onclick = () => toggleQueueForm();
     $('tb-done').onclick = () =>
       act(DoneAgent(sessionID), `/done an „${sessionName}" gesendet — Plan in der Session bestätigen`).catch(() => {});
     $('tb-deploy').onclick = () =>
@@ -400,143 +394,55 @@ function updateTermBar() {
       if (b.isConnected) { delete b.dataset.confirm; b.innerHTML = icon('x'); }
     }, 3000);
   };
-  updateTermComposer(a, v, gone);
+  updateTermState(gone);
 }
 
-function updateComposerControls(gone) {
-  const unavailable = composerBusy || gone || !activeTerm;
-  termPromptEl.disabled = unavailable;
-  termAttachEl.disabled = unavailable;
-  termSendEl.disabled = unavailable || !termPromptEl.value.trim();
+function updateTermState(gone) {
+  termStateEl.className = gone ? 'is-ended' : 'is-hidden';
+  termsEl.classList.toggle('without-session-state', !gone);
+  termStateIconEl.innerHTML = icon('x');
+  termStateTitleEl.textContent = gone ? 'Session beendet' : '';
+  termStateDetailEl.textContent = gone
+    ? 'Der Verlauf bleibt lesbar. Öffne die Session über die Seitenleiste erneut, um weiterzuarbeiten.'
+    : '';
 }
 
-function setComposerHint(message, reset = true) {
-  clearTimeout(composerHintTimer);
-  termComposeHintEl.textContent = message;
-  if (!reset) return;
-  composerHintTimer = setTimeout(() => {
-    termComposeHintEl.textContent = '⌘/Strg + ↵ senden · Bilder einfügen';
-  }, 2600);
-}
+const termQueueEl = $('term-queue');
+const termQueueTextEl = $('term-queue-text');
 
-function updateTermComposer(a, visual, gone) {
-  const activeStatus = a?.status;
-  const hideState = !gone
-    && (a?.term || activeStatus === 'term')
-    && !['blocked', 'running', 'agents'].includes(activeStatus);
-  termStateEl.className = hideState ? 'is-hidden' : '';
-  termsEl.classList.toggle('without-session-state', hideState);
-  let stateIcon = 'check';
-  let title = 'Bereit für deine nächste Nachricht';
-  let detail = 'Nutze den Composer oder arbeite direkt im Terminal weiter.';
-
-  if (gone) {
-    termStateEl.className = 'is-ended';
-    stateIcon = 'x';
-    title = 'Session beendet';
-    detail = 'Der Verlauf bleibt lesbar. Öffne die Session über die Seitenleiste erneut, um weiterzuarbeiten.';
-  } else if (a?.status === 'blocked') {
-    termStateEl.className = 'is-waiting';
-    stateIcon = 'warn';
-    title = 'Deine Eingabe wird benötigt';
-    detail = visual?.label && visual.label !== 'wartet' ? visual.label : 'Die Session wartet auf deine Entscheidung oder Bestätigung.';
-  } else if (a?.status === 'running' || a?.status === 'agents') {
-    termStateEl.className = 'is-running';
-    stateIcon = 'clock';
-    title = 'Session arbeitet';
-    detail = 'Neue Nachrichten werden an dieselbe laufende Session gesendet.';
-  }
-
-  termStateIconEl.innerHTML = icon(stateIcon);
-  termStateTitleEl.textContent = title;
-  termStateDetailEl.textContent = detail;
-  termPromptEl.placeholder = activeTerm ? `Nachricht an ${activeTerm} …` : 'Nachricht an die Session …';
-  updateComposerControls(gone);
-}
-
-async function sendComposerMessage() {
-  const message = termPromptEl.value.trim();
-  const sessionName = activeTerm;
-  const t = sessionName && terms.get(sessionName);
-  if (!message || !t || composerBusy) return;
-
-  composerBusy = true;
-  updateComposerControls(false);
-  termComposerEl.setAttribute('aria-busy', 'true');
-  setComposerHint('Wird gesendet …', false);
-  try {
-    const normalized = message.replace(/\r?\n/g, '\r');
-    const pasted = t.term.modes.bracketedPasteMode
-      ? `\x1b[200~${normalized}\x1b[201~`
-      : normalized;
-    await WriteTerm(t.connectionKey, toB64(pasted + '\r'));
-    termPromptEl.value = '';
-    t.term.scrollToBottom();
-    setComposerHint(`An ${sessionName} gesendet`);
-  } catch (err) {
-    setComposerHint('Senden fehlgeschlagen', false);
-    toast('Nachricht konnte nicht gesendet werden: ' + err, true);
-  } finally {
-    composerBusy = false;
-    termComposerEl.removeAttribute('aria-busy');
-    const a = agentInfo(activeTerm, activeSessionID);
-    updateComposerControls(!a || ['exited', 'dead'].includes(a.status));
-    termPromptEl.focus();
+function toggleQueueForm(show = termQueueEl.classList.contains('is-hidden')) {
+  termQueueEl.classList.toggle('is-hidden', !show);
+  if (show) {
+    termQueueTextEl.focus();
+  } else {
+    const t = activeTerm && terms.get(activeTerm);
+    t?.term.focus();
   }
 }
 
-async function insertComposerImage(file) {
-  if (!file || composerBusy || !activeTerm) return;
-  termAttachEl.disabled = true;
-  setComposerHint('Bild wird angehängt …', false);
-  try {
-    const path = await SaveImage(await blobToB64(file));
-    const start = termPromptEl.selectionStart ?? termPromptEl.value.length;
-    const end = termPromptEl.selectionEnd ?? start;
-    const before = termPromptEl.value.slice(0, start);
-    const after = termPromptEl.value.slice(end);
-    const prefix = before && !/\s$/.test(before) ? ' ' : '';
-    const suffix = after && !/^\s/.test(after) ? ' ' : '';
-    termPromptEl.value = before + prefix + path + suffix + after;
-    const caret = (before + prefix + path + suffix).length;
-    termPromptEl.setSelectionRange(caret, caret);
-    setComposerHint('Bild angehängt');
-    termPromptEl.dispatchEvent(new Event('input'));
-    termPromptEl.focus();
-  } catch (err) {
-    setComposerHint('Bild konnte nicht angehängt werden', false);
-    toast('Bild konnte nicht eingefügt werden: ' + err, true);
-  } finally {
-    termAttachEl.disabled = false;
-  }
-}
-
-termComposerEl.addEventListener('submit', e => {
+termQueueEl.addEventListener('submit', async e => {
   e.preventDefault();
-  sendComposerMessage();
+  const text = termQueueTextEl.value.trim();
+  const name = activeTerm;
+  if (!text || !activeSessionID) return;
+  try {
+    await SendMessage(activeSessionID, text);
+    termQueueTextEl.value = '';
+    toggleQueueForm(false);
+    toast(`Nachricht für „${name}" eingereiht — wird zugestellt, sobald die Session frei ist`);
+  } catch (err) {
+    toast('Einreihen fehlgeschlagen: ' + err, true);
+  }
 });
-termPromptEl.addEventListener('input', () => {
-  const a = agentInfo(activeTerm, activeSessionID);
-  updateComposerControls(!a || ['exited', 'dead'].includes(a.status));
-});
-termPromptEl.addEventListener('keydown', e => {
+termQueueTextEl.addEventListener('keydown', e => {
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
     e.preventDefault();
-    termComposerEl.requestSubmit();
+    termQueueEl.requestSubmit();
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    toggleQueueForm(false);
   }
 });
-termPromptEl.addEventListener('paste', e => {
-  const imageItem = [...(e.clipboardData?.items || [])].find(item => item.kind === 'file' && item.type.startsWith('image/'));
-  if (!imageItem) return;
-  e.preventDefault();
-  insertComposerImage(imageItem.getAsFile());
-});
-termAttachEl.onclick = () => termImageEl.click();
-termImageEl.onchange = () => {
-  insertComposerImage(termImageEl.files?.[0]);
-  termImageEl.value = '';
-};
-
 function markSeen(sessionID) {
   if (sessionID) MarkSeen(sessionID).catch(() => {});
 }
@@ -1134,11 +1040,14 @@ function renderSidebar() {
   let any = false;
   for (const p of ov?.projects || []) {
     const agents = [];
+    const ended = [];
     for (const wt of p.worktrees || []) {
       for (const a of wt.agents || []) {
-        if (a.status !== 'dead' && !a.dock) agents.push(a);
+        if (a.dock) continue;
+        (a.status === 'dead' ? ended : agents).push(a);
       }
     }
+    agents.push(...ended);
     if (!agents.length && !p.path) continue;
     any = true;
     const head = document.createElement('div');
@@ -1185,7 +1094,8 @@ function renderSidebar() {
       div.className = 'session' +
         (active ? ' selected' : '') +
         (a.status === 'blocked' ? ' needs-input' : '') +
-        (a.unread && !active ? ' unread' : '');
+        (a.unread && !active ? ' unread' : '') +
+        (a.status === 'dead' ? ' ended' : '');
       const key = idx < 9 ? `<span class="skey">⌘${idx + 1}</span>` : '';
       const dead = ['exited', 'dead'].includes(a.status);
       div.innerHTML =
@@ -1707,17 +1617,17 @@ function deployCard() {
     return `<div class="card" id="deploy-card"><div class="card-head"><h2>${icon('rocket')} Pipelines &amp; Argo</h2>` +
       `<span class="path">lade…</span></div></div>`;
   }
-  const azChip = ds.azOk
+  const azChip = (ds.azOk
     ? `<span class="ds-chip ok">${developerIcon('azure')} Azure ✓</span>`
-    : `<span class="ds-chip bad" title="${esc(ds.azErr)}">${developerIcon('azure')} Azure ✗</span>` +
-      `<button class="btn tiny" data-act="azlogin">az login</button>`;
+    : `<span class="ds-chip bad" title="${esc(ds.azErr)}">${developerIcon('azure')} Azure ✗</span>`) +
+    `<button class="btn tiny" data-act="azlogin" title="Azure-Login im Browser neu starten">az login</button>`;
   const subChip = ds.azSub
     ? `<button class="ds-chip sub" data-act="azsub" title="Azure-Subscription wechseln · ${esc(ds.azSub)}\n${esc(ds.azSubId)}">${developerIcon('azure')} ${esc(shortSub(ds.azSub))} ▾</button>`
     : '';
-  const argoChip = ds.argoOk
+  const argoChip = (ds.argoOk
     ? `<span class="ds-chip ok" title="${esc(ds.argoServer)}">Argo ✓</span>`
-    : `<span class="ds-chip bad" title="${esc(ds.argoErr)}">Argo ✗</span>` +
-      `<button class="btn tiny" data-act="argologin">argocd login</button>`;
+    : `<span class="ds-chip bad" title="${esc(ds.argoErr)}">Argo ✗</span>`) +
+    `<button class="btn tiny" data-act="argologin" title="Argo-SSO-Login im Browser neu starten">argocd login</button>`;
   const builds = (ds.builds || []).map(buildRow).join('') ||
     (ds.azOk ? '<div class="none">keine Builds</div>' : `<div class="none">${esc(ds.azErr)}</div>`);
   const apps = ds.apps || [];

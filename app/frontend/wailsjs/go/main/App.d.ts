@@ -69,6 +69,8 @@ export function Overview(arg1:boolean):Promise<core.Overview>;
 
 export function PickFolder():Promise<string>;
 
+export function QueueMessage(arg1:string,arg2:string):Promise<void>;
+
 export function RemoveProject(arg1:string):Promise<void>;
 
 export function RemoveWorktree(arg1:string,arg2:string):Promise<void>;

@@ -77,30 +77,21 @@
         <div id="graph-view"></div>
         <div id="board-view"></div>
         <div id="stats-view"></div>
-        <div id="terms">
+        <div id="terms" class="without-session-state">
             <div id="term-bar"></div>
             <div id="hydra-grid"></div>
-            <section id="term-session-state" aria-live="polite">
+            <section id="term-session-state" class="is-hidden" aria-live="polite">
                 <span class="term-state-icon" id="term-state-icon" aria-hidden="true"></span>
                 <span class="term-state-copy">
-                    <strong id="term-state-title">Session bereit</strong>
-                    <span id="term-state-detail">Du kannst direkt im Terminal oder über das Nachrichtenfeld arbeiten.</span>
+                    <strong id="term-state-title"></strong>
+                    <span id="term-state-detail"></span>
                 </span>
             </section>
-            <form id="term-composer">
-                <label class="sr-only" for="term-prompt">Nachricht an die aktive Session</label>
-                <textarea id="term-prompt" name="term-prompt" rows="3" spellcheck="true" placeholder="Nachricht an die Session …"></textarea>
-                <div class="term-compose-toolbar">
-                    <span class="term-compose-meta">
-                        <button type="button" class="term-attach" id="term-attach" aria-label="Bild anhängen" title="Bild anhängen">
-                            <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-                        </button>
-                        <span id="term-compose-hint">⌘/Strg + ↵ senden · Bilder einfügen</span>
-                    </span>
-                    <button type="submit" id="term-send" aria-label="Nachricht senden" title="Nachricht senden (⌘/Strg + Enter)" disabled>
-                        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>
-                    </button>
-                    <input id="term-image" type="file" accept="image/*" hidden>
+            <form id="term-queue" class="is-hidden">
+                <textarea id="term-queue-text" rows="3" spellcheck="true" placeholder="Nachricht einreihen — wird erst zugestellt, wenn die Session ihre aktuelle Arbeit beendet hat …"></textarea>
+                <div class="term-queue-bar">
+                    <span class="term-queue-hint">⌘/Strg + ↵ einreihen · Esc schließen</span>
+                    <button type="submit" class="btn tiny">einreihen</button>
                 </div>
             </form>
         </div>
