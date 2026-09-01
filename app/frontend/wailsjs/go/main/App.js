@@ -238,8 +238,8 @@ export function Stats(arg1) {
   return window['go']['main']['App']['Stats'](arg1);
 }
 
-export function SwitchSessionVendor(arg1, arg2) {
-  return window['go']['main']['App']['SwitchSessionVendor'](arg1, arg2);
+export function SwitchSessionVendor(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SwitchSessionVendor'](arg1, arg2, arg3);
 }
 
 export function TakeBreak() {

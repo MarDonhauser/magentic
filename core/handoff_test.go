@@ -153,6 +153,36 @@ func TestHandoffPromptQuotesMetadata(t *testing.T) {
 	}
 }
 
+func TestVendorSwitchHandoffUsesCompactVersionedFormat(t *testing.T) {
+	source := handoffTestSession("source-id", "source")
+	source.Vendor = AgentVendorCodex
+	source.AgentRuns = []AgentRunRef{{Vendor: AgentVendorCodex, ExternalID: "codex-run"}}
+	state := &State{Agents: []Session{source}}
+	snapshot := ObservationSnapshot{Sessions: []SessionObservation{
+		handoffObservation(source, AgentToolCodex, StatusUnknown, "Codex"),
+	}}
+
+	prompt, err := BuildVendorSwitchHandoffPrompt(state, snapshot, source.ID, AgentVendorClaude)
+	if err != nil {
+		t.Fatalf("BuildVendorSwitchHandoffPrompt() error = %v", err)
+	}
+	for _, want := range []string{
+		"Providerwechsel von codex zu claude",
+		"MAGENTIC_HANDOFF_V1",
+		"Auftrag und Ziel:",
+		"Entscheidungen:",
+		"Änderungen und Commits:",
+		"Tests und Ergebnisse:",
+		"Blocker und offene Punkte:",
+		"Nächster Schritt:",
+		"höchstens 900 Wörter",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("vendor switch handoff missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
 func TestResolveHandoffSessionsUsesStableIDsAcrossRename(t *testing.T) {
 	state := &State{Agents: []Session{
 		{ID: "source-id", Name: "source-renamed"},

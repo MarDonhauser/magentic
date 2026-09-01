@@ -13,6 +13,7 @@ import {
   ReorderProjects,
   SendSkill,
   SetMainBranch,
+  SwitchSessionVendor,
   WorktreeDiff,
 } from '../wailsjs/go/main/App.js';
 
@@ -52,6 +53,7 @@ test('session and project actions forward stable IDs through the Wails bridge', 
           ReorderProjects: record('ReorderProjects'),
           SendSkill: record('SendSkill'),
           SetMainBranch: record('SetMainBranch'),
+          SwitchSessionVendor: record('SwitchSessionVendor'),
         },
       },
     },
@@ -61,6 +63,7 @@ test('session and project actions forward stable IDs through the Wails bridge', 
   await SendSkill('session-id', '/done ');
   await KillSession('session-id', 'Display name');
   await SetMainBranch('project-id', 'main');
+  await SwitchSessionVendor('session-id', 'codex', true);
   await RemoveProject('project-id');
   await ReorderProjects(['project-b', 'project-a']);
 
@@ -69,6 +72,7 @@ test('session and project actions forward stable IDs through the Wails bridge', 
     ['SendSkill', 'session-id', '/done '],
     ['KillSession', 'session-id', 'Display name'],
     ['SetMainBranch', 'project-id', 'main'],
+    ['SwitchSessionVendor', 'session-id', 'codex', true],
     ['RemoveProject', 'project-id'],
     ['ReorderProjects', ['project-b', 'project-a']],
   ]);

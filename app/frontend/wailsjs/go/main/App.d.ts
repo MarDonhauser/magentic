@@ -121,7 +121,7 @@ export function StartBoardItem(arg1:string,arg2:string):Promise<string>;
 
 export function Stats(arg1:number):Promise<core.Stats>;
 
-export function SwitchSessionVendor(arg1:string,arg2:string):Promise<void>;
+export function SwitchSessionVendor(arg1:string,arg2:string,arg3:boolean):Promise<void>;
 
 export function TakeBreak():Promise<void>;
 

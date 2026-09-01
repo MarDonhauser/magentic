@@ -443,8 +443,31 @@ func (a *App) AgentVendors() []core.AgentVendorOption {
 	return core.AgentVendorCatalog()
 }
 
-func (a *App) SwitchSessionVendor(sessionID, vendor string) error {
-	return core.SwitchSessionVendor(core.SessionID(sessionID), vendor)
+func (a *App) SwitchSessionVendor(sessionID, vendor string, includeHistory bool) error {
+	id := core.SessionID(strings.TrimSpace(sessionID))
+	targetVendor := core.AgentVendor(strings.TrimSpace(vendor))
+	handoffPrompt := ""
+	if includeHistory {
+		st, err := core.LoadState()
+		if err != nil {
+			return err
+		}
+		snapshot := a.observationFor(st.Agents, true)
+		handoffPrompt, err = core.BuildVendorSwitchHandoffPrompt(st, snapshot, id, targetVendor)
+		if err != nil {
+			return fmt.Errorf("kompakte Verlaufsübergabe vorbereiten: %w", err)
+		}
+	}
+	if err := core.SwitchSessionVendor(id, string(targetVendor)); err != nil {
+		return err
+	}
+	if handoffPrompt == "" {
+		return nil
+	}
+	if err := core.SendQueuedMessageWithObserver(id, core.QueuedMessageKindMessage, handoffPrompt, a.observeSessions); err != nil {
+		return fmt.Errorf("Agent gewechselt, aber Verlaufsübergabe konnte nicht vorgemerkt werden: %w", err)
+	}
+	return nil
 }
 
 func (a *App) NewTermSession(projectID string, worktree bool, name string) (string, error) {
@@ -759,15 +782,26 @@ func (a *App) OpenTerm(sessionID, legacyDockName string, cols, rows int) error {
 				break
 			}
 		}
-		a.mu.Lock()
-		if a.terms[connectionKey] == t {
-			delete(a.terms, connectionKey)
-		}
-		a.mu.Unlock()
+		closedActiveConnection := a.retireTerm(connectionKey, t)
 		t.close()
-		runtime.EventsEmit(a.ctx, "term:closed:"+connectionKey)
+		if closedActiveConnection {
+			runtime.EventsEmit(a.ctx, "term:closed:"+connectionKey)
+		}
 	}()
 	return nil
+}
+
+// retireTerm removes a PTY only while it is still the current connection for
+// its stable key. A delayed read-loop exit from an explicitly replaced PTY
+// must not announce that the replacement connection was closed.
+func (a *App) retireTerm(connectionKey string, term *ptyTerm) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.terms[connectionKey] != term {
+		return false
+	}
+	delete(a.terms, connectionKey)
+	return true
 }
 
 func sessionTermKey(id core.SessionID) string {

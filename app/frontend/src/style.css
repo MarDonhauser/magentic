@@ -830,6 +830,32 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
 .term-wrap .xterm-viewport,
 .term-wrap .xterm-screen { background-color: var(--term-bg) !important; }
 
+#provider-switch-panel {
+  position: absolute;
+  z-index: 7;
+  top: 74px;
+  right: max(var(--term-gui-gutter), calc((100% - var(--term-gui-content-max)) / 2));
+  left: max(var(--term-gui-gutter), calc((100% - var(--term-gui-content-max)) / 2));
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-soft) 58%, var(--surface));
+  color: var(--accent);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-semibold);
+  box-shadow: var(--card-shadow);
+}
+#provider-switch-panel[hidden] { display: none; }
+#provider-switch-panel.is-success { color: var(--good); border-color: color-mix(in srgb, var(--good) 34%, var(--border)); }
+#provider-switch-panel.is-error { color: var(--critical); border-color: color-mix(in srgb, var(--critical) 34%, var(--border)); }
+#provider-switch-panel .ico { width: 15px; height: 15px; flex: none; }
+#provider-switch-panel[aria-busy="true"] .ico { animation: handoff-pulse 900ms ease-in-out infinite alternate; }
+#terms:not(.hydra) #provider-switch-panel:not([hidden]) ~ .term-wrap { top: 120px; }
+
 #terms:not(.hydra) > .term-wrap {
   top: 76px;
   right: max(var(--term-gui-gutter), calc((100% - var(--term-gui-content-max)) / 2));
@@ -2011,10 +2037,9 @@ body.tl-open #timeline { display: flex; }
   line-height: var(--lh-snug);
 }
 .handoff-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
-#hydra-handoff-status.is-error { color: var(--critical); }
-#hydra-handoff-status.is-success { color: var(--good); }
-#hydra-handoff-status.is-handoff .ico { width: 13px; height: 13px; }
-#hydra-handoff-status.is-handoff span { overflow: hidden; text-overflow: ellipsis; }
+#hydra-handoff-panel.is-error { color: var(--critical); }
+#hydra-handoff-panel.is-success { color: var(--good); }
+#hydra-handoff-panel.is-handoff span { overflow: hidden; text-overflow: ellipsis; }
 
 .session-magnet-ghost {
   position: fixed;
@@ -2049,6 +2074,7 @@ body.session-magnet-dragging * { cursor: grabbing !important; user-select: none 
   .hydra-head .hh-max,
   .hydra-head .hh-kill { transition: none; }
   #hydra-handoff-panel[aria-busy="true"] .ico { animation: none; }
+  #provider-switch-panel[aria-busy="true"] .ico { animation: none; }
 }
 
 .proj-head .pname { cursor: pointer; }

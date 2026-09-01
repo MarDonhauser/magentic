@@ -10,6 +10,7 @@ import {
   NewSession, NewSessionWithVendor, AgentVendors, SwitchSessionVendor, NewTermSession, NewTermSessionFor, DoneAgent, Cleanup, Merge, Deploy, RemoveWorktree, SetMainBranch,
   OpenTerm, WriteTerm, ResizeTerm, CloseTerm, KillSession, LaterSession, ReopenSession, SendSkill, HandoffSession,
   SendMessage, DiscardQueuedMessage, RetryQueuedMessage,
+  SessionAutomation, SaveSessionAutomation, DeleteSessionAutomation,
   DeployStatus, AzLogin, ArgoLogin, AzAccounts, AzSetSubscription,
   WorktreeDiff, SessionPreview, SearchTranscripts, SessionLinks, SetActiveTerm,
   PickFolder, AddProject, RemoveProject, ReorderProjects, SaveImage, Timeline,
@@ -36,6 +37,7 @@ import { mountBreaks, updateBreaks, openBreak, openBreakSettings, isBreakOpen } 
 import { initThemeToggle, onThemeChange, terminalTheme } from './theme.js';
 import { TERMINAL_OPTIONS, setUpTerminal } from './terminal-setup.js';
 import { createHydraHandoff } from './hydra-handoff.js';
+import { createVendorSwitchCoordinator } from './vendor-switch.js';
 import { queuedMessages, queuedHeadline } from './queued-state.js';
 mountDeveloperIcons();
 
@@ -365,29 +367,15 @@ function vendorSwitchHtml(agent) {
       const active = option.vendor === current;
       const title = active
         ? `${option.label} läuft in dieser Session`
-        : `Zu ${option.label} wechseln — der laufende Prozess wird beendet`;
+        : `Zu ${option.label} wechseln`;
       return `<button type="button" class="tb-vendor${active ? ' on' : ''}" data-vendor="${esc(option.vendor)}"` +
-        `${active ? ' aria-current="true"' : ''} title="${esc(title)}">${developerIcon(option.vendor)}</button>`;
+        `${active ? ' aria-current="true"' : ''} aria-label="${esc(title)}" title="${esc(title)}">${developerIcon(option.vendor)}</button>`;
     }).join('') + '</span>';
 }
 
 function wireVendorSwitch(sessionID, sessionName) {
   for (const button of termBarEl.querySelectorAll('.tb-vendor:not(.on)')) {
-    button.onclick = async () => {
-      if (!button.dataset.confirm) {
-        button.dataset.confirm = '1';
-        button.classList.add('ask');
-        setTimeout(() => {
-          if (button.isConnected) { delete button.dataset.confirm; button.classList.remove('ask'); }
-        }, 3000);
-        return;
-      }
-      try {
-        await act(SwitchSessionVendor(sessionID, button.dataset.vendor),
-          `„${sessionName}" läuft jetzt mit einem anderen Agenten`);
-      } catch { /* toast zeigt den Fehler */ }
-      await refresh(true);
-    };
+    button.onclick = () => requestVendorSwitch(sessionID, sessionName, button.dataset.vendor);
   }
 }
 
@@ -402,6 +390,15 @@ function updateTermBar() {
     `<button class="btn tiny" id="tb-done"${gone ? ' disabled' : ''} title="/done in diese Session senden — committen und auf dev bringen">${icon('check')} done</button>` +
     `<button class="btn tiny" id="tb-deploy"${gone ? ' disabled' : ''} title="/deploy in diese Session senden">${icon('rocket')} deploy</button>` +
     `<button class="btn tiny" id="tb-dd"${gone ? ' disabled' : ''} title="/done senden und danach automatisch /deploy">${icon('check')}+${icon('rocket')} beides</button>`;
+  const automation = a?.automation;
+  const automationTitle = automation?.enabled
+    ? `Automatisierung aktiv · nächster Lauf ${formatAutomationDate(automation.nextRunAt)}`
+    : automation
+      ? 'Automatisierung pausiert'
+      : 'Regelmäßige Automatisierung für diese Session einrichten';
+  const automationAction = a?.term ? '' :
+    `<button class="btn tiny tb-automation${automation?.enabled ? ' is-active' : ''}" id="tb-automation"${gone ? ' disabled' : ''} title="${esc(automationTitle)}">` +
+      `${icon('clock')}<span>${automation?.enabled ? 'Geplant' : 'Zeitplan'}</span></button>`;
   termBarEl.innerHTML =
     `<button class="btn tiny" id="tb-back" title="Übersicht (⌘0)">‹ Übersicht</button>` +
     `<span class="tb-avatar">${agentPortrait(activeTerm, 24, a)}</span>` +
@@ -411,7 +408,7 @@ function updateTermBar() {
     (a?.branch ? `<span class="tb-branch${a.worktree ? ' wt' : ''}" title="Branch ${esc(a.branch)}${a.worktree ? ' · eigener Worktree' : ''}">${icon('gitbranch')}${esc(a.branch)}</span>` : '') +
     `<span class="tb-st">${visHtml(v)}</span>` +
     (a?.project && a.project !== '(ohne Projekt)' ? `<span class="tb-proj">${esc(a.project)}</span>` : '') +
-    `<span class="tb-actions">` + claudeActions +
+    `<span class="tb-actions">` + claudeActions + automationAction +
     `<button class="btn tiny" id="tb-links" title="Links aus dieser Session anzeigen — Klick öffnet im Browser, ⌥-Klick kopiert">${icon('link')} links</button>` +
     `<button class="btn tiny" id="tb-later" title="Für später schließen (⌘⇧W) — bleibt in der Seitenleiste und lässt sich wieder öffnen">${icon('clock')}</button>` +
     `<button class="btn tiny danger" id="tb-kill" title="Session endgültig beenden">${icon('x')}</button></span>`;
@@ -426,6 +423,7 @@ function updateTermBar() {
       act(SendSkill(sessionID, '/done und sobald done komplett abgeschlossen ist, führe direkt /deploy aus '),
         `/done + /deploy an „${sessionName}" gesendet — Plan in der Session bestätigen`)
         .then(startDeployWatch).catch(() => {});
+    $('tb-automation').onclick = () => openAutomationDialog(sessionID, sessionName);
   }
   wireVendorSwitch(sessionID, sessionName);
   $('tb-links').onclick = e => openLinksMenu(e.currentTarget);
@@ -574,6 +572,152 @@ termAttachEl.onclick = () => termImageEl.click();
 termImageEl.onchange = () => {
   insertComposerImage(termImageEl.files?.[0]);
   termImageEl.value = '';
+};
+
+const automationDialogEl = $('automation-dialog');
+const automationFormEl = $('automation-form');
+const automationFieldsEl = $('automation-fields');
+const automationLoadingEl = $('automation-loading');
+const automationDeleteEl = $('automation-delete');
+const automationSaveEl = $('automation-save');
+let automationEditor = null;
+
+function formatAutomationDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'unbekannt';
+  return new Intl.DateTimeFormat('de-DE', {
+    weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+  }).format(date);
+}
+
+function toLocalDateTimeValue(value) {
+  const date = value ? new Date(value) : new Date(Date.now() + 60 * 60 * 1000);
+  const safe = Number.isNaN(date.getTime()) ? new Date(Date.now() + 60 * 60 * 1000) : date;
+  safe.setSeconds(0, 0);
+  const offset = safe.getTimezoneOffset() * 60000;
+  return new Date(safe.getTime() - offset).toISOString().slice(0, 16);
+}
+
+function automationMeta(automation) {
+  if (!automation?.id) return 'Der erste Lauf wird nach dem Speichern eingeplant.';
+  const next = `Nächster Lauf: ${formatAutomationDate(automation.next_run_at || automation.nextRunAt)}`;
+  const lastValue = automation.last_run_at || automation.lastRunAt;
+  const last = lastValue && !String(lastValue).startsWith('0001-')
+    ? ` · zuletzt eingeplant: ${formatAutomationDate(lastValue)}`
+    : '';
+  return next + last;
+}
+
+function setAutomationFormBusy(busy) {
+  automationFormEl.toggleAttribute('aria-busy', busy);
+  for (const control of automationFormEl.elements) control.disabled = busy;
+}
+
+async function openAutomationDialog(sessionID, sessionName) {
+  automationEditor = { sessionID, sessionName, automationID: '' };
+  $('automation-session-name').textContent = sessionName;
+  automationLoadingEl.hidden = false;
+  automationLoadingEl.textContent = 'Zeitplan wird geladen …';
+  automationFieldsEl.hidden = true;
+  automationDeleteEl.hidden = true;
+  automationDialogEl.showModal();
+  setAutomationFormBusy(true);
+  try {
+    const automation = await SessionAutomation(sessionID);
+    if (!automationEditor || automationEditor.sessionID !== sessionID) return;
+    automationEditor.automationID = automation?.id || '';
+    $('automation-name').value = automation?.name || `Regelmäßige Aufgabe für ${sessionName}`;
+    $('automation-instructions').value = automation?.instructions || '';
+    $('automation-cadence').value = String(automation?.every_minutes || 60);
+    if (!$('automation-cadence').value) $('automation-cadence').value = '60';
+    $('automation-next-run').value = toLocalDateTimeValue(automation?.next_run_at);
+    $('automation-enabled').checked = automation?.id ? automation.enabled === true : true;
+    $('automation-meta').textContent = automationMeta(automation);
+    automationDeleteEl.hidden = !automation?.id;
+    automationLoadingEl.hidden = true;
+    automationFieldsEl.hidden = false;
+    setAutomationFormBusy(false);
+    $('automation-name').focus();
+  } catch (err) {
+    setAutomationFormBusy(false);
+    automationLoadingEl.textContent = 'Zeitplan konnte nicht geladen werden. ' + errorText(err);
+    automationDeleteEl.hidden = true;
+    automationSaveEl.disabled = true;
+  }
+}
+
+function closeAutomationDialog() {
+  if (automationDialogEl.open) automationDialogEl.close();
+  automationEditor = null;
+  automationSaveEl.disabled = false;
+}
+
+$('automation-close').onclick = closeAutomationDialog;
+$('automation-cancel').onclick = closeAutomationDialog;
+automationDialogEl.addEventListener('click', e => {
+  if (e.target === automationDialogEl) closeAutomationDialog();
+});
+automationDialogEl.addEventListener('close', () => {
+  automationEditor = null;
+  automationSaveEl.disabled = false;
+  delete automationDeleteEl.dataset.confirm;
+  automationDeleteEl.textContent = 'Entfernen';
+});
+
+automationFormEl.addEventListener('submit', async e => {
+  e.preventDefault();
+  $('automation-next-run').setCustomValidity('');
+  if (!automationEditor || !automationFormEl.reportValidity()) return;
+  const nextRun = new Date($('automation-next-run').value);
+  if (Number.isNaN(nextRun.getTime())) {
+    $('automation-next-run').setCustomValidity('Bitte einen gültigen Zeitpunkt wählen.');
+    $('automation-next-run').reportValidity();
+    return;
+  }
+  setAutomationFormBusy(true);
+  try {
+    await SaveSessionAutomation(
+      automationEditor.sessionID,
+      automationEditor.automationID,
+      $('automation-name').value.trim(),
+      $('automation-instructions').value.trim(),
+      Number($('automation-cadence').value),
+      nextRun.toISOString(),
+      $('automation-enabled').checked,
+    );
+    const sessionName = automationEditor.sessionName;
+    closeAutomationDialog();
+    toast(`Automatisierung für „${sessionName}“ gespeichert`);
+    await refresh(true);
+  } catch (err) {
+    setAutomationFormBusy(false);
+    $('automation-meta').textContent = 'Speichern fehlgeschlagen: ' + errorText(err);
+  }
+});
+
+automationDeleteEl.onclick = async () => {
+  if (!automationEditor?.automationID) return;
+  if (!automationDeleteEl.dataset.confirm) {
+    automationDeleteEl.dataset.confirm = '1';
+    automationDeleteEl.textContent = 'Wirklich entfernen?';
+    setTimeout(() => {
+      if (!automationDeleteEl.isConnected) return;
+      delete automationDeleteEl.dataset.confirm;
+      automationDeleteEl.textContent = 'Entfernen';
+    }, 3000);
+    return;
+  }
+  setAutomationFormBusy(true);
+  try {
+    const sessionName = automationEditor.sessionName;
+    await DeleteSessionAutomation(automationEditor.sessionID, automationEditor.automationID);
+    closeAutomationDialog();
+    toast(`Automatisierung für „${sessionName}“ entfernt`);
+    await refresh(true);
+  } catch (err) {
+    setAutomationFormBusy(false);
+    $('automation-meta').textContent = 'Entfernen fehlgeschlagen: ' + errorText(err);
+  }
 };
 
 function markSeen(sessionID) {
@@ -868,18 +1012,13 @@ function finishHandoffDecision(mode = null) {
   resolve?.(mode);
 }
 
-function confirmHandoff(source, target) {
+function chooseSwitchContext({ title, sourceLabel, targetLabel, canTransferHistory = true }) {
   finishHandoffDecision();
-  const sourceAgent = agentInfo(source.name, source.id);
-  const targetAgent = agentInfo(target.name, target.id);
-  const sourceTool = sessionToolLabel(sourceAgent);
-  const targetTool = sessionToolLabel(targetAgent);
-  $('handoff-dialog-title').textContent = `Zu ${target.name} wechseln?`;
-  $('handoff-dialog-route').textContent = `${sourceTool} · ${source.name}  →  ${targetTool} · ${target.name}`;
+  $('handoff-dialog-title').textContent = title;
+  $('handoff-dialog-route').textContent = `${sourceLabel}  →  ${targetLabel}`;
 
   const historyInput = handoffDialogFormEl.elements.namedItem('handoff-context')[0];
   const withoutHistoryInput = handoffDialogFormEl.elements.namedItem('handoff-context')[1];
-  const canTransferHistory = targetAgent?.handoffTarget === true;
   historyInput.disabled = !canTransferHistory;
   historyInput.checked = canTransferHistory;
   withoutHistoryInput.checked = !canTransferHistory;
@@ -887,11 +1026,22 @@ function confirmHandoff(source, target) {
   note.hidden = canTransferHistory;
   note.textContent = canTransferHistory
     ? ''
-    : `Eine sichere Verlaufsübergabe an ${targetTool} ist noch nicht verfügbar. Der Wechsel ohne Verlauf bleibt möglich.`;
+    : `Eine sichere Verlaufsübergabe an ${targetLabel} ist noch nicht verfügbar. Der Wechsel ohne Verlauf bleibt möglich.`;
 
   handoffDialogEl.showModal();
   requestAnimationFrame(() => (canTransferHistory ? historyInput : withoutHistoryInput).focus());
   return new Promise(resolve => { resolveHandoffDecision = resolve; });
+}
+
+function confirmHandoff(source, target) {
+  const sourceAgent = agentInfo(source.name, source.id);
+  const targetAgent = agentInfo(target.name, target.id);
+  return chooseSwitchContext({
+    title: `Zu ${target.name} wechseln?`,
+    sourceLabel: `${sessionToolLabel(sourceAgent)} · ${source.name}`,
+    targetLabel: `${sessionToolLabel(targetAgent)} · ${target.name}`,
+    canTransferHistory: targetAgent?.handoffTarget === true,
+  });
 }
 
 handoffDialogFormEl.addEventListener('submit', event => {
@@ -912,6 +1062,94 @@ handoffDialogEl.addEventListener('click', event => {
     finishHandoffDecision();
   }
 });
+
+const providerSwitchPanelEl = $('provider-switch-panel');
+let providerSwitchPanelTimer = null;
+
+function renderProviderSwitchState(state) {
+  clearTimeout(providerSwitchPanelTimer);
+  const visible = ['switching', 'reconnecting', 'complete', 'error'].includes(state.kind);
+  providerSwitchPanelEl.hidden = !visible;
+  providerSwitchPanelEl.className = state.kind === 'error' ? 'is-error' : (state.kind === 'complete' ? 'is-success' : '');
+  providerSwitchPanelEl.setAttribute('aria-busy', String(['switching', 'reconnecting'].includes(state.kind)));
+  if (!visible) {
+    providerSwitchPanelEl.replaceChildren();
+    return;
+  }
+  const request = state.request || {};
+  const target = vendorCatalog.find(option => option.vendor === request.targetVendor)?.label || request.targetVendor || 'Agent';
+  const message = state.kind === 'switching'
+    ? `${target} wird gestartet${state.mode === 'with-history' ? ' · kompakter Verlauf wird vorbereitet' : ''} …`
+    : state.kind === 'reconnecting'
+      ? `Terminal wird mit ${target} neu verbunden …`
+      : state.kind === 'complete'
+        ? `${target} ist verbunden${state.mode === 'with-history' ? ' · Verlauf ist zur Übergabe vorgemerkt' : ''}`
+        : `Wechsel nicht vollständig: ${errorText(state.error)}`;
+  providerSwitchPanelEl.innerHTML = `${icon(state.kind === 'error' ? 'warn' : (state.kind === 'complete' ? 'check' : 'hourglass'))}<span>${esc(message)}</span>`;
+  if (state.kind === 'complete' || state.kind === 'error') {
+    providerSwitchPanelTimer = setTimeout(() => { providerSwitchPanelEl.hidden = true; }, 5000);
+  }
+}
+
+function detachSessionTerminal(request) {
+  const wasTerm = view === 'term' && activeSessionID === request.sessionId;
+  const wasHydra = view === 'hydra' && hydraProject && terms.get(request.sessionName)?.wrap.parentElement === hydraGridEl;
+  const terminal = terms.get(request.sessionName);
+  if (terminal && terminal.sessionID === request.sessionId) {
+    EventsOff('term:data:' + terminal.connectionKey);
+    EventsOff('term:closed:' + terminal.connectionKey);
+    CloseTerm(terminal.connectionKey);
+    try { terminal.term.dispose(); } catch { /* Verbindung war bereits beendet */ }
+    terminal.wrap.remove();
+    terms.delete(request.sessionName);
+  }
+  return { wasTerm, wasHydra };
+}
+
+async function reconnectSwitchedSession(request, _outcome, previousView) {
+  await refresh(true);
+  if (previousView?.wasTerm) {
+    await openSession(request.sessionId, request.sessionName);
+  } else if (previousView?.wasHydra && view === 'hydra') {
+    await syncHydra();
+  }
+}
+
+const vendorSwitch = createVendorSwitchCoordinator({
+  chooseContext: request => {
+    const source = vendorCatalog.find(option => option.vendor === request.sourceVendor)?.label || request.sourceVendor;
+    const target = vendorCatalog.find(option => option.vendor === request.targetVendor)?.label || request.targetVendor;
+    return chooseSwitchContext({
+      title: `Zu ${target} wechseln?`,
+      sourceLabel: `${source} · ${request.sessionName}`,
+      targetLabel: `${target} · ${request.sessionName}`,
+    });
+  },
+  switchVendor: (sessionID, vendor, includeHistory) => SwitchSessionVendor(sessionID, vendor, includeHistory),
+  disconnect: detachSessionTerminal,
+  reconnect: reconnectSwitchedSession,
+  onChange: renderProviderSwitchState,
+});
+
+async function requestVendorSwitch(sessionID, sessionName, targetVendor) {
+  const session = agentInfo(sessionName, sessionID);
+  if (!session) {
+    toast(`Session „${sessionName}“ ist nicht mehr registriert`, true);
+    return;
+  }
+  const result = await vendorSwitch.request({
+    sessionId: sessionID,
+    sessionName,
+    sourceVendor: session.vendor || session.tool || 'claude',
+    targetVendor,
+  });
+  if (result.ok) {
+    const target = vendorCatalog.find(option => option.vendor === targetVendor)?.label || targetVendor;
+    toast(`${target} läuft jetzt in „${sessionName}“${result.mode === 'with-history' ? ' · kompakter Verlauf wird übergeben' : ''}`);
+  } else if (result.error) {
+    toast('Agent-Wechsel fehlgeschlagen: ' + errorText(result.error), true);
+  }
+}
 
 const hydraHandoff = createHydraHandoff({
   root: hydraGridEl,
@@ -2501,16 +2739,8 @@ menuEl.addEventListener('click', async e => {
   switch (mi.dataset.mi) {
     case 'open': hideMenu(); openSession(id, name); break;
     case 'switchvendor':
-      if (mi.dataset.confirm) {
-        hideMenu();
-        try {
-          await act(SwitchSessionVendor(id, mi.dataset.vendor), `„${name}" läuft jetzt mit einem anderen Agenten`);
-        } catch { /* toast zeigt den Fehler */ }
-        await refresh(true);
-      } else {
-        mi.dataset.confirm = '1';
-        mi.innerHTML = icon('play') + ' wirklich wechseln? Der laufende Prozess wird beendet';
-      }
+      hideMenu();
+      await requestVendorSwitch(id, name, mi.dataset.vendor);
       break;
     case 'later': hideMenu(); parkSession(id, name); break;
     case 'reopen': hideMenu(); reopenLater(id, name); break;
