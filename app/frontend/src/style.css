@@ -1,3 +1,22 @@
+/* Commit Mono, SIL Open Font License 1.1 — siehe fonts/LICENSE-CommitMono.txt.
+   font-display: block, weil xterm.js die Zellenbreite einmal beim Öffnen misst:
+   ein Austausch mitten im Betrieb würde das ganze Raster verschieben. */
+@font-face {
+  font-family: "Commit Mono";
+  src: url("./fonts/commit-mono-400-normal.woff2") format("woff2");
+  font-weight: 400; font-style: normal; font-display: block;
+}
+@font-face {
+  font-family: "Commit Mono";
+  src: url("./fonts/commit-mono-400-italic.woff2") format("woff2");
+  font-weight: 400; font-style: italic; font-display: block;
+}
+@font-face {
+  font-family: "Commit Mono";
+  src: url("./fonts/commit-mono-700-normal.woff2") format("woff2");
+  font-weight: 700; font-style: normal; font-display: block;
+}
+
 :root {
   color-scheme: dark;
   --page: #20242b;
@@ -65,7 +84,7 @@
      keine freien Werte, damit neue Regeln auf diese Tokens zugreifen, statt
      eigene Pixelwerte einzuführen. */
   --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-mono: "Commit Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 
   --fs-micro: 10px;    /* Badges, Zähler, Achsenbeschriftung, Tastenhinweise */
   --fs-meta: 11px;     /* Zeitstempel, Alter, Pfade, gedämpfte Nebeninfos */

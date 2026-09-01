@@ -15,22 +15,57 @@ const WINDOW_COLORS = {
   light: { hex: '#f7f8fa', rgba: [247, 248, 250, 255] },
 };
 
+// Das Terminal ist kein Gastfenster, sondern die Inhaltsfläche der Anwendung.
+// Jede ANSI-Farbe ist deshalb die Projektion einer Rolle aus style.css und keine
+// eigenständige Terminal-Palette. Die hellen Varianten entstehen aus derselben
+// Farbe in OKLCH: im Dunklen eine Stufe heller bei leicht reduzierter Sättigung,
+// im Hellen eine Stufe dunkler. ANSI 0 trägt die Struktur (--grid bzw. --ink),
+// ANSI 8 den gedämpften Text (--muted). Alle Werte außer ANSI 0 im Dunklen
+// erreichen mindestens 4.5:1 auf dem jeweiligen Terminal-Hintergrund.
 const TERMINAL_THEMES = {
   dark: {
-    background: '#282d35', foreground: '#dbe0e6', cursor: '#5eead4', cursorAccent: '#282d35',
-    selectionBackground: 'rgba(55,207,189,0.30)', selectionForeground: '#f2f5f7',
-    black: '#414852', red: '#e06c75', green: '#98c379', yellow: '#e5c07b',
-    blue: '#61afef', magenta: '#c678dd', cyan: '#56b6c2', white: '#dbe0e6',
-    brightBlack: '#77818d', brightRed: '#ef7d86', brightGreen: '#add18d', brightYellow: '#efd08c',
-    brightBlue: '#78bdf5', brightMagenta: '#d58be8', brightCyan: '#70c7d1', brightWhite: '#f2f5f7',
+    background: '#282d35',                              // --term-bg
+    foreground: '#e4e8ee',                              // --ink
+    cursor: '#37cfbd',                                  // --accent
+    cursorAccent: '#282d35',
+    selectionBackground: 'rgba(55,207,189,0.26)',       // --accent
+    selectionForeground: '#f3f7fd',
+    black: '#3a4149',                                   // --grid
+    // --critical ist gegen --page abgestimmt und verliert auf dem helleren
+    // Terminal-Grund Kontrast; eine OKLCH-Stufe heller bringt es auf 4.59:1.
+    red: '#e57179',                                     // --critical +1
+    green: '#98c379',                                   // --good
+    yellow: '#e0b25e',                                  // --warning
+    blue: '#5eb7e8',                                    // --info
+    magenta: '#c678dd',                                 // --graph-series-1
+    cyan: '#37cfbd',                                    // --accent
+    white: '#e4e8ee',                                   // --ink
+    brightBlack: '#909aa6',                             // --muted
+    brightRed: '#fa8d92', brightGreen: '#b2da96', brightYellow: '#f6cb7f',
+    brightBlue: '#7ecffd', brightMagenta: '#dc93f1', brightCyan: '#67e6d4',
+    brightWhite: '#f3f7fd',
   },
   light: {
-    background: '#fcfcfd', foreground: '#30343b', cursor: '#178f83', cursorAccent: '#fcfcfd',
-    selectionBackground: 'rgba(23,143,131,0.18)', selectionForeground: '#1f252b',
-    black: '#4f5964', red: '#bb4651', green: '#287a50', yellow: '#91631b',
-    blue: '#356fae', magenta: '#7d5aa2', cyan: '#167f82', white: '#68737f',
-    brightBlack: '#66717d', brightRed: '#b83246', brightGreen: '#1f754b', brightYellow: '#875500',
-    brightBlue: '#2166ad', brightMagenta: '#764b99', brightCyan: '#087578', brightWhite: '#1f252b',
+    background: '#fcfcfd',                              // --term-bg
+    foreground: '#272c33',                              // --ink
+    cursor: '#117a70',                                  // --accent
+    cursorAccent: '#fcfcfd',
+    selectionBackground: 'rgba(17,122,112,0.16)',       // --accent
+    selectionForeground: '#1f252b',
+    // Auf hellem Grund kann ANSI 7 kein Weiß sein; die beiden hellen Stufen
+    // tragen hier den lesbaren Sekundär- und den maximalen Kontrast.
+    black: '#272c33',                                   // --ink
+    red: '#bb4651',                                     // --critical
+    green: '#287a50',                                   // --good
+    yellow: '#91631b',                                  // --warning
+    blue: '#356fae',                                    // --info
+    magenta: '#8754a6',                                 // --graph-series-1
+    cyan: '#117a70',                                    // --accent
+    white: '#59636f',                                   // --ink-2
+    brightBlack: '#68737f',                             // --muted
+    brightRed: '#a02738', brightGreen: '#006238', brightYellow: '#784a00',
+    brightBlue: '#165695', brightMagenta: '#6f3a8d', brightCyan: '#006258',
+    brightWhite: '#272c33',                             // --ink
   },
 };
 

@@ -148,9 +148,10 @@ func outboxDeliveryPolicy(name string, kind QueuedMessageKind, target promptTarg
 		}
 		return handoffLiveTargetValidator(name), true
 	}
-	// Observation has composer semantics for Claude only. The other supported
-	// tools take queued literal input, exactly like the direct prompt path.
-	if target.Tool == AgentToolClaude && target.Input != promptInputReady {
+	// Every vendor whose screens were recorded is held to the same bar: the
+	// message goes out only when that vendor's own composer is visible. A tool
+	// without recorded semantics keeps the queued literal path.
+	if _, known := providerForPaneCommand(target.Tool); known && target.Input != promptInputReady {
 		return nil, false
 	}
 	return nil, true

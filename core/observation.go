@@ -148,15 +148,16 @@ func promptInputStateFromObservation(observed SessionObservation) promptInputSta
 		observed.Presence != SessionPresencePresent || !observed.ContentKnown {
 		return promptInputUnknown
 	}
-	// Observation currently has UI semantics only for Claude. Other supported
-	// providers remain truthfully unknown and use queued literal input rather
-	// than borrowing Claude's composer markers.
-	if observed.Tool != AgentToolClaude {
+	// Only a vendor whose screens were actually recorded may claim readiness.
+	// An unfamiliar tool stays unknown rather than borrowing another vendor's
+	// composer markers.
+	provider, known := providerForPaneCommand(observed.Tool)
+	if !known {
 		return promptInputUnknown
 	}
 	switch observed.Status {
 	case StatusIdle:
-		if strings.Contains(strings.ToLower(observed.Content), "shift+tab to cycle") {
+		if provider.ComposerReady(observed.Content) {
 			return promptInputReady
 		}
 		return promptInputUnknown
@@ -590,14 +591,11 @@ func statusForAgentRuntime(sessionExists bool, tool, paneCommand, content string
 		return StatusDead
 	}
 	command := normalizedPaneCommand(paneCommand)
-	switch tool {
-	case AgentToolClaude:
-		return DetectClaudeStatus(true, command, LastLines(content, 25))
-	case AgentToolCodex, AgentToolGemini, AgentToolCopilot:
-		return StatusUnknown
-	}
 	if shellCommands[command] {
 		return StatusExited
+	}
+	if provider, ok := providerForPaneCommand(tool); ok {
+		return provider.Status(LastLines(content, 25))
 	}
 	return StatusUnknown
 }

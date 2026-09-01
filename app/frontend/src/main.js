@@ -34,6 +34,7 @@ import { renderStats } from './stats.js';
 import { mountDock, toggleDock, isDockOpen, closeDockTab, dockTabs, refitDock } from './dock.js';
 import { mountBreaks, updateBreaks, openBreak, openBreakSettings, isBreakOpen } from './breaks.js';
 import { initThemeToggle, onThemeChange, terminalTheme } from './theme.js';
+import { TERMINAL_OPTIONS, setUpTerminal } from './terminal-setup.js';
 import { createHydraHandoff } from './hydra-handoff.js';
 import { queuedMessages, queuedHeadline } from './queued-state.js';
 mountDeveloperIcons();
@@ -240,19 +241,15 @@ function makeTerm(sessionID, name) {
   wrap.appendChild(inner);
   termsEl.appendChild(wrap);
   const term = new Terminal({
+    ...TERMINAL_OPTIONS,
     fontSize: 13,
-    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-    scrollback: 20000,
-    scrollSensitivity: 5,
-    fastScrollSensitivity: 12,
-    cursorBlink: true,
-    macOptionIsMeta: true,
     theme: terminalTheme(),
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.loadAddon(new WebLinksAddon((e, uri) => BrowserOpenURL(uri)));
   term.open(inner);
+  setUpTerminal(term, () => fit.fit());
   term.onData(d => WriteTerm(connectionKey, toB64(d)));
   term.onResize(({ cols, rows }) => ResizeTerm(connectionKey, cols, rows));
 
@@ -614,7 +611,7 @@ async function openSession(sessionID, name) {
   if (!t) t = makeTerm(sessionID, name);
   else t.sessionID = sessionID;
   t.term.options.fontSize = 14;
-  t.term.options.lineHeight = 1.3;
+  t.term.options.lineHeight = 1.25;
   if (t.wrap.parentElement !== termsEl) termsEl.appendChild(t.wrap);
   for (const [n, o] of terms) o.wrap.classList.toggle('active', n === name);
   t.fit.fit();
@@ -1012,7 +1009,7 @@ async function syncHydra() {
     if (!t) { t = makeTerm(a.id, a.name); fresh.push(a.name); }
     else t.sessionID = a.id;
     t.term.options.fontSize = 13;
-    t.term.options.lineHeight = 1;
+    t.term.options.lineHeight = 1.1;
     ensureHydraHead(t);
     if (t.wrap.parentElement !== hydraGridEl) hydraGridEl.appendChild(t.wrap);
     t.wrap.dataset.termName = t.name;

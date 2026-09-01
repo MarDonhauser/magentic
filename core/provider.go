@@ -25,6 +25,38 @@ type AgentProvider interface {
 	// NewRunID returns a caller-supplied run identity when the vendor accepts
 	// one, and "" when the identity can only be discovered afterwards.
 	NewRunID() string
+	// Status derives the vendor's activity from the tail of its pane. A screen
+	// the vendor's Adapter does not recognize stays unknown: reporting an
+	// unfamiliar UI as idle would let Magentic push prompts into it.
+	Status(paneContent string) AgentStatus
+	// ComposerReady reports whether the vendor's own input line is visible, so
+	// a queued prompt typed now would land in it instead of in a dialog.
+	ComposerReady(paneContent string) bool
+}
+
+// vendorStatus applies one vendor's markers in the only order that is safe:
+// activity first, then a question that blocks, then the vendor's own resting
+// screen. Nothing matched means nothing is known.
+func vendorStatus(paneContent string, running, blocked, idle []string) AgentStatus {
+	switch {
+	case containsAnyMarker(paneContent, running):
+		return StatusRunning
+	case containsAnyMarker(paneContent, blocked):
+		return StatusBlocked
+	case containsAnyMarker(paneContent, idle):
+		return StatusIdle
+	}
+	return StatusUnknown
+}
+
+func containsAnyMarker(paneContent string, markers []string) bool {
+	content := strings.ToLower(paneContent)
+	for _, marker := range markers {
+		if strings.Contains(content, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func builtinAgentProviders() []AgentProvider {
@@ -105,6 +137,16 @@ func (claudeProvider) Matches(paneCommand string) bool {
 	return paneCommandMatches(paneCommand, "claude")
 }
 
+// Claude keeps its long-standing detection, including background agents and
+// background shells, which no other vendor reports.
+func (claudeProvider) Status(paneContent string) AgentStatus {
+	return DetectClaudeStatus(true, "", paneContent)
+}
+
+func (claudeProvider) ComposerReady(paneContent string) bool {
+	return strings.Contains(strings.ToLower(paneContent), "shift+tab to cycle")
+}
+
 func (claudeProvider) StartCommand(session Session, run *AgentRunRef, mode string) (string, error) {
 	command := "claude --name " + ShellQuote(session.TmuxName())
 	if run != nil && run.ExternalID != "" {
@@ -134,6 +176,23 @@ func (codexProvider) Matches(paneCommand string) bool {
 	return paneCommandMatches(paneCommand, "codex")
 }
 
+// Markers recorded from Codex 0.151.0 on 2026-09-01: it spins as
+// "• Working (12s • esc to interrupt)", asks with a numbered "› 1." list, and
+// rests behind its composer placeholder.
+var (
+	codexRunningMarkers = []string{"esc to interrupt"}
+	codexBlockedMarkers = []string{"› 1.", "❯ 1.", "press enter to continue", "do you trust the contents"}
+	codexIdleMarkers    = []string{"ask codex to do anything"}
+)
+
+func (codexProvider) Status(paneContent string) AgentStatus {
+	return vendorStatus(paneContent, codexRunningMarkers, codexBlockedMarkers, codexIdleMarkers)
+}
+
+func (codexProvider) ComposerReady(paneContent string) bool {
+	return containsAnyMarker(paneContent, codexIdleMarkers)
+}
+
 func (codexProvider) StartCommand(_ Session, run *AgentRunRef, mode string) (string, error) {
 	if mode == "new" {
 		return "codex", nil
@@ -153,6 +212,23 @@ func (copilotProvider) NewRunID() string    { return NewUUID() }
 
 func (copilotProvider) Matches(paneCommand string) bool {
 	return paneCommandMatches(paneCommand, "copilot") || paneCommand == "github-copilot"
+}
+
+// Markers recorded from GitHub Copilot 1.0.82 on 2026-09-01. Its spinner line
+// reads "● Working esc interrupt" without the "to" that Claude and Codex use,
+// so the shared marker would miss it.
+var (
+	copilotRunningMarkers = []string{"working esc interrupt"}
+	copilotBlockedMarkers = []string{"❯ 1.", "do you trust the files", "enter to select"}
+	copilotIdleMarkers    = []string{"open sidebar"}
+)
+
+func (copilotProvider) Status(paneContent string) AgentStatus {
+	return vendorStatus(paneContent, copilotRunningMarkers, copilotBlockedMarkers, copilotIdleMarkers)
+}
+
+func (copilotProvider) ComposerReady(paneContent string) bool {
+	return containsAnyMarker(paneContent, copilotIdleMarkers)
 }
 
 func (copilotProvider) StartCommand(session Session, run *AgentRunRef, mode string) (string, error) {
@@ -183,6 +259,12 @@ func (geminiProvider) NewRunID() string    { return "" }
 func (geminiProvider) Matches(paneCommand string) bool {
 	return paneCommandMatches(paneCommand, "gemini")
 }
+
+// Gemini CLI could not be observed: it is not installed on the development
+// machine. Its screens therefore stay unknown until someone records them.
+func (geminiProvider) Status(string) AgentStatus { return StatusUnknown }
+
+func (geminiProvider) ComposerReady(string) bool { return false }
 
 // Gemini CLI has no verified resume form. Starting fresh is the conservative
 // contract; the run identity is discovered from ~/.gemini/tmp afterwards.

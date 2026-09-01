@@ -324,30 +324,62 @@ func TestObserveNormalizesPaneFactsAndDoesNotMutateSessions(t *testing.T) {
 	}
 }
 
-func TestObserveDoesNotApplyClaudeSemanticsToOtherProviders(t *testing.T) {
+// Recorded vendor markers are the only licence to interpret a screen. A pane
+// that matches nothing a vendor was observed to show must stay unknown, and
+// Gemini stays unknown throughout because it was never observed at all.
+func TestObserveDoesNotFabricateStatusForUnfamiliarScreens(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	for _, tool := range []string{AgentToolCodex, AgentToolGemini, AgentToolCopilot} {
-		t.Run(tool, func(t *testing.T) {
+	cases := []struct {
+		tool    string
+		content string
+	}{
+		{tool: AgentToolCodex, content: "irgendein fremder Bildschirm\nohne bekannte Merkmale\n"},
+		{tool: AgentToolCopilot, content: "irgendein fremder Bildschirm\nohne bekannte Merkmale\n"},
+		{tool: AgentToolGemini, content: "Do you want to run this command?\n❯ 1. Yes\n"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.tool, func(t *testing.T) {
 			runner := &recordingObservationRunner{run: func(_ context.Context, args ...string) (string, error) {
 				if args[0] == "list-panes" {
-					return "mgt-one\t%3\t" + tool + "\t1787227200\t1\t1\n", nil
+					return "mgt-one\t%3\t" + tt.tool + "\t1787227200\t1\t1\n", nil
 				}
-				// These strings would look blocked or idle to the Claude parser.
-				return "Do you want to run this command?\n❯ 1. Yes\n", nil
+				return tt.content, nil
 			}}
 			got := observeWithRunner(context.Background(), []Session{{
 				ID: "session-1", Name: "one", RuntimeName: "mgt-one", Kind: KindTerm,
 			}}, runner, testObservationConfig(now))
 			observed := got.Sessions[0]
-			if observed.Tool != tool || observed.Status != StatusUnknown || observed.Attention != AttentionUnknown || observed.Unread {
-				t.Fatalf("unsupported %s status semantics were fabricated: %#v", tool, observed)
+			if observed.Tool != tt.tool || observed.Status != StatusUnknown || observed.Attention != AttentionUnknown || observed.Unread {
+				t.Fatalf("unsupported %s status semantics were fabricated: %#v", tt.tool, observed)
 			}
 			promptTarget := promptTargetObservationFromSession(observed)
 			if promptTarget.Input != promptInputUnknown {
-				t.Fatalf("unsupported %s input readiness was fabricated: %#v", tool, promptTarget)
+				t.Fatalf("unsupported %s input readiness was fabricated: %#v", tt.tool, promptTarget)
 			}
 			if err := validatePromptTargetObservation("one", promptTarget); err != nil {
-				t.Fatalf("known queued-input transport rejected truthful %s observation: %v", tool, err)
+				t.Fatalf("known queued-input transport rejected truthful %s observation: %v", tt.tool, err)
+			}
+		})
+	}
+}
+
+// A recorded marker, by contrast, must be honoured: Codex and Copilot both
+// present a numbered question when they need an answer.
+func TestObserveHonoursRecordedVendorMarkers(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	for _, tool := range []string{AgentToolCodex, AgentToolCopilot} {
+		t.Run(tool, func(t *testing.T) {
+			runner := &recordingObservationRunner{run: func(_ context.Context, args ...string) (string, error) {
+				if args[0] == "list-panes" {
+					return "mgt-one\t%3\t" + tool + "\t1787227200\t1\t1\n", nil
+				}
+				return "Do you want to run this command?\n❯ 1. Yes\n", nil
+			}}
+			got := observeWithRunner(context.Background(), []Session{{
+				ID: "session-1", Name: "one", RuntimeName: "mgt-one", Kind: KindTerm,
+			}}, runner, testObservationConfig(now))
+			if observed := got.Sessions[0]; observed.Status != StatusBlocked {
+				t.Fatalf("%s: Status = %v, want wartet", tool, observed.Status.Label())
 			}
 		})
 	}
