@@ -25,6 +25,9 @@ type historyRunCounters struct {
 	// snapshotMeta braucht nichts weiter, und die Pfade sollen nicht länger im
 	// Speicher stehen als der Lauf sie braucht.
 	coverage HistoryProviderCoverage
+	// problems sammelt die Meldungen dieses Laufs, die nicht in die Datenbank
+	// gehören, weil sie aus einem Fehlerwert stammen (siehe indexOneFile).
+	problems []HistoryProblem
 }
 
 // ensureIndexing stößt einen Hintergrundlauf an, sofern keiner läuft und der
@@ -67,13 +70,18 @@ func (h *WorkHistory) beginRunLocked() {
 	h.progress = HistoryIndexProgress{Active: true, StartedAt: h.now()}
 }
 
-func (h *WorkHistory) runIndex(ctx context.Context) error {
+func (h *WorkHistory) runIndex(ctx context.Context) (err error) {
 	defer func() {
 		h.mu.Lock()
 		h.indexing = false
 		h.lastRunAt = h.now()
 		h.progress.Active = false
 		h.progress.PendingFiles = 0
+		if err != nil {
+			// Ein abgebrochener Lauf darf keine Zahl hinterlassen, die sich wie
+			// ein vollständiges Ergebnis liest.
+			h.progress.CompletedFiles = 0
+		}
 		h.mu.Unlock()
 	}()
 	if err := ensurePrivateHistoryDir(h.config.IndexDir); err != nil {
@@ -117,8 +125,7 @@ func (h *WorkHistory) indexAllProviders(ctx context.Context) error {
 		changed = changed || vanished
 		h.rememberCoverage(adapter, inventory.coverage)
 	}
-	// Neueste zuerst: der Verlauf zeigt genau diese Einträge.
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].modTime > candidates[j].modTime })
+	sortHistoryCandidates(candidates)
 
 	h.mu.Lock()
 	h.progress.PendingFiles = len(candidates)
@@ -151,46 +158,53 @@ func (h *WorkHistory) indexAllProviders(ctx context.Context) error {
 	return nil
 }
 
+// sortHistoryCandidates bringt die Kandidaten nach Änderungszeit absteigend in
+// Reihenfolge: die neuesten Transkripte werden zuerst indexiert, weil der
+// Verlauf genau diese Einträge zeigt. Bei gleicher Zeit entscheidet der Pfad,
+// damit ein Lauf reproduzierbar bleibt.
+func sortHistoryCandidates(candidates []historyIndexCandidate) {
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].modTime != candidates[j].modTime {
+			return candidates[i].modTime > candidates[j].modTime
+		}
+		return candidates[i].path < candidates[j].path
+	})
+}
+
 // indexOneFile liest eine Datei ein und meldet, ob sie den Speicher verändert
 // hat. Eine unveränderte Quelle wird wiederverwendet statt erneut geparst.
 func (h *WorkHistory) indexOneFile(ctx context.Context, candidate historyIndexCandidate) bool {
 	adapter := candidate.adapter
 	sourceID := historySourceID(adapter.Provider(), candidate.path)
-	record := func(problem HistoryProblem) bool {
-		problem.Provider = adapter.Provider()
-		problem.SourceID = sourceID
-		row, found, err := h.store.source(sourceID)
-		if err != nil {
-			return false
-		}
-		if !found {
-			row = historySourceRow{SourceID: sourceID, Provider: adapter.Provider()}
-		}
-		if historyContains(row.Problems, problem) {
-			// Eine dauerhaft unlesbare Datei meldet in jedem Lauf dasselbe.
-			// Weder die Problemliste noch die Revision dürfen davon wachsen.
-			return false
-		}
-		row.Problems = append(row.Problems, problem)
-		row.IndexedAt = h.now().UnixNano()
-		return h.store.writeSourceRow(row) == nil
+	// Aus einem Fehlerwert abgeleitete Meldungen bleiben im Arbeitsspeicher
+	// dieses Laufs und werden niemals in die Datenbank geschrieben: err.Error()
+	// eines *fs.PathError trägt den vollen Pfad des Transkripts, und den hält
+	// der Index bewusst nicht fest. Dauerhaft gespeichert werden ausschließlich
+	// die Probleme, die adapter.Parse selbst meldet — etwa die Zahl der
+	// unlesbaren Zeilen.
+	note := func(kind string, err error) bool {
+		h.noteProblem(adapter.Provider(), HistoryProblem{
+			Provider: adapter.Provider(), SourceID: sourceID,
+			Kind: kind, Message: err.Error(),
+		})
+		return false
 	}
 
 	data, err := h.files.ReadFile(candidate.path)
 	if err != nil {
-		return record(HistoryProblem{Kind: "file-unreadable", Message: err.Error()})
+		return note("file-unreadable", err)
 	}
 	digest, err := adapter.Fingerprint(h.files, candidate.path, data)
 	if err != nil {
-		return record(HistoryProblem{Kind: "dependency-unreadable", Message: err.Error()})
+		return note("dependency-unreadable", err)
 	}
 	info, err := h.files.Stat(candidate.path)
 	if err != nil {
-		return record(HistoryProblem{Kind: "file-unavailable", Message: err.Error()})
+		return note("file-unavailable", err)
 	}
 	existing, found, err := h.store.source(sourceID)
 	if err != nil {
-		return false
+		return note("store-unavailable", err)
 	}
 	if found && existing.Provider == adapter.Provider() &&
 		existing.AdapterVersion == adapter.Version() && existing.Digest == digest {
@@ -200,7 +214,10 @@ func (h *WorkHistory) indexOneFile(ctx context.Context, candidate historyIndexCa
 		}
 		existing.Size, existing.ModTime = info.Size(), info.ModTime().UnixNano()
 		existing.IndexedAt = h.now().UnixNano()
-		return h.store.writeSourceRow(existing) == nil
+		if err := h.store.writeSourceRow(existing); err != nil {
+			return note("store-unavailable", err)
+		}
+		return true
 	}
 	records, problems, parseErr := adapter.Parse(ctx, h.files, candidate.path, data)
 	for i := range problems {
@@ -208,7 +225,7 @@ func (h *WorkHistory) indexOneFile(ctx context.Context, candidate historyIndexCa
 		problems[i].SourceID = sourceID
 	}
 	if parseErr != nil {
-		return record(HistoryProblem{Kind: "parse-failed", Message: parseErr.Error()})
+		return note("parse-failed", parseErr)
 	}
 	records = normalizeHistoryRecords(adapter.Provider(), sourceID, records)
 	row := historySourceRow{
@@ -219,13 +236,21 @@ func (h *WorkHistory) indexOneFile(ctx context.Context, candidate historyIndexCa
 	// Erst die Aggregate, dann die Events: der Verfall darf keine Kennzahlen
 	// verschlucken, die es sonst nie in activity geschafft hätten.
 	if err := h.store.writeActivity(ctx, historyActivityRowsFor(records, sourceID, row.ModTime, time.Local)); err != nil {
-		return false
+		return note("store-unavailable", err)
 	}
 	if err := h.store.replaceSource(row, records); err != nil {
-		return false
+		return note("store-unavailable", err)
 	}
 	h.noteParsed(adapter.Provider())
 	return true
+}
+
+// noteProblem hält eine Meldung für die Dauer des Laufs im Arbeitsspeicher.
+func (h *WorkHistory) noteProblem(provider HistoryProvider, problem HistoryProblem) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	counter := h.counterLocked(provider)
+	counter.problems = append(counter.problems, problem)
 }
 
 func (h *WorkHistory) noteParsed(provider HistoryProvider) { h.bumpCounter(provider, 1, 0) }
@@ -247,6 +272,7 @@ func (h *WorkHistory) rememberCoverage(adapter historyProviderAdapter, coverage 
 	defer h.mu.Unlock()
 	counter := h.counterLocked(adapter.Provider())
 	counter.parsed, counter.reused = 0, 0
+	counter.problems = nil
 	counter.coverage = coverage
 }
 
@@ -320,6 +346,7 @@ func (h *WorkHistory) snapshotMeta(ctx context.Context) (HistoryMeta, error) {
 		coverage.IndexedFiles = indexed
 		coverage.ParsedFiles = counter.parsed
 		coverage.ReusedFiles = counter.reused
+		coverage.Problems = append(coverage.Problems, counter.problems...)
 		coverage.Problems = append(coverage.Problems, problems...)
 		// Ein Provider, der Probleme gemeldet hat, ist nie vollständig: sonst
 		// läse sich ein unvollständiger Ausschnitt wie eine exakte Null.

@@ -2,10 +2,40 @@ package core
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestWorkHistoryIndexerKeepsTranscriptPathsOutOfTheStore(t *testing.T) {
+	history, home, indexDir, _ := openTestWorkHistory(t)
+	sessionDir := filepath.Join(home, ".copilot", "session-state", "kaputt")
+	events := filepath.Join(sessionDir, "events.jsonl")
+	writeHistoryTestFile(t, events, `{"id":"co-u","type":"user.message","timestamp":"2026-08-30T13:00:00Z","data":{"content":"Prompt"}}`+"\n")
+	// workspace.yaml als Verzeichnis: das Lesen der Abhängigkeit scheitert
+	// unabhängig von Rechten und ausführendem Benutzer.
+	if err := os.MkdirAll(filepath.Join(sessionDir, "workspace.yaml"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := history.indexOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := history.snapshotMeta(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	coverage := historyTestCoverage(t, meta, HistoryProviderCopilot)
+	if coverage.State != HistorySourcePartial || len(coverage.Problems) != 1 ||
+		coverage.Problems[0].Kind != "dependency-unreadable" {
+		t.Fatalf("unlesbare Abhängigkeit wurde nicht als Problem gemeldet: %#v", coverage)
+	}
+	if err := history.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertHistoryStoreOmits(t, indexDir, events, sessionDir)
+}
 
 func TestWorkHistoryIndexerParsesNewestFirstAndReportsProgress(t *testing.T) {
 	history, home, _, _ := openTestWorkHistory(t)
@@ -32,6 +62,32 @@ func TestWorkHistoryIndexerParsesNewestFirstAndReportsProgress(t *testing.T) {
 	}
 	if page.Meta.Progress.CompletedFiles != 2 {
 		t.Fatalf("completed = %d, want 2", page.Meta.Progress.CompletedFiles)
+	}
+}
+
+func TestSortHistoryCandidatesPutsNewestFirst(t *testing.T) {
+	candidates := []historyIndexCandidate{
+		{path: "/mittel.jsonl", modTime: 200},
+		{path: "/alt.jsonl", modTime: 100},
+		{path: "/neu.jsonl", modTime: 300},
+		// Gleiche Änderungszeit: der Pfad entscheidet, damit die Reihenfolge
+		// eines Laufs reproduzierbar bleibt.
+		{path: "/b-gleich.jsonl", modTime: 200},
+		{path: "/a-gleich.jsonl", modTime: 200},
+	}
+	sortHistoryCandidates(candidates)
+	var got []string
+	for _, candidate := range candidates {
+		got = append(got, candidate.path)
+	}
+	want := []string{"/neu.jsonl", "/a-gleich.jsonl", "/b-gleich.jsonl", "/mittel.jsonl", "/alt.jsonl"}
+	if len(got) != len(want) {
+		t.Fatalf("order = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("order = %v, want %v", got, want)
+		}
 	}
 }
 
@@ -84,8 +140,7 @@ func TestWorkHistoryIndexerRemovesVanishedSources(t *testing.T) {
 }
 
 func TestWorkHistoryIndexerKeepsAggregatesBeyondRetention(t *testing.T) {
-	history, home, _, _ := openTestWorkHistory(t)
-	history.config.Retention = 24 * time.Hour
+	history, home, _, _ := openTestWorkHistoryWith(t, WorkHistoryConfig{Retention: 24 * time.Hour})
 	path := filepath.Join(home, ".claude", "projects", "-work-demo", "alt.jsonl")
 	writeHistoryTestFile(t, path, `{"type":"user","uuid":"u-1","timestamp":"2026-01-05T10:00:00Z","cwd":"/work/demo","sessionId":"conv-1","message":{"role":"user","content":"sehr alt"}}`+"\n")
 

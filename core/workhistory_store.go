@@ -162,11 +162,23 @@ func openHistoryStoreOnce(path string) (*historyStore, error) {
 		db.Close()
 		return nil, err
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
+	if err := protectHistoryFiles(path); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("protect work history index: %w", err)
+		return nil, err
 	}
 	return &historyStore{path: path, db: db}, nil
+}
+
+// protectHistoryFiles beschränkt die Datenbank und ihre Begleitdateien auf den
+// eigenen Benutzer. Das Write-Ahead-Log trägt denselben Inhalt wie die
+// Datenbank und wird von SQLite nicht mit deren Rechten angelegt.
+func protectHistoryFiles(path string) error {
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := os.Chmod(path+suffix, 0o600); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("protect work history index: %w", err)
+		}
+	}
+	return nil
 }
 
 // stampHistoryRevision legt die einzige Zeile der Tabelle index_state an, falls

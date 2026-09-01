@@ -108,8 +108,13 @@ func TestWorkHistoryNormalizesAllProviderAdapters(t *testing.T) {
 	if indexInfo.Mode().Perm() != 0o700 {
 		t.Fatalf("index directory mode = %o, want 700", indexInfo.Mode().Perm())
 	}
-	for _, name := range []string{"history.db", "index.lock"} {
+	// Das Write-Ahead-Log und der geteilte Speicher tragen denselben Inhalt wie
+	// die Datenbank und müssen deshalb genauso geschützt sein.
+	for _, name := range []string{"history.db", "history.db-wal", "history.db-shm", "index.lock"} {
 		info, err := os.Stat(filepath.Join(indexDir, name))
+		if os.IsNotExist(err) && name != "history.db" && name != "index.lock" {
+			continue
+		}
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -117,15 +122,12 @@ func TestWorkHistoryNormalizesAllProviderAdapters(t *testing.T) {
 			t.Fatalf("%s mode = %o, want 600", name, info.Mode().Perm())
 		}
 	}
-	indexData, err := os.ReadFile(filepath.Join(indexDir, "history.db"))
-	if err != nil {
+	// Erst schließen: solange der Speicher offen ist, steht das meiste im
+	// Write-Ahead-Log und history.db enthielte fast nichts.
+	if err := history.Close(); err != nil {
 		t.Fatal(err)
 	}
-	for _, sourcePath := range []string{claudePath, codexPath, geminiPath, filepath.Join(copilotDir, "events.jsonl")} {
-		if strings.Contains(string(indexData), sourcePath) {
-			t.Fatalf("private index persisted source path %q", sourcePath)
-		}
-	}
+	assertHistoryStoreOmits(t, indexDir, claudePath, codexPath, geminiPath, filepath.Join(copilotDir, "events.jsonl"))
 }
 
 func TestWorkHistoryIncrementalCheckpointAndSourceDeletion(t *testing.T) {
@@ -378,21 +380,30 @@ func TestHistoryLocationFallbackRanksOnlyProviderCompatibleSessions(t *testing.T
 
 func openTestWorkHistory(t *testing.T) (*WorkHistory, string, string, string) {
 	t.Helper()
+	return openTestWorkHistoryWith(t, WorkHistoryConfig{})
+}
+
+// openTestWorkHistoryWith legt die Verzeichnisse an und ergänzt die Vorgaben,
+// die jeder Test braucht: Tests arbeiten mit festen Zeitstempeln in der
+// Vergangenheit und erwarten vollständige, sofort sichtbare Ergebnisse. Ein
+// Aufbewahrungsfenster darf der Aufrufer vorgeben; nachträglich an der
+// Konfiguration zu drehen wäre ein Datenrennen mit dem Indexlauf.
+func openTestWorkHistoryWith(t *testing.T, config WorkHistoryConfig) (*WorkHistory, string, string, string) {
+	t.Helper()
 	root := t.TempDir()
-	home := filepath.Join(root, "home")
-	indexDir := filepath.Join(root, "private-index")
-	codexHome := filepath.Join(root, "codex-home")
-	history, err := OpenWorkHistory(WorkHistoryConfig{
-		HomeDir: home, IndexDir: indexDir, CodexHome: codexHome,
-		// Tests arbeiten mit festen Zeitstempeln in der Vergangenheit und
-		// erwarten vollständige, sofort sichtbare Ergebnisse.
-		Retention: 100 * 365 * 24 * time.Hour, SynchronousIndex: true,
-	})
+	config.HomeDir = filepath.Join(root, "home")
+	config.IndexDir = filepath.Join(root, "private-index")
+	config.CodexHome = filepath.Join(root, "codex-home")
+	if config.Retention == 0 {
+		config.Retention = 100 * 365 * 24 * time.Hour
+	}
+	config.SynchronousIndex = true
+	history, err := OpenWorkHistory(config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { history.Close() })
-	return history, home, indexDir, codexHome
+	return history, config.HomeDir, config.IndexDir, config.CodexHome
 }
 
 func writeHistoryTestFile(t *testing.T, path, content string) {
@@ -402,6 +413,33 @@ func writeHistoryTestFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// assertHistoryStoreOmits prüft jede vorhandene Datei des Speichers darauf, dass
+// sie die übergebenen Pfade nicht enthält. Das Write-Ahead-Log gehört
+// ausdrücklich dazu: solange der Speicher offen ist, steht fast alles dort und
+// nicht in history.db. Der Aufrufer schließt den Speicher deshalb vorher.
+func assertHistoryStoreOmits(t *testing.T, indexDir string, paths ...string) {
+	t.Helper()
+	read := 0
+	for _, name := range []string{"history.db", "history.db-wal", "history.db-shm"} {
+		data, err := os.ReadFile(filepath.Join(indexDir, name))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		read++
+		for _, path := range paths {
+			if strings.Contains(string(data), path) {
+				t.Fatalf("private index persisted source path %q in %s", path, name)
+			}
+		}
+	}
+	if read == 0 {
+		t.Fatalf("no work history store file found in %s", indexDir)
 	}
 }
 
