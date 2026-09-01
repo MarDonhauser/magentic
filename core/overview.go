@@ -29,7 +29,17 @@ type OvAgent struct {
 	HandoffSource bool      `json:"handoffSource"`
 	HandoffTarget bool      `json:"handoffTarget"`
 
-	Queued []OvQueuedMessage `json:"queued,omitempty"`
+	Queued     []OvQueuedMessage `json:"queued,omitempty"`
+	Automation *OvAutomation     `json:"automation,omitempty"`
+}
+
+type OvAutomation struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Enabled      bool      `json:"enabled"`
+	EveryMinutes int       `json:"everyMinutes"`
+	NextRunAt    time.Time `json:"nextRunAt"`
+	LastRunAt    time.Time `json:"lastRunAt,omitzero"`
 }
 
 // OvQueuedMessage projects one durably queued Outbox message for the UI. Stuck
@@ -509,7 +519,7 @@ func toOvAgent(a Agent, observed SessionObservation, branch string) OvAgent {
 	handoffTarget := handoffTargetCapable(a, observed)
 	// Survey deliberately omits per-Session baseline deltas. Keep the legacy
 	// fields explicitly unknown instead of rebuilding that Git meaning here.
-	return OvAgent{
+	agent := OvAgent{
 		ID:            a.ID,
 		Name:          a.Name,
 		Tool:          tool,
@@ -532,6 +542,14 @@ func toOvAgent(a Agent, observed SessionObservation, branch string) OvAgent {
 		HandoffTarget: handoffTarget,
 		Queued:        queuedMessagesOverview(a.Outbox),
 	}
+	if a.Automation != nil {
+		agent.Automation = &OvAutomation{
+			ID: a.Automation.ID, Name: a.Automation.Name, Enabled: a.Automation.Enabled,
+			EveryMinutes: a.Automation.EveryMinutes, NextRunAt: a.Automation.NextRunAt,
+			LastRunAt: a.Automation.LastRunAt,
+		}
+	}
+	return agent
 }
 
 const queuedMessagePreviewLimit = 80

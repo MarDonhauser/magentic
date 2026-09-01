@@ -529,6 +529,59 @@ func (a *App) SendMessage(sessionID, text string) error {
 	return core.SendQueuedMessageWithObserver(id, core.QueuedMessageKindMessage, text, a.observeSessions)
 }
 
+// SessionAutomation returns the recurring instruction attached to one coding
+// Session. A nil result means the Session has no automation yet.
+func (a *App) SessionAutomation(sessionID string) (*core.SessionAutomation, error) {
+	_, session, err := loadSessionByID(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if session.Automation == nil {
+		return nil, nil
+	}
+	automation := *session.Automation
+	return &automation, nil
+}
+
+// SaveSessionAutomation creates or replaces a Session's single recurring
+// instruction. nextRunAt is RFC3339 so the browser can preserve the user's
+// local wall-clock choice while persistence remains unambiguous.
+func (a *App) SaveSessionAutomation(sessionID, automationID, name, instructions string, everyMinutes int, nextRunAt string, enabled bool) (core.SessionAutomation, error) {
+	_, session, err := loadSessionByID(sessionID)
+	if err != nil {
+		return core.SessionAutomation{}, err
+	}
+	when, err := time.Parse(time.RFC3339, strings.TrimSpace(nextRunAt))
+	if err != nil {
+		return core.SessionAutomation{}, fmt.Errorf("Zeitpunkt ist ungültig: %w", err)
+	}
+	automation := core.SessionAutomation{
+		ID: strings.TrimSpace(automationID), Name: name, Instructions: instructions,
+		EveryMinutes: everyMinutes, NextRunAt: when, Enabled: enabled,
+	}
+	result, err := core.OpenRegistry(core.StatePath()).Change(a.ctx, core.SetSessionAutomation(session.ID, session.Name, automation))
+	if err != nil {
+		return core.SessionAutomation{}, err
+	}
+	snapshot := result.Snapshot.State()
+	saved := snapshot.SessionByID(session.ID)
+	if saved == nil || saved.Automation == nil {
+		return core.SessionAutomation{}, fmt.Errorf("Automatisierung wurde nicht gespeichert")
+	}
+	return *saved.Automation, nil
+}
+
+func (a *App) DeleteSessionAutomation(sessionID, automationID string) error {
+	_, session, err := loadSessionByID(sessionID)
+	if err != nil {
+		return err
+	}
+	_, err = core.OpenRegistry(core.StatePath()).Change(
+		a.ctx, core.DeleteSessionAutomation(session.ID, session.Name, strings.TrimSpace(automationID)),
+	)
+	return err
+}
+
 // DiscardQueuedMessage removes a queued message the user no longer wants.
 func (a *App) DiscardQueuedMessage(sessionID, messageID string) error {
 	return core.DiscardQueuedMessage(core.SessionID(strings.TrimSpace(sessionID)), strings.TrimSpace(messageID))

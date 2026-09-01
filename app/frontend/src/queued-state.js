@@ -7,6 +7,7 @@ function describeQueued(kind, preview) {
     return preview ? `Handoff mit dem Kontext „${preview}“` : 'Handoff aus einer anderen Session';
   }
   if (kind === 'skill') return preview || 'Skill-Befehl ohne Text';
+  if (kind === 'automation') return preview || 'Automatisierte Anweisung ohne Text';
   return preview || 'Nachricht ohne Text';
 }
 

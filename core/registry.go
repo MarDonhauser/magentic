@@ -58,28 +58,33 @@ const (
 	registryMarkMessageAttempt
 	registryDequeueMessage
 	registryResetMessageAttempt
+	registrySetAutomation
+	registryDeleteAutomation
+	registryQueueDueAutomation
 )
 
 // RegistryChange is intentionally constructed through semantic helpers. Its
 // representation is private so callers cannot submit arbitrary record patches.
 type RegistryChange struct {
-	kind        registryChangeKind
-	project     Project
-	session     Session
-	projectID   ProjectID
-	sessionID   SessionID
-	projectName string
-	sessionName string
-	newName     string
-	newRuntime  string
-	mainBranch  string
-	order       []ProjectID
-	sessions    []Session
-	baseCommit  string
-	baseDirty   []string
-	message     QueuedMessage
-	messageID   string
-	at          time.Time
+	kind         registryChangeKind
+	project      Project
+	session      Session
+	projectID    ProjectID
+	sessionID    SessionID
+	projectName  string
+	sessionName  string
+	newName      string
+	newRuntime   string
+	mainBranch   string
+	order        []ProjectID
+	sessions     []Session
+	baseCommit   string
+	baseDirty    []string
+	message      QueuedMessage
+	messageID    string
+	automation   SessionAutomation
+	automationID string
+	at           time.Time
 }
 
 func RegisterProject(project Project) RegistryChange {
@@ -162,6 +167,18 @@ func DequeueSessionMessage(sessionID SessionID, name, messageID string) Registry
 // deliverable again.
 func ResetQueuedMessageAttempt(sessionID SessionID, name, messageID string) RegistryChange {
 	return RegistryChange{kind: registryResetMessageAttempt, sessionID: sessionID, sessionName: name, messageID: messageID}
+}
+
+func SetSessionAutomation(sessionID SessionID, name string, automation SessionAutomation) RegistryChange {
+	return RegistryChange{kind: registrySetAutomation, sessionID: sessionID, sessionName: name, automation: automation}
+}
+
+func DeleteSessionAutomation(sessionID SessionID, name, automationID string) RegistryChange {
+	return RegistryChange{kind: registryDeleteAutomation, sessionID: sessionID, sessionName: name, automationID: automationID}
+}
+
+func QueueDueSessionAutomation(sessionID SessionID, automationID string, at time.Time) RegistryChange {
+	return RegistryChange{kind: registryQueueDueAutomation, sessionID: sessionID, automationID: automationID, at: at}
 }
 
 func addDiscoveredSessionsChange(sessions []Session) RegistryChange {
@@ -429,6 +446,75 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 			session.Outbox[msgIdx].AttemptedAt = time.Time{}
 		}
 		return true, "", session.ID, nil
+	case registrySetAutomation, registryDeleteAutomation, registryQueueDueAutomation:
+		idx := sessionIndex(state, change.sessionID, change.sessionName)
+		if idx < 0 {
+			return false, "", "", fmt.Errorf("Session %q nicht gefunden", change.sessionName)
+		}
+		session := &state.Agents[idx]
+		if session.IsTerm() {
+			return false, "", "", fmt.Errorf("%s ist eine Terminal-Session — dort läuft kein Agent", session.Name)
+		}
+		switch change.kind {
+		case registrySetAutomation:
+			automation := change.automation
+			automation.Name = strings.TrimSpace(automation.Name)
+			automation.Instructions = strings.TrimSpace(automation.Instructions)
+			if automation.ID == "" {
+				automation.ID = NewUUID()
+			}
+			if session.Automation != nil && session.Automation.ID != automation.ID {
+				return false, "", "", fmt.Errorf("Automatisierung der Session wurde gleichzeitig geändert")
+			}
+			if err := ValidateSessionAutomation(automation); err != nil {
+				return false, "", "", err
+			}
+			if session.Automation != nil {
+				automation.LastRunAt = session.Automation.LastRunAt
+			}
+			if reflect.DeepEqual(session.Automation, &automation) {
+				return false, "", session.ID, nil
+			}
+			session.Automation = &automation
+		case registryDeleteAutomation:
+			if session.Automation == nil {
+				return false, "", session.ID, nil
+			}
+			if change.automationID != "" && session.Automation.ID != change.automationID {
+				return false, "", "", fmt.Errorf("Automatisierung der Session wurde gleichzeitig geändert")
+			}
+			session.Automation = nil
+		case registryQueueDueAutomation:
+			automation := session.Automation
+			if automation == nil || !automation.Enabled || automation.ID != change.automationID {
+				return false, "", session.ID, nil
+			}
+			at := change.at
+			if at.IsZero() {
+				at = time.Now()
+			}
+			if automation.NextRunAt.After(at) {
+				return false, "", session.ID, nil
+			}
+			prompt := AutomationPrompt(*automation)
+			alreadyQueued := false
+			for _, queued := range session.Outbox {
+				if queued.Kind == QueuedMessageKindAutomation && queued.Text == prompt {
+					alreadyQueued = true
+					break
+				}
+			}
+			if !alreadyQueued {
+				scheduledAt := automation.NextRunAt.UTC().Format(time.RFC3339Nano)
+				session.Outbox = append(session.Outbox, QueuedMessage{
+					ID: automation.ID + ":" + scheduledAt, Kind: QueuedMessageKindAutomation,
+					Text: prompt, EnqueuedAt: at,
+				})
+			}
+			automation.LastRunAt = at
+			automation.NextRunAt = nextAutomationRun(automation.NextRunAt, automation.EveryMinutes, at)
+		}
+		return true, "", session.ID, nil
 	case registryAddDiscovered:
 		changed := false
 		var last SessionID
@@ -602,6 +688,14 @@ func validateRegistryState(state *State) error {
 			}
 			runs[key] = true
 		}
+		if session.Automation != nil {
+			if session.IsTerm() {
+				return fmt.Errorf("Terminal-Session %q enthält eine Automatisierung", session.Name)
+			}
+			if err := ValidateSessionAutomation(*session.Automation); err != nil {
+				return fmt.Errorf("Session %q enthält eine ungültige Automatisierung: %w", session.Name, err)
+			}
+		}
 	}
 	return nil
 }
@@ -694,6 +788,10 @@ func cloneState(state *State) State {
 		clone.Agents[i].BaseDirty = append([]string(nil), clone.Agents[i].BaseDirty...)
 		clone.Agents[i].AgentRuns = append([]AgentRunRef(nil), clone.Agents[i].AgentRuns...)
 		clone.Agents[i].Outbox = append([]QueuedMessage(nil), clone.Agents[i].Outbox...)
+		if state.Agents[i].Automation != nil {
+			automation := *state.Agents[i].Automation
+			clone.Agents[i].Automation = &automation
+		}
 	}
 	return clone
 }

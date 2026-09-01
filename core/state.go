@@ -51,9 +51,10 @@ const (
 type QueuedMessageKind string
 
 const (
-	QueuedMessageKindMessage QueuedMessageKind = "message"
-	QueuedMessageKindSkill   QueuedMessageKind = "skill"
-	QueuedMessageKindHandoff QueuedMessageKind = "handoff"
+	QueuedMessageKindMessage    QueuedMessageKind = "message"
+	QueuedMessageKindSkill      QueuedMessageKind = "skill"
+	QueuedMessageKindHandoff    QueuedMessageKind = "handoff"
+	QueuedMessageKindAutomation QueuedMessageKind = "automation"
 )
 
 // QueuedMessage is one message waiting in a Session's Outbox. AttemptedAt is
@@ -64,6 +65,19 @@ type QueuedMessage struct {
 	Text        string            `json:"text"`
 	EnqueuedAt  time.Time         `json:"enqueued_at"`
 	AttemptedAt time.Time         `json:"attempted_at,omitzero"`
+}
+
+// SessionAutomation is the one recurring instruction attached to a coding
+// Session. NextRunAt is persisted so restarts preserve the cadence instead of
+// starting a fresh timer from application launch.
+type SessionAutomation struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Instructions string    `json:"instructions"`
+	EveryMinutes int       `json:"every_minutes"`
+	NextRunAt    time.Time `json:"next_run_at"`
+	LastRunAt    time.Time `json:"last_run_at,omitzero"`
+	Enabled      bool      `json:"enabled"`
 }
 
 type Project struct {
@@ -102,6 +116,7 @@ type Session struct {
 	LaterAt          time.Time           `json:"later_at,omitzero"`
 	SeenAt           time.Time           `json:"seen_at,omitzero"`
 	Outbox           []QueuedMessage     `json:"outbox,omitempty"`
+	Automation       *SessionAutomation  `json:"automation,omitempty"`
 }
 
 // Agent remains as a source-compatible name while callers migrate to Session.

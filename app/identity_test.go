@@ -154,6 +154,27 @@ func TestOpenTermDoesNotReuseConnectionAfterNameReuse(t *testing.T) {
 	}
 }
 
+func TestRetiringStaleTermCannotCloseReplacementConnection(t *testing.T) {
+	app := NewApp()
+	key := sessionTermKey("session-current")
+	stale := &ptyTerm{}
+	replacement := &ptyTerm{}
+	app.terms[key] = replacement
+
+	if app.retireTerm(key, stale) {
+		t.Fatal("stale PTY retirement was reported as the active connection closing")
+	}
+	if app.terms[key] != replacement {
+		t.Fatal("stale PTY retirement removed the replacement connection")
+	}
+	if !app.retireTerm(key, replacement) {
+		t.Fatal("active PTY retirement was not reported")
+	}
+	if _, ok := app.terms[key]; ok {
+		t.Fatal("active PTY retirement left the closed connection registered")
+	}
+}
+
 func TestProjectFacadeRejectsStaleIDWhenNameIsReused(t *testing.T) {
 	actions := []struct {
 		name string

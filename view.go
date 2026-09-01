@@ -33,6 +33,21 @@ var (
 	styleSection = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("111"))
 )
 
+// linePainter applies a colour-only Style to one single-line string. Style.Render
+// measures the display width of everything it styles, and for the terminal
+// preview that grapheme walk costs more than the rest of a render together. The
+// sequences are taken from the Style itself, so a changed colour still follows.
+type linePainter struct{ prefix, suffix string }
+
+func newLinePainter(style lipgloss.Style) linePainter {
+	prefix, suffix, _ := strings.Cut(style.Render("\x00"), "\x00")
+	return linePainter{prefix: prefix, suffix: suffix}
+}
+
+func (p linePainter) paint(line string) string { return p.prefix + line + p.suffix }
+
+var paintDim = newLinePainter(styleDim)
+
 func statusStyle(s AgentStatus) lipgloss.Style {
 	switch s {
 	case StatusRunning:
@@ -52,14 +67,38 @@ func statusStyle(s AgentStatus) lipgloss.Style {
 	}
 }
 
+// printableASCII reports whether every byte is a printable ASCII character. For
+// such a string the display width equals its byte length, so trunc and pad can
+// skip the grapheme segmentation that dominates a render.
+func printableASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
 func trunc(s string, w int) string {
 	if w <= 0 {
 		return ""
+	}
+	if printableASCII(s) {
+		if len(s) <= w {
+			return s
+		}
+		return s[:w-1] + "…"
 	}
 	return ansi.Truncate(s, w, "…")
 }
 
 func pad(s string, w int) string {
+	if printableASCII(s) {
+		if len(s) >= w {
+			return trunc(s, w)
+		}
+		return s + strings.Repeat(" ", w-len(s))
+	}
 	gap := w - lipgloss.Width(s)
 	if gap <= 0 {
 		return trunc(s, w)
@@ -370,7 +409,9 @@ func (m model) detailContent(w, h int) ([]string, int) {
 				pv = pv[len(pv)-remaining:]
 			}
 			for _, l := range pv {
-				add(styleDim.Render(strings.ReplaceAll(l, "\t", "  ")))
+				// Truncate first, then colour: the raw line keeps trunc on its
+				// ASCII fast path and the painter never measures at all.
+				lines = append(lines, paintDim.paint(trunc(strings.ReplaceAll(l, "\t", "  "), w)))
 			}
 		} else if remaining > 3 && observed && observation.Presence == core.SessionPresencePresent && !previewKnown {
 			add(styleSection.Render("Terminal"))

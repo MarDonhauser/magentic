@@ -118,6 +118,16 @@ func (a *App) watchLoop() {
 				st = &state
 			}
 		}
+		if queued, automationErr := core.RunDueAutomations(context.Background(), time.Now(), a.observeSessions); automationErr != nil {
+			if time.Since(lastErrLog) > time.Minute {
+				core.Logf("watchLoop: Automatisierungen konnten nicht eingeplant werden: %v", automationErr)
+				lastErrLog = time.Now()
+			}
+		} else if queued > 0 {
+			if current, loadErr := core.LoadState(); loadErr == nil {
+				st = current
+			}
+		}
 		snapshot := core.Observe(context.Background(), st.Agents)
 		a.storeObservation(snapshot, st.Agents)
 		core.DispatchOutbox(context.Background(), st, snapshot)

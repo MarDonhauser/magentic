@@ -103,6 +103,43 @@ test('a failed request keeps its source armed for a one-click retry', async () =
   assert.match(coordinator.snapshot().feedback.message, /Ziel nicht bereit/);
 });
 
+test('choosing a target asks before any context is transferred', async () => {
+  const choice = deferred();
+  const requests = [];
+  const coordinator = createHandoffCoordinator({
+    confirm: () => choice.promise,
+    submit: async (...ids) => { requests.push(ids); },
+  });
+  coordinator.reconcile([agent('source', 'Codex'), agent('target', 'Claude')]);
+  coordinator.arm('source');
+
+  const request = coordinator.submitTarget('target');
+
+  assert.equal(coordinator.snapshot().kind, 'confirming');
+  assert.deepEqual(requests, [], 'the handoff must wait for the explicit history choice');
+  choice.resolve('with-history');
+  assert.deepEqual(await request, { ok: true, mode: 'with-history', target: { id: 'target', name: 'Claude' } });
+  assert.deepEqual(requests, [['source', 'target']]);
+});
+
+test('switching without history opens the target without submitting a handoff', async () => {
+  const requests = [];
+  const opened = [];
+  const coordinator = createHandoffCoordinator({
+    confirm: async () => 'without-history',
+    submit: async (...ids) => { requests.push(ids); },
+    openTarget: target => { opened.push(target); },
+  });
+  coordinator.reconcile([agent('source', 'Codex'), agent('target', 'Claude')]);
+  coordinator.arm('source');
+
+  const result = await coordinator.submitTarget('target');
+
+  assert.deepEqual(result, { ok: true, mode: 'without-history', target: { id: 'target', name: 'Claude' } });
+  assert.deepEqual(requests, []);
+  assert.deepEqual(opened, [{ id: 'target', name: 'Claude' }]);
+});
+
 test('renames update display names while requests keep stable IDs', async () => {
   const calls = [];
   const coordinator = createHandoffCoordinator({
