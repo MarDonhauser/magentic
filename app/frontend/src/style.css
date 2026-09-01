@@ -999,48 +999,7 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
   text-overflow: ellipsis;
 }
 
-#term-queue {
-  position: absolute;
-  right: max(var(--term-gui-gutter), calc((100% - var(--term-gui-content-max)) / 2));
-  left: max(var(--term-gui-gutter), calc((100% - var(--term-gui-content-max)) / 2));
-  bottom: 16px;
-  z-index: 4;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px 14px;
-  border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
-  border-radius: var(--radius-panel);
-  background: var(--surface);
-  box-shadow: var(--floating-shadow);
-}
-
-#term-queue.is-hidden { display: none; }
-
-#term-queue textarea {
-  min-height: 54px;
-  resize: none;
-  border: 0;
-  outline: 0;
-  padding: 0;
-  background: transparent;
-  color: var(--ink);
-  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
-}
-
-#term-queue textarea::placeholder { color: var(--muted); opacity: 1; }
-
-.term-queue-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-md);
-  color: var(--muted);
-  font-size: var(--fs-meta);
-}
-
-#terms.hydra #term-session-state,
-#terms.hydra #term-queue {
+#terms.hydra #term-session-state {
   display: none;
 }
 
