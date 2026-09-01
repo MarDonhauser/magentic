@@ -11,6 +11,7 @@ type OvAgent struct {
 	ID            SessionID `json:"id"`
 	Name          string    `json:"name"`
 	Tool          string    `json:"tool,omitempty"`
+	Vendor        string    `json:"vendor,omitempty"`
 	Status        string    `json:"status"`
 	Label         string    `json:"label"`
 	Detail        string    `json:"detail"`
@@ -91,11 +92,20 @@ type OvProject struct {
 	Worktrees           []OvWorktree        `json:"worktrees"`
 }
 
-type OvUsage struct {
-	FiveHour      float64 `json:"fiveHour"`
-	FiveHourReset string  `json:"fiveHourReset"`
-	SevenDay      float64 `json:"sevenDay"`
-	SevenDayReset string  `json:"sevenDayReset"`
+// OvUsageWindow is one quota window as the UI renders it: a share, a name for
+// the window, and when it refills.
+type OvUsageWindow struct {
+	Label   string  `json:"label"`
+	Percent float64 `json:"percent"`
+	Reset   string  `json:"reset,omitempty"`
+}
+
+// OvUsagePage carries one provider's limits. Providers without a readable
+// source get no page at all rather than an empty one.
+type OvUsagePage struct {
+	Provider string          `json:"provider"`
+	Label    string          `json:"label"`
+	Windows  []OvUsageWindow `json:"windows"`
 }
 
 type OvLater struct {
@@ -110,7 +120,7 @@ type OvLater struct {
 type Overview struct {
 	GeneratedAt string         `json:"generatedAt"`
 	Counts      map[string]int `json:"counts"`
-	Usage       *OvUsage       `json:"usage"`
+	Usage       []OvUsagePage  `json:"usage"`
 	Projects    []OvProject    `json:"projects"`
 	Later       []OvLater      `json:"later"`
 }
@@ -185,14 +195,7 @@ func buildOverviewFromSurvey(s *State, snapshot ObservationSnapshot, survey Repo
 		GeneratedAt: generatedAt.Local().Format("15:04:05"),
 		Counts:      map[string]int{},
 	}
-	if u := CachedUsage(); u.Err == "" && !u.FetchedAt.IsZero() {
-		ov.Usage = &OvUsage{
-			FiveHour:      u.FiveHour,
-			FiveHourReset: u.FiveHourReset.Format("15:04"),
-			SevenDay:      u.SevenDay,
-			SevenDayReset: ShortWeekday(u.SevenDayReset),
-		}
-	}
+	ov.Usage = usagePages()
 	later := map[SessionID]bool{}
 	for _, a := range s.Agents {
 		if a.LaterAt.IsZero() {
@@ -523,6 +526,7 @@ func toOvAgent(a Agent, observed SessionObservation, branch string) OvAgent {
 		ID:            a.ID,
 		Name:          a.Name,
 		Tool:          tool,
+		Vendor:        string(a.SessionVendor()),
 		Status:        statusKey(st),
 		Label:         st.Label(),
 		Detail:        observed.Detail,
@@ -639,4 +643,37 @@ func finishWarnings(proj *OvProject) {
 			wt.Warnings = append(wt.Warnings, fmt.Sprintf("%d %s nicht in %s", wt.Ahead, word, proj.MainBranch))
 		}
 	}
+}
+
+// usagePages collects every provider that can actually report its limits.
+// Claude answers over its OAuth endpoint, Codex from its own rollout records;
+// the others have no readable source and are therefore absent.
+func usagePages() []OvUsagePage {
+	var pages []OvUsagePage
+	if u := CachedUsage(); u.Err == "" && !u.FetchedAt.IsZero() {
+		pages = append(pages, OvUsagePage{
+			Provider: string(AgentVendorClaude),
+			Label:    "Claude-Limits",
+			Windows: []OvUsageWindow{
+				{Label: "5h", Percent: u.FiveHour, Reset: u.FiveHourReset.Format("15:04")},
+				{Label: "7d", Percent: u.SevenDay, Reset: ShortWeekday(u.SevenDayReset)},
+			},
+		})
+	}
+	if u := CachedCodexUsage(); u.Err == "" && len(u.Windows) > 0 {
+		page := OvUsagePage{Provider: string(AgentVendorCodex), Label: "Codex-Limits"}
+		for _, window := range u.Windows {
+			entry := OvUsageWindow{Label: window.Label, Percent: window.Percent}
+			if !window.Reset.IsZero() {
+				if window.Reset.Sub(time.Now()) > 24*time.Hour {
+					entry.Reset = ShortWeekday(window.Reset)
+				} else {
+					entry.Reset = window.Reset.Format("15:04")
+				}
+			}
+			page.Windows = append(page.Windows, entry)
+		}
+		pages = append(pages, page)
+	}
+	return pages
 }

@@ -61,6 +61,8 @@ const (
 	registrySetAutomation
 	registryDeleteAutomation
 	registryQueueDueAutomation
+	registryRecordAgentRun
+	registrySetVendor
 )
 
 // RegistryChange is intentionally constructed through semantic helpers. Its
@@ -84,6 +86,8 @@ type RegistryChange struct {
 	messageID    string
 	automation   SessionAutomation
 	automationID string
+	agentRun     AgentRunRef
+	vendor       AgentVendor
 	at           time.Time
 }
 
@@ -142,6 +146,20 @@ func RenameRegisteredSessionRuntime(sessionID SessionID, oldName, newName, newRu
 		kind: registryRenameSession, sessionID: sessionID, sessionName: oldName,
 		newName: newName, newRuntime: newRuntime,
 	}
+}
+
+// RecordAgentRun stores a vendor-qualified run reference that was discovered
+// from the vendor's own history. An existing reference for that vendor is
+// never overwritten: run identity is durable once known.
+func RecordAgentRun(sessionID SessionID, name string, run AgentRunRef) RegistryChange {
+	return RegistryChange{kind: registryRecordAgentRun, sessionID: sessionID, sessionName: name, agentRun: run}
+}
+
+// SetSessionVendor records which coding-agent vendor starts this Session from
+// now on. AgentRuns of other vendors stay untouched, so a Session can carry a
+// run reference per vendor and be switched back without losing history.
+func SetSessionVendor(sessionID SessionID, name string, vendor AgentVendor) RegistryChange {
+	return RegistryChange{kind: registrySetVendor, sessionID: sessionID, sessionName: name, vendor: vendor}
 }
 
 // EnqueueSessionMessage appends a message to the Session's durable Outbox. A
@@ -347,7 +365,7 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 		id := state.Agents[idx].ID
 		state.Agents = append(state.Agents[:idx], state.Agents[idx+1:]...)
 		return true, "", id, nil
-	case registryMarkSeen, registryMarkLater, registryReopenSession, registryMarkDeploy, registryRenameSession:
+	case registryMarkSeen, registryMarkLater, registryReopenSession, registryMarkDeploy, registryRenameSession, registryRecordAgentRun, registrySetVendor:
 		idx := sessionIndex(state, change.sessionID, change.sessionName)
 		if idx < 0 {
 			return false, "", "", fmt.Errorf("Session %q nicht gefunden", change.sessionName)
@@ -384,6 +402,25 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 			return changed, "", session.ID, nil
 		case registryMarkDeploy:
 			session.DeployAt = at
+		case registryRecordAgentRun:
+			if change.agentRun.Vendor == "" || change.agentRun.ExternalID == "" {
+				return false, "", "", fmt.Errorf("unvollständige AgentRunRef für Session %q", session.Name)
+			}
+			if _, exists := session.AgentRun(change.agentRun.Vendor); exists {
+				return false, "", session.ID, nil
+			}
+			session.AgentRuns = append(session.AgentRuns, change.agentRun)
+		case registrySetVendor:
+			if session.IsTerm() {
+				return false, "", "", fmt.Errorf("Session %q ist ein Terminal und hat keinen Agent-Vendor", session.Name)
+			}
+			if _, known := providerForVendor(change.vendor); !known {
+				return false, "", "", fmt.Errorf("unbekannter Agent-Vendor %q", change.vendor)
+			}
+			if session.Vendor == change.vendor {
+				return false, "", session.ID, nil
+			}
+			session.Vendor = change.vendor
 		case registryRenameSession:
 			if change.newName == "" {
 				return false, "", "", fmt.Errorf("leerer Session-Name")
@@ -628,6 +665,9 @@ func normalizeSession(session *Session) {
 			session.Purpose = SessionPurposeWork
 		}
 	}
+	if !session.IsTerm() && session.Vendor == "" {
+		session.Vendor = AgentVendorClaude
+	}
 	if session.SessionID != "" {
 		hasLegacy := false
 		for _, run := range session.AgentRuns {
@@ -669,6 +709,11 @@ func validateRegistryState(state *State) error {
 		sessionIDs[session.ID] = true
 		sessionNames[session.Name] = true
 		runtimeNames[session.RuntimeName] = true
+		if !session.IsTerm() && session.Vendor != "" {
+			if _, known := providerForVendor(session.Vendor); !known {
+				return fmt.Errorf("Session %q hat einen unbekannten Agent-Vendor %q", session.Name, session.Vendor)
+			}
+		}
 		if session.ProjectID != "" {
 			project := state.ProjectByID(session.ProjectID)
 			if project == nil {

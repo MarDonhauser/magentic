@@ -7,7 +7,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import {
   Overview,
-  NewSession, NewTermSession, NewTermSessionFor, DoneAgent, Cleanup, Merge, Deploy, RemoveWorktree, SetMainBranch,
+  NewSession, NewSessionWithVendor, AgentVendors, SwitchSessionVendor, NewTermSession, NewTermSessionFor, DoneAgent, Cleanup, Merge, Deploy, RemoveWorktree, SetMainBranch,
   OpenTerm, WriteTerm, ResizeTerm, CloseTerm, KillSession, LaterSession, ReopenSession, SendSkill, HandoffSession,
   SendMessage, DiscardQueuedMessage, RetryQueuedMessage,
   DeployStatus, AzLogin, ArgoLogin, AzAccounts, AzSetSubscription,
@@ -17,6 +17,7 @@ import {
   MarkSeen, GitGraph, Board, BoardArchive, Stats, StartBoardItem, NewDockSession, MigrateDockSessions, BuildInfo,
   Breaks, BreakHeartbeat, TakeBreak, EndBreak, SnoozeBreak, BreakConfig, SetBreakConfig, BreakOver,
 } from '../wailsjs/go/main/App';
+import { usagePages, clampUsagePage } from './usage-state.js';
 import { EventsOn, EventsOff, BrowserOpenURL, ClipboardSetText } from '../wailsjs/runtime/runtime';
 import {
   developerIcon,
@@ -33,6 +34,7 @@ import { renderStats } from './stats.js';
 import { mountDock, toggleDock, isDockOpen, closeDockTab, dockTabs, refitDock } from './dock.js';
 import { mountBreaks, updateBreaks, openBreak, openBreakSettings, isBreakOpen } from './breaks.js';
 import { initThemeToggle, onThemeChange, terminalTheme } from './theme.js';
+import { TERMINAL_OPTIONS, setUpTerminal } from './terminal-setup.js';
 import { createHydraHandoff } from './hydra-handoff.js';
 import { queuedMessages, queuedHeadline } from './queued-state.js';
 mountDeveloperIcons();
@@ -239,19 +241,15 @@ function makeTerm(sessionID, name) {
   wrap.appendChild(inner);
   termsEl.appendChild(wrap);
   const term = new Terminal({
+    ...TERMINAL_OPTIONS,
     fontSize: 13,
-    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-    scrollback: 20000,
-    scrollSensitivity: 5,
-    fastScrollSensitivity: 12,
-    cursorBlink: true,
-    macOptionIsMeta: true,
     theme: terminalTheme(),
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.loadAddon(new WebLinksAddon((e, uri) => BrowserOpenURL(uri)));
   term.open(inner);
+  setUpTerminal(term, () => fit.fit());
   term.onData(d => WriteTerm(connectionKey, toB64(d)));
   term.onResize(({ cols, rows }) => ResizeTerm(connectionKey, cols, rows));
 
@@ -354,6 +352,45 @@ function openSessionByName(name) {
   return openSession(session.id, session.name);
 }
 
+// Die installierten Agenten stehen als Segmentleiste neben dem Namen: der
+// laufende ist markiert, ein Klick auf einen anderen wechselt ihn. Beendete
+// Sessions bekommen keine Leiste, dort gibt es nichts zu wechseln.
+function vendorSwitchHtml(agent) {
+  if (!agent || agent.term || ['exited', 'dead'].includes(agent.status)) return '';
+  const options = vendorCatalog.filter(option => option.available || option.vendor === agent.vendor);
+  if (options.length < 2) return '';
+  const current = agent.vendor || 'claude';
+  return `<span class="tb-vendors" role="group" aria-label="Coding-Agent">` +
+    options.map(option => {
+      const active = option.vendor === current;
+      const title = active
+        ? `${option.label} läuft in dieser Session`
+        : `Zu ${option.label} wechseln — der laufende Prozess wird beendet`;
+      return `<button type="button" class="tb-vendor${active ? ' on' : ''}" data-vendor="${esc(option.vendor)}"` +
+        `${active ? ' aria-current="true"' : ''} title="${esc(title)}">${developerIcon(option.vendor)}</button>`;
+    }).join('') + '</span>';
+}
+
+function wireVendorSwitch(sessionID, sessionName) {
+  for (const button of termBarEl.querySelectorAll('.tb-vendor:not(.on)')) {
+    button.onclick = async () => {
+      if (!button.dataset.confirm) {
+        button.dataset.confirm = '1';
+        button.classList.add('ask');
+        setTimeout(() => {
+          if (button.isConnected) { delete button.dataset.confirm; button.classList.remove('ask'); }
+        }, 3000);
+        return;
+      }
+      try {
+        await act(SwitchSessionVendor(sessionID, button.dataset.vendor),
+          `„${sessionName}" läuft jetzt mit einem anderen Agenten`);
+      } catch { /* toast zeigt den Fehler */ }
+      await refresh(true);
+    };
+  }
+}
+
 function updateTermBar() {
   if (view !== 'term' || !activeTerm || !activeSessionID) return;
   const sessionID = activeSessionID;
@@ -370,6 +407,7 @@ function updateTermBar() {
     `<span class="tb-avatar">${agentPortrait(activeTerm, 24, a)}</span>` +
     `<span class="dot" style="background:${v.color}"></span>` +
     `<span class="tb-name">${esc(activeTerm)}</span>` +
+    vendorSwitchHtml(a) +
     (a?.branch ? `<span class="tb-branch${a.worktree ? ' wt' : ''}" title="Branch ${esc(a.branch)}${a.worktree ? ' · eigener Worktree' : ''}">${icon('gitbranch')}${esc(a.branch)}</span>` : '') +
     `<span class="tb-st">${visHtml(v)}</span>` +
     (a?.project && a.project !== '(ohne Projekt)' ? `<span class="tb-proj">${esc(a.project)}</span>` : '') +
@@ -389,6 +427,7 @@ function updateTermBar() {
         `/done + /deploy an „${sessionName}" gesendet — Plan in der Session bestätigen`)
         .then(startDeployWatch).catch(() => {});
   }
+  wireVendorSwitch(sessionID, sessionName);
   $('tb-links').onclick = e => openLinksMenu(e.currentTarget);
   $('tb-later').onclick = () => parkSession(sessionID, sessionName);
   $('tb-kill').onclick = e => {
@@ -572,7 +611,7 @@ async function openSession(sessionID, name) {
   if (!t) t = makeTerm(sessionID, name);
   else t.sessionID = sessionID;
   t.term.options.fontSize = 14;
-  t.term.options.lineHeight = 1.3;
+  t.term.options.lineHeight = 1.25;
   if (t.wrap.parentElement !== termsEl) termsEl.appendChild(t.wrap);
   for (const [n, o] of terms) o.wrap.classList.toggle('active', n === name);
   t.fit.fit();
@@ -778,6 +817,11 @@ BuildInfo()
   .then(at => { if (at) $('sidebar-head').title = `magentic · Build vom ${at}`; })
   .catch(() => {});
 
+let vendorCatalog = [{ vendor: 'claude', label: 'Claude Code', available: true }];
+AgentVendors()
+  .then(catalog => { if (Array.isArray(catalog) && catalog.length) vendorCatalog = catalog; })
+  .catch(() => { /* Standardkatalog bleibt */ });
+
 $('nav-overview').onclick = showOverview;
 $('sidebar-head').onclick = showOverview;
 $('nav-search').onclick = showSearch;
@@ -965,7 +1009,7 @@ async function syncHydra() {
     if (!t) { t = makeTerm(a.id, a.name); fresh.push(a.name); }
     else t.sessionID = a.id;
     t.term.options.fontSize = 13;
-    t.term.options.lineHeight = 1;
+    t.term.options.lineHeight = 1.1;
     ensureHydraHead(t);
     if (t.wrap.parentElement !== hydraGridEl) hydraGridEl.appendChild(t.wrap);
     t.wrap.dataset.termName = t.name;
@@ -1158,20 +1202,19 @@ function renderSidebar() {
       const plus = document.createElement('button');
       plus.className = 'proj-add';
       plus.textContent = '+';
-      plus.title = 'Neue Claude-Session in ' + p.name + ' (⌥-Klick: in frischem Worktree · ⇧-Klick: reines Terminal)';
+      plus.title = 'Neue Session in ' + p.name + ' (⌥-Klick: in frischem Worktree · ⇧-Klick: reines Terminal)';
       plus.onclick = async e => {
         e.stopPropagation();
-        plus.disabled = true;
-        try {
-          const worktree = e.altKey;
-          const name = e.shiftKey
-            ? await act(NewTermSession(p.id, false, ''), n => `Terminal „${n}" geöffnet`)
-            : await act(NewSession(p.id, worktree, ''),
-                n => (worktree ? `Worktree-Session „${n}" gestartet` : `Session „${n}" gestartet`));
-          if (!name) return;
-          if (view === 'hydra' && hydraProject === p.name) await focusHydraSession(name);
-          else openSessionByName(name);
-        } catch { /* toast zeigt den Fehler */ }
+        if (e.shiftKey) {
+          try {
+            const name = await act(NewTermSession(p.id, false, ''), n => `Terminal „${n}" geöffnet`);
+            if (!name) return;
+            if (view === 'hydra' && hydraProject === p.name) await focusHydraSession(name);
+            else openSessionByName(name);
+          } catch { /* toast zeigt den Fehler */ }
+          return;
+        }
+        showVendorMenu(e.clientX, e.clientY, p, e.altKey);
       };
       head.appendChild(plus);
     }
@@ -1241,12 +1284,7 @@ function renderSidebar() {
     }
   }
 
-  const u = ov?.usage;
-  usageBoxEl.innerHTML = u
-    ? `<div class="usage-source">${developerIcon('claude')}<span>Claude-Limits</span></div>` +
-      usageBar('5h', u.fiveHour, '↻ ' + u.fiveHourReset) +
-      usageBar('7d', u.sevenDay, '↻ ' + u.sevenDayReset)
-    : '';
+  renderUsage();
   attentionBar();
   syncDockNav();
 }
@@ -1255,12 +1293,55 @@ function usageColor(pct) {
   return pct >= 90 ? 'var(--critical)' : pct >= 70 ? 'var(--warning)' : 'var(--good)';
 }
 
-function usageBar(label, pct, reset) {
-  const p = Math.round(pct);
-  return `<div class="ubar-row" title="Claude-Limit ${label} · ${esc(reset)}">` +
-    `<span class="ulabel">${label}</span>` +
-    `<div class="ubar"><div class="ufill" style="width:${Math.min(p,100)}%;background:${usageColor(p)}"></div></div>` +
-    `<span class="upct">${p}%</span></div>`;
+function usageBar(page, window) {
+  const reset = window.reset ? ` · füllt sich ${esc(window.reset)}` : '';
+  return `<div class="ubar-row" title="${esc(page.label)} ${esc(window.label)}${reset}">` +
+    `<span class="ulabel">${esc(window.label)}</span>` +
+    `<div class="ubar"><div class="ufill" style="width:${window.percent}%;background:${usageColor(window.percent)}"></div></div>` +
+    `<span class="upct">${window.percent}%</span></div>`;
+}
+
+// Die Limits mehrerer Anbieter liegen nebeneinander auf einer Blätterfläche.
+// Gescrollt wird nativ, damit Trackpad-Wischen und Ziehen ohne eigene
+// Gestenerkennung funktionieren; die Punkte zeigen und wählen die Seite.
+let usagePage = 0;
+
+function renderUsage() {
+  const pages = usagePages(ov);
+  if (!pages.length) {
+    usageBoxEl.innerHTML = '';
+    return;
+  }
+  usagePage = clampUsagePage(usagePage, pages.length);
+  const track = pages.map(page =>
+    `<div class="usage-page" data-provider="${esc(page.provider)}">` +
+      `<div class="usage-source">${developerIcon(page.provider)}<span>${esc(page.label)}</span></div>` +
+      page.windows.map(window => usageBar(page, window)).join('') +
+    '</div>').join('');
+  const dots = pages.length > 1
+    ? `<div class="usage-dots">` + pages.map((page, index) =>
+        `<button type="button" class="usage-dot${index === usagePage ? ' on' : ''}" data-page="${index}" ` +
+        `aria-label="${esc(page.label)} zeigen"></button>`).join('') + '</div>'
+    : '';
+  usageBoxEl.innerHTML = `<div class="usage-track">${track}</div>${dots}`;
+
+  const trackEl = usageBoxEl.querySelector('.usage-track');
+  const pageWidth = () => trackEl.clientWidth || 1;
+  trackEl.scrollLeft = usagePage * pageWidth();
+  trackEl.onscroll = () => {
+    const index = clampUsagePage(Math.round(trackEl.scrollLeft / pageWidth()), pages.length);
+    if (index === usagePage) return;
+    usagePage = index;
+    for (const dot of usageBoxEl.querySelectorAll('.usage-dot')) {
+      dot.classList.toggle('on', Number(dot.dataset.page) === index);
+    }
+  };
+  for (const dot of usageBoxEl.querySelectorAll('.usage-dot')) {
+    dot.onclick = () => {
+      usagePage = Number(dot.dataset.page) || 0;
+      trackEl.scrollTo({ left: usagePage * pageWidth(), behavior: 'smooth' });
+    };
+  }
 }
 
 let zg = null;
@@ -1708,15 +1789,15 @@ function deployCard() {
       `<span class="path">lade…</span></div></div>`;
   }
   const azChip = ds.azOk
-    ? `<span class="ds-chip ok">${developerIcon('azure')} Azure ✓</span>`
-    : `<span class="ds-chip bad" title="${esc(ds.azErr)}">${developerIcon('azure')} Azure ✗</span>` +
+    ? `<span class="ds-chip ok">${developerIcon('azure')} Azure ${icon('check')}</span>`
+    : `<span class="ds-chip bad" title="${esc(ds.azErr)}">${developerIcon('azure')} Azure ${icon('x')}</span>` +
       `<button class="btn tiny" data-act="azlogin">az login</button>`;
   const subChip = ds.azSub
-    ? `<button class="ds-chip sub" data-act="azsub" title="Azure-Subscription wechseln · ${esc(ds.azSub)}\n${esc(ds.azSubId)}">${developerIcon('azure')} ${esc(shortSub(ds.azSub))} ▾</button>`
+    ? `<button class="ds-chip sub" data-act="azsub" title="Azure-Subscription wechseln · ${esc(ds.azSub)}\n${esc(ds.azSubId)}">${developerIcon('azure')} ${esc(shortSub(ds.azSub))}</button>`
     : '';
   const argoChip = ds.argoOk
-    ? `<span class="ds-chip ok" title="${esc(ds.argoServer)}">Argo ✓</span>`
-    : `<span class="ds-chip bad" title="${esc(ds.argoErr)}">Argo ✗</span>` +
+    ? `<span class="ds-chip ok" title="${esc(ds.argoServer)}">${developerIcon('kubernetes')} Argo ${icon('check')}</span>`
+    : `<span class="ds-chip bad" title="${esc(ds.argoErr)}">${developerIcon('kubernetes')} Argo ${icon('x')}</span>` +
       `<button class="btn tiny" data-act="argologin">argocd login</button>`;
   const builds = (ds.builds || []).map(buildRow).join('') ||
     (ds.azOk ? '<div class="none">keine Builds</div>' : `<div class="none">${esc(ds.azErr)}</div>`);
@@ -1734,7 +1815,8 @@ function deployCard() {
   const watching = Date.now() < dsWatchUntil
     ? `<span class="ds-chip watch">${icon('clock')} verfolge Deploy (10s-Takt)</span>` : '';
   return `<div class="card" id="deploy-card"><div class="card-head"><h2>${icon('rocket')} Pipelines &amp; Argo</h2>` +
-    `${azChip}${subChip}${argoChip}${watching}` +
+    `<span class="ds-service">${azChip}${subChip}</span>` +
+    `<span class="ds-service">${argoChip}</span>${watching}` +
     `<span class="actions"><span class="path">${esc(deployStamp)}</span>` +
     `<button class="btn tiny" data-act="dsrefresh" title="Status neu laden">↻</button></span></div>` +
     `${deploySyncState()}${deployRemoteCoverageState(ds.azRemoteCoverage)}` +
@@ -1812,8 +1894,9 @@ function renderOverview() {
   }
   const cards = (ov.projects || []).map(projectCard).join('');
   overviewEl.innerHTML = `${overviewSyncState()}${attentionOverview()}${cards}${deployCard()}` +
-    `<div class="add-repo"><button class="btn" data-act="addproject" title="Git-Repository als Projekt hinzufügen">+ Repository hinzufügen…</button></div>` +
-    `<div class="stamp">Stand ${esc(ov.generatedAt || '')}</div>`;
+    `<div class="overview-foot">` +
+    `<button class="btn" data-act="addproject" title="Git-Repository als Projekt hinzufügen">+ Repository hinzufügen…</button>` +
+    `<span class="stamp">Stand ${esc(ov.generatedAt || '')}</span></div>`;
 }
 
 function renderAll() {
@@ -2231,6 +2314,19 @@ function hideMenu() {
   menuFor = null;
 }
 
+function showVendorMenu(x, y, project, worktree) {
+  menuFor = { project, worktree };
+  menuEl.innerHTML =
+    `<div class="mi-head">Neue Session in ${esc(project.name)}</div>` +
+    vendorCatalog.map(option => option.available
+      ? `<div class="mi" data-mi="newvendor" data-vendor="${esc(option.vendor)}">${developerIcon(option.vendor)} ${esc(option.label)}</div>`
+      : `<div class="mi disabled" title="${esc(option.label)} ist nicht installiert">${developerIcon(option.vendor)} ${esc(option.label)}</div>`
+    ).join('');
+  menuEl.style.display = 'block';
+  menuEl.style.left = Math.min(x, window.innerWidth - 220) + 'px';
+  menuEl.style.top = Math.min(y, window.innerHeight - menuEl.offsetHeight - 10) + 'px';
+}
+
 function showMenu(x, y, sessionID, name, status) {
   menuFor = { id: sessionID, name };
   const session = agentInfo(name, sessionID) || (ov?.later || []).find(item => item.id === sessionID);
@@ -2242,9 +2338,16 @@ function showMenu(x, y, sessionID, name, status) {
   } else {
     const done = ['idle', 'running'].includes(status)
       ? `<div class="mi" data-mi="done">${icon('check')} /done senden</div>` : '';
+    const switchable = session && !session.term
+      ? vendorCatalog
+          .filter(option => option.available && option.vendor !== session.vendor)
+          .map(option => `<div class="mi" data-mi="switchvendor" data-vendor="${esc(option.vendor)}">${developerIcon(option.vendor)} Zu ${esc(option.label)} wechseln</div>`)
+          .join('')
+      : '';
     menuEl.innerHTML =
       `<div class="mi-head">${sessionToolMark(session)}${esc(name)}</div>` +
       `<div class="mi" data-mi="open">${developerIcon('bash')} Terminal öffnen</div>` + done +
+      switchable +
       `<div class="mi" data-mi="later">${icon('clock')} Für später schließen</div>` +
       `<div class="mi danger" data-mi="kill">${icon('x')} Session beenden</div>`;
   }
@@ -2320,9 +2423,36 @@ async function reopenLater(sessionID, name) {
 menuEl.addEventListener('click', async e => {
   const mi = e.target.closest('.mi');
   if (!mi || !menuFor) return;
-  const { id, name } = menuFor;
+  const { id, name, project, worktree } = menuFor;
+  if (mi.dataset.mi === 'newvendor') {
+    hideMenu();
+    if (!project) return;
+    try {
+      const created = await act(
+        NewSessionWithVendor(project.id, !!worktree, '', mi.dataset.vendor),
+        n => (worktree ? `Worktree-Session „${n}" gestartet` : `Session „${n}" gestartet`),
+      );
+      if (!created) return;
+      if (view === 'hydra' && hydraProject === project.name) await focusHydraSession(created);
+      else openSessionByName(created);
+    } catch { /* toast zeigt den Fehler */ }
+    return;
+  }
+  if (!id) return;
   switch (mi.dataset.mi) {
     case 'open': hideMenu(); openSession(id, name); break;
+    case 'switchvendor':
+      if (mi.dataset.confirm) {
+        hideMenu();
+        try {
+          await act(SwitchSessionVendor(id, mi.dataset.vendor), `„${name}" läuft jetzt mit einem anderen Agenten`);
+        } catch { /* toast zeigt den Fehler */ }
+        await refresh(true);
+      } else {
+        mi.dataset.confirm = '1';
+        mi.innerHTML = icon('play') + ' wirklich wechseln? Der laufende Prozess wird beendet';
+      }
+      break;
     case 'later': hideMenu(); parkSession(id, name); break;
     case 'reopen': hideMenu(); reopenLater(id, name); break;
     case 'done':

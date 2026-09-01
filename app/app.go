@@ -431,6 +431,22 @@ func (a *App) NewSession(projectID string, worktree bool, name string) (string, 
 	return core.CreateAgentSession(st, project.ID, worktree, name)
 }
 
+func (a *App) NewSessionWithVendor(projectID string, worktree bool, name, vendor string) (string, error) {
+	st, project, err := loadProjectByID(projectID)
+	if err != nil {
+		return "", err
+	}
+	return core.CreateAgentSessionWithVendor(st, project.ID, worktree, name, vendor)
+}
+
+func (a *App) AgentVendors() []core.AgentVendorOption {
+	return core.AgentVendorCatalog()
+}
+
+func (a *App) SwitchSessionVendor(sessionID, vendor string) error {
+	return core.SwitchSessionVendor(core.SessionID(sessionID), vendor)
+}
+
 func (a *App) NewTermSession(projectID string, worktree bool, name string) (string, error) {
 	st, project, err := loadProjectByID(projectID)
 	if err != nil {

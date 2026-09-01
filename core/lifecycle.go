@@ -104,6 +104,7 @@ type SessionProvision struct {
 	Purpose          SessionPurpose
 	SpecificationRef SpecificationRef
 	InitialPrompt    string
+	Vendor           AgentVendor
 }
 
 type SessionLifecycleResult struct {
@@ -322,9 +323,23 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 			session.Kind = KindTerm
 		}
 	} else {
-		runID := NewUUID()
-		session.SessionID = runID
-		session.AgentRuns = []AgentRunRef{{Vendor: AgentVendorClaude, ExternalID: runID}}
+		vendor := request.Vendor
+		if vendor == "" {
+			vendor = AgentVendorClaude
+		}
+		provider, known := providerForVendor(vendor)
+		if !known {
+			return SessionLifecycleResult{}, fmt.Errorf("unbekannter Agent-Vendor %q", vendor)
+		}
+		session.Vendor = vendor
+		if runID := provider.NewRunID(); runID != "" {
+			if vendor == AgentVendorClaude {
+				// SessionID is the legacy Claude-only run field and stays in
+				// step with the canonical AgentRunRef.
+				session.SessionID = runID
+			}
+			session.AgentRuns = []AgentRunRef{{Vendor: vendor, ExternalID: runID}}
+		}
 	}
 	record := LifecycleRecord{
 		TransitionID: NewUUID(), SessionID: session.ID,
@@ -460,6 +475,79 @@ func (l *SessionLifecycle) requireProvisionTargetAvailable(ctx context.Context, 
 
 func (l *SessionLifecycle) Park(ctx context.Context, id SessionID, name string) (SessionLifecycleResult, error) {
 	return l.planExisting(ctx, id, name, SessionDesiredLater)
+}
+
+// SwitchVendor moves a Session to another coding-agent vendor. The target's
+// binary is checked before anything is stopped, so a missing program leaves
+// the running Session untouched. AgentRuns of every vendor survive the
+// switch; the target resumes when it already has one.
+func (l *SessionLifecycle) SwitchVendor(ctx context.Context, sessionID SessionID, vendor AgentVendor) (Session, error) {
+	provider, known := providerForVendor(vendor)
+	if !known {
+		return Session{}, fmt.Errorf("unbekannter Agent-Vendor %q", vendor)
+	}
+	if !providerBinaryAvailable(provider) {
+		return Session{}, fmt.Errorf("%s ist nicht installiert (%s nicht im PATH)", vendor, provider.Binary())
+	}
+	snapshot, err := l.registry.Snapshot(ctx)
+	if err != nil {
+		return Session{}, err
+	}
+	state := snapshot.State()
+	session := state.SessionByID(sessionID)
+	if session == nil {
+		return Session{}, fmt.Errorf("Session %q nicht gefunden", sessionID)
+	}
+	if session.IsTerm() {
+		return Session{}, fmt.Errorf("Session %q ist ein Terminal und hat keinen Agent-Vendor", session.Name)
+	}
+	current := *session
+	if current.SessionVendor() == vendor {
+		return current, nil
+	}
+	var switched Session
+	err = l.withSessionTransition(ctx, current.ID, current.Name, func() error {
+		fresh, err := l.registry.Snapshot(ctx)
+		if err != nil {
+			return err
+		}
+		freshState := fresh.State()
+		resolved := freshState.SessionByID(current.ID)
+		if resolved == nil {
+			return fmt.Errorf("Session %q wurde während des Wechsels entfernt", current.Name)
+		}
+		exists, err := l.runtime.Exists(ctx, *resolved)
+		if err != nil {
+			return err
+		}
+		if exists {
+			if err := l.runtime.Stop(ctx, *resolved); err != nil {
+				return err
+			}
+		}
+		result, err := l.registry.Change(ctx, SetSessionVendor(resolved.ID, resolved.Name, vendor))
+		if err != nil {
+			return err
+		}
+		updated := result.Snapshot.State()
+		target := updated.SessionByID(resolved.ID)
+		if target == nil {
+			return fmt.Errorf("Session %q wurde während des Wechsels entfernt", resolved.Name)
+		}
+		mode := "new"
+		if _, hasRun := target.AgentRun(vendor); hasRun {
+			mode = "resume"
+		}
+		if err := l.runtime.Start(ctx, *target, mode); err != nil {
+			return err
+		}
+		switched = *target
+		return nil
+	})
+	if err != nil {
+		return Session{}, err
+	}
+	return switched, nil
 }
 
 func (l *SessionLifecycle) Remove(ctx context.Context, id SessionID, name string) (SessionLifecycleResult, error) {
@@ -1289,6 +1377,14 @@ func (l *SessionLifecycle) advanceRunning(ctx context.Context, record LifecycleR
 		return l.failRecord(ctx, record, err)
 	}
 	if !exists {
+		if !record.Session.IsTerm() && record.StartMode != "new" {
+			// A vendor that assigns its own run id can only be resumed once
+			// its identity was found. A failure here is not fatal: the
+			// provider falls back to its own continuation form.
+			if resolved, resolveErr := resolveMissingAgentRun(ctx, record.Session); resolveErr == nil {
+				record.Session = resolved
+			}
+		}
 		startErr := l.runtime.Start(ctx, record.Session, record.StartMode)
 		if startErr != nil {
 			exists, err = l.runtime.Exists(ctx, record.Session)
@@ -1639,6 +1735,19 @@ func (tmuxLifecycleRuntime) Start(ctx context.Context, session Session, mode str
 	if info, err := os.Stat(session.Dir); err != nil || !info.IsDir() {
 		return fmt.Errorf("Session directory %q is unavailable", session.Dir)
 	}
+	var provider AgentProvider
+	if !session.IsTerm() {
+		// The binary check happens before the tmux Session exists, so a
+		// missing program leaves nothing behind to clean up.
+		resolved, err := resolveSessionProvider(session)
+		if err != nil {
+			return err
+		}
+		if !providerBinaryAvailable(resolved) {
+			return fmt.Errorf("%s ist nicht installiert (%s nicht im PATH)", resolved.Vendor(), resolved.Binary())
+		}
+		provider = resolved
+	}
 	args := []string{"new-session", "-d", "-s", session.TmuxName(), "-c", session.Dir, "-x", "220", "-y", "50"}
 	if out, err := exec.CommandContext(ctx, "tmux", args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("tmux new-session: %w: %s", err, strings.TrimSpace(string(out)))
@@ -1647,16 +1756,13 @@ func (tmuxLifecycleRuntime) Start(ctx context.Context, session Session, mode str
 	if session.IsTerm() {
 		return nil
 	}
-	run, hasRun := session.AgentRun(AgentVendorClaude)
-	command := "claude --name " + ShellQuote(session.TmuxName())
-	if hasRun {
-		flag := "--resume"
-		if mode == "new" {
-			flag = "--session-id"
-		}
-		command += " " + flag + " " + ShellQuote(run.ExternalID)
-	} else if mode != "new" {
-		command += " --continue"
+	var runRef *AgentRunRef
+	if run, ok := session.AgentRun(provider.Vendor()); ok {
+		runRef = &run
+	}
+	command, err := provider.StartCommand(session, runRef, mode)
+	if err != nil {
+		return err
 	}
 	if _, err := exec.CommandContext(ctx, "tmux", "send-keys", "-t", TargetPane(session.TmuxName()), "-l", command).CombinedOutput(); err != nil {
 		return fmt.Errorf("start coding agent: %w", err)
@@ -1689,10 +1795,14 @@ func (tmuxLifecycleRuntime) DeliverInitial(_ context.Context, session Session, p
 	if session.IsTerm() {
 		return false, errors.New("initial coding prompt cannot be delivered to a terminal Session")
 	}
+	provider, err := resolveSessionProvider(session)
+	if err != nil {
+		return false, err
+	}
 	// enqueuePrompt confirms only in-process scheduling. The durable state
 	// therefore remains delivery_unknown until a future observation can prove
 	// acceptance; reconciliation intentionally does not submit it again.
-	if err := enqueuePrompt(session.TmuxName(), prompt, true, AgentToolClaude, true, true, false, nil); err != nil {
+	if err := enqueuePrompt(session.TmuxName(), prompt, true, provider.Tool(), true, true, false, nil); err != nil {
 		return false, err
 	}
 	return false, nil

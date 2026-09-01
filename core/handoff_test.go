@@ -185,7 +185,11 @@ func TestValidateHandoffTargetRequiresKnownClaudeState(t *testing.T) {
 		{name: "unavailable", mutate: func(o *SessionObservation) { o.Availability = ObservationUnavailable }, wantErr: "nicht vollständig verfügbar"},
 		{name: "content unknown", mutate: func(o *SessionObservation) { o.ContentKnown = false }, wantErr: "nicht bekannt"},
 		{name: "blocked", mutate: func(o *SessionObservation) { o.Status = StatusBlocked }, wantErr: "wartet auf eine Antwort"},
-		{name: "codex unknown", mutate: func(o *SessionObservation) { o.Tool, o.Status = AgentToolCodex, StatusUnknown }, wantErr: "für codex unbekannt"},
+		// Codex ist als Ziel zugelassen, ein fremder Bildschirm bleibt aber ohne
+		// belegbare Eingabebereitschaft.
+		{name: "codex unknown", mutate: func(o *SessionObservation) { o.Tool, o.Status = AgentToolCodex, StatusUnknown }, wantErr: "ist unbekannt"},
+		// Gemini wurde nie beobachtet und bleibt als Ziel gesperrt.
+		{name: "gemini", mutate: func(o *SessionObservation) { o.Tool, o.Status = AgentToolGemini, StatusIdle }, wantErr: "für gemini unbekannt"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -226,10 +230,19 @@ func TestOverviewHandoffCapabilitiesMatchModulePolicy(t *testing.T) {
 		t.Fatalf("blockierte Claude-Session muss als Ziel wählbar bleiben: %#v", got)
 	}
 
-	unknown := handoffObservation(target, AgentToolCodex, StatusUnknown, "Codex ready")
-	got = toOvAgent(target, unknown, "")
+	// Das Einreihen bleibt bewusst großzügig: die Zustellung prüft die
+	// Bereitschaft noch einmal streng. Codex ist deshalb wählbar, sobald seine
+	// Bildschirme aufgenommen sind.
+	codex := handoffObservation(target, AgentToolCodex, StatusUnknown, "Codex ready")
+	got = toOvAgent(target, codex, "")
+	if !got.HandoffSource || !got.HandoffTarget {
+		t.Fatalf("Codex-Fähigkeiten = source %v target %v", got.HandoffSource, got.HandoffTarget)
+	}
+
+	gemini := handoffObservation(target, AgentToolGemini, StatusIdle, "› Type your message")
+	got = toOvAgent(target, gemini, "")
 	if !got.HandoffSource || got.HandoffTarget {
-		t.Fatalf("unknown Codex capabilities = source %v target %v", got.HandoffSource, got.HandoffTarget)
+		t.Fatalf("Gemini-Fähigkeiten = source %v target %v", got.HandoffSource, got.HandoffTarget)
 	}
 }
 
@@ -244,12 +257,22 @@ func TestPromptTerminalInputUsesBracketedPasteForMultilinePrompt(t *testing.T) {
 }
 
 func TestPromptTargetRuntimeKeepsProviderSemanticsSeparate(t *testing.T) {
+	// Gemini's screens were never recorded, so an unknown status is the truth
+	// about Magentic's knowledge and the literal queued path stays open.
+	gemini := promptTargetObservation{
+		Availability: ObservationAvailable, Presence: SessionPresencePresent,
+		Tool: AgentToolGemini, Status: StatusUnknown, ContentKnown: true, Input: promptInputUnknown,
+	}
+	if err := validatePromptTargetObservation("gemini", gemini); err != nil {
+		t.Fatalf("unbeobachteter Anbieter wurde an Claude-Semantik gemessen: %v", err)
+	}
+	// Codex was recorded, so an unfamiliar screen must not receive a prompt.
 	codex := promptTargetObservation{
 		Availability: ObservationAvailable, Presence: SessionPresencePresent,
 		Tool: AgentToolCodex, Status: StatusUnknown, ContentKnown: true, Input: promptInputUnknown,
 	}
-	if err := validatePromptTargetObservation("codex", codex); err != nil {
-		t.Fatalf("generic Codex prompt transport reused Claude status semantics: %v", err)
+	if err := validatePromptTargetObservation("codex", codex); err == nil {
+		t.Fatal("ein fremder Codex-Bildschirm darf keinen Prompt bekommen")
 	}
 	claude := promptTargetObservation{
 		Availability: ObservationAvailable, Presence: SessionPresencePresent,

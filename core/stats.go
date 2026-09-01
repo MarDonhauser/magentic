@@ -178,6 +178,12 @@ func pricedModelName(model, listed string) bool {
 }
 
 func modelCost(provider HistoryProvider, model string, input, output, cacheRead, cacheWrite int64) (float64, bool) {
+	// Only Claude is priced here, and deliberately so. Codex and Copilot bill
+	// against a plan rather than per token — Codex reports a plan type, Copilot
+	// counts its own request units — so multiplying their tokens by API list
+	// prices would produce a number nobody is charged. They stay unpriced until
+	// their own plan accounting is readable, and StatsCostState reports the
+	// resulting mixed coverage instead of hiding it.
 	if provider != HistoryProviderClaude {
 		return 0, false
 	}

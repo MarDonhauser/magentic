@@ -709,6 +709,12 @@ func startSkillAgent(st *State, projectID ProjectID, dir, prompt, kind, nameHint
 	return name, nil
 }
 
+// SwitchSessionVendor changes which coding agent a Session runs.
+func SwitchSessionVendor(sessionID SessionID, vendor string) error {
+	_, err := defaultSessionLifecycle().SwitchVendor(context.Background(), sessionID, AgentVendor(strings.TrimSpace(vendor)))
+	return err
+}
+
 // SendSkillByID resolves the action target through its durable Registry
 // identity.
 func SendSkillByID(id SessionID, cmd string) error {
@@ -735,7 +741,7 @@ func SendSkillByIDWithObserver(id SessionID, cmd string, observe func(context.Co
 // dispatcher delivers it as soon as the Session is input-ready again.
 func sendSkillToSession(session Session, cmd string, observe observationReader) error {
 	if session.IsTerm() {
-		return fmt.Errorf("%s ist eine Terminal-Session — dort läuft kein Claude", session.Name)
+		return fmt.Errorf("%s ist eine Terminal-Session — dort läuft kein Coding-Agent", session.Name)
 	}
 	return SendQueuedMessageWithObserver(session.ID, QueuedMessageKindSkill, cmd, observe)
 }
@@ -777,10 +783,13 @@ func validatePromptTargetObservation(name string, observed promptTargetObservati
 	default:
 		return fmt.Errorf("in Ziel-Session %q läuft kein unterstütztes KI-Tool mehr", name)
 	}
-	if observed.Status == StatusUnknown && observed.Tool != AgentToolClaude {
-		// The non-Claude prompt Adapters support literal queued input, but do not
-		// claim UI-phase semantics that Observation cannot establish.
-		return nil
+	if observed.Status == StatusUnknown {
+		// A vendor whose screens were never recorded cannot report a phase; its
+		// Adapter still supports literal queued input. For a recorded vendor an
+		// unknown status means an unfamiliar screen, and nothing goes into it.
+		if provider, known := providerForPaneCommand(observed.Tool); known && !provider.ScreensRecorded() {
+			return nil
+		}
 	}
 	return validatePromptTargetStatus(name, observed.Status)
 }
@@ -914,15 +923,21 @@ func validateWorktreeRemovalObservations(sessions []Agent, snapshot ObservationS
 }
 
 func CreateAgentSession(st *State, projectID ProjectID, worktree bool, name string) (string, error) {
-	return createSession(st, projectID, worktree, name, "")
+	return CreateAgentSessionWithVendor(st, projectID, worktree, name, "")
+}
+
+// CreateAgentSessionWithVendor starts a coding Session with an explicitly
+// chosen coding agent. An empty vendor means Claude.
+func CreateAgentSessionWithVendor(st *State, projectID ProjectID, worktree bool, name, vendor string) (string, error) {
+	return createSession(st, projectID, worktree, name, "", AgentVendor(strings.TrimSpace(vendor)))
 }
 
 func CreateTermSession(st *State, projectID ProjectID, worktree bool, name string) (string, error) {
-	return createSession(st, projectID, worktree, name, KindTerm)
+	return createSession(st, projectID, worktree, name, KindTerm, "")
 }
 
 func CreateDockSession(st *State, projectID ProjectID) (string, error) {
-	return createSession(st, projectID, false, "", KindDock)
+	return createSession(st, projectID, false, "", KindDock, "")
 }
 
 func CreateTermSessionForID(st *State, sessionID SessionID, name string) (string, error) {
@@ -971,7 +986,7 @@ func pickSessionName(st *State, name, hint, kind string) (string, error) {
 	return name, nil
 }
 
-func createSession(st *State, projectID ProjectID, worktree bool, name, kind string) (string, error) {
+func createSession(st *State, projectID ProjectID, worktree bool, name, kind string, vendor AgentVendor) (string, error) {
 	current, err := LoadState()
 	if err != nil {
 		return "", err
@@ -1003,6 +1018,7 @@ func createSession(st *State, projectID ProjectID, worktree bool, name, kind str
 		ProjectID: proj.ID, Name: name, Directory: proj.Path,
 		CreateWorktree: worktree, Worktree: worktree,
 		Kind: sessionKind, Presentation: presentation, Purpose: SessionPurposeWork,
+		Vendor: vendor,
 	})
 	if err != nil {
 		return "", err

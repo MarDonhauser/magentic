@@ -1,0 +1,20 @@
+codex
+U751725@OMT-QF67Q721NP-LHIND cap % codex
+╭─────────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.151.0)                          │
+│                                                     │
+│ model:     gpt-5.6-sol high   /model to change      │
+│ directory: /private/tmp/claude-503/…/scratchpad/cap │
+╰─────────────────────────────────────────────────────╯
+
+  Tip: Run codex app to open the Desktop app (it installs on macOS if needed).
+
+⚠ The mobbin MCP server requires OAuth reauthentication. Run `codex mcp login mobbin`.
+
+› schreibe einen ausfuehrlichen absatz ueber das wetter
+
+• Working (21s • esc to interrupt)
+
+› Ask Codex to do anything
+
+  gpt-5.6-sol high · /private/tmp/claude-503/-Users-U751725-magentic/94439c4b-e1ac-48ab-bd8a-bfa1bb601442/scratchpad/cap

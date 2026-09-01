@@ -15,24 +15,89 @@ const WINDOW_COLORS = {
   light: { hex: '#f7f8fa', rgba: [247, 248, 250, 255] },
 };
 
+// Das Terminal ist kein Gastfenster, sondern die Inhaltsfläche der Anwendung.
+// Jede ANSI-Farbe ist deshalb die Projektion einer Rolle aus style.css und keine
+// eigenständige Terminal-Palette. Die hellen Varianten entstehen aus derselben
+// Farbe in OKLCH: im Dunklen eine Stufe heller bei leicht reduzierter Sättigung,
+// im Hellen eine Stufe dunkler. ANSI 0 trägt die Struktur (--grid bzw. --ink),
+// ANSI 8 den gedämpften Text (--muted). Alle Werte außer ANSI 0 im Dunklen
+// erreichen mindestens 4.5:1 auf dem jeweiligen Terminal-Hintergrund.
 const TERMINAL_THEMES = {
   dark: {
-    background: '#282d35', foreground: '#dbe0e6', cursor: '#5eead4', cursorAccent: '#282d35',
-    selectionBackground: 'rgba(55,207,189,0.30)', selectionForeground: '#f2f5f7',
-    black: '#414852', red: '#e06c75', green: '#98c379', yellow: '#e5c07b',
-    blue: '#61afef', magenta: '#c678dd', cyan: '#56b6c2', white: '#dbe0e6',
-    brightBlack: '#77818d', brightRed: '#ef7d86', brightGreen: '#add18d', brightYellow: '#efd08c',
-    brightBlue: '#78bdf5', brightMagenta: '#d58be8', brightCyan: '#70c7d1', brightWhite: '#f2f5f7',
+    background: '#282d35',                              // --term-bg
+    foreground: '#e4e8ee',                              // --ink
+    cursor: '#37cfbd',                                  // --accent
+    cursorAccent: '#282d35',
+    selectionBackground: 'rgba(55,207,189,0.26)',       // --accent
+    selectionForeground: '#f3f7fd',
+    black: '#3a4149',                                   // --grid
+    // --critical ist gegen --page abgestimmt und verliert auf dem helleren
+    // Terminal-Grund Kontrast; eine OKLCH-Stufe heller bringt es auf 4.59:1.
+    red: '#e57179',                                     // --critical +1
+    green: '#98c379',                                   // --good
+    yellow: '#e0b25e',                                  // --warning
+    blue: '#5eb7e8',                                    // --info
+    magenta: '#c678dd',                                 // --graph-series-1
+    cyan: '#37cfbd',                                    // --accent
+    white: '#e4e8ee',                                   // --ink
+    brightBlack: '#909aa6',                             // --muted
+    brightRed: '#fa8d92', brightGreen: '#b2da96', brightYellow: '#f6cb7f',
+    brightBlue: '#7ecffd', brightMagenta: '#dc93f1', brightCyan: '#67e6d4',
+    brightWhite: '#f3f7fd',
   },
   light: {
-    background: '#fcfcfd', foreground: '#30343b', cursor: '#178f83', cursorAccent: '#fcfcfd',
-    selectionBackground: 'rgba(23,143,131,0.18)', selectionForeground: '#1f252b',
-    black: '#4f5964', red: '#bb4651', green: '#287a50', yellow: '#91631b',
-    blue: '#356fae', magenta: '#7d5aa2', cyan: '#167f82', white: '#68737f',
-    brightBlack: '#66717d', brightRed: '#b83246', brightGreen: '#1f754b', brightYellow: '#875500',
-    brightBlue: '#2166ad', brightMagenta: '#764b99', brightCyan: '#087578', brightWhite: '#1f252b',
+    background: '#fcfcfd',                              // --term-bg
+    foreground: '#272c33',                              // --ink
+    cursor: '#117a70',                                  // --accent
+    cursorAccent: '#fcfcfd',
+    selectionBackground: 'rgba(17,122,112,0.16)',       // --accent
+    selectionForeground: '#1f252b',
+    // Auf hellem Grund kann ANSI 7 kein Weiß sein; die beiden hellen Stufen
+    // tragen hier den lesbaren Sekundär- und den maximalen Kontrast.
+    black: '#272c33',                                   // --ink
+    red: '#bb4651',                                     // --critical
+    green: '#287a50',                                   // --good
+    yellow: '#91631b',                                  // --warning
+    blue: '#356fae',                                    // --info
+    magenta: '#8754a6',                                 // --graph-series-1
+    cyan: '#117a70',                                    // --accent
+    white: '#59636f',                                   // --ink-2
+    brightBlack: '#68737f',                             // --muted
+    brightRed: '#a02738', brightGreen: '#006238', brightYellow: '#784a00',
+    brightBlue: '#165695', brightMagenta: '#6f3a8d', brightCyan: '#006258',
+    brightWhite: '#272c33',                             // --ink
   },
 };
+
+// Claude Code zeichnet seine Oberfläche nicht aus den sechzehn ANSI-Farben,
+// sondern aus dem festen 256er-Würfel: in rund 2900 Zeichen aus vier laufenden
+// Sitzungen stammte jede einzelne Farbe aus dem Bereich 16-255. Die Palette oben
+// trägt damit die Shell im Dock und alles, was einfaches ANSI schreibt; für die
+// Agentenansicht entscheidet der Würfel.
+//
+// Der Farbwürfel 16-231 bleibt unverändert, das sind fremde Produktfarben. Nur
+// die Graustufenrampe 232-255 läuft neu auf der Neutralachse dieser Oberfläche
+// (OKLCH-Farbton -103°, gemittelt über --page bis --ink). Die Helligkeit jeder
+// Stufe bleibt exakt erhalten, der Kontrast also auch; die Rahmen und der
+// gedämpfte Text der Agenten stehen danach im selben Blaugrau wie die Anwendung
+// statt in einem neutralen Grau, das zu nichts im Fenster gehört.
+const GREY_RAMP = [
+  '#06080b', '#0f1217', '#181c22', '#22262d', '#2b3138', '#343b43',
+  '#3e454e', '#484f59', '#515963', '#5b636d', '#656d78', '#6f7782',
+  '#79818b', '#838b95', '#8e959f', '#989fa8', '#a2a9b1', '#adb3bb',
+  '#b7bdc4', '#c2c7cd', '#cdd0d6', '#d7dadf', '#e2e4e7', '#edeef0',
+];
+
+const EXTENDED_ANSI = (() => {
+  const step = v => (v === 0 ? 0 : 55 + 40 * v);
+  const hex = v => v.toString(16).padStart(2, '0');
+  const cube = [];
+  for (let r = 0; r < 6; r++)
+    for (let g = 0; g < 6; g++)
+      for (let b = 0; b < 6; b++)
+        cube.push('#' + hex(step(r)) + hex(step(g)) + hex(step(b)));
+  return [...cube, ...GREY_RAMP];
+})();
 
 let initialised = false;
 
@@ -75,7 +140,7 @@ export function currentTheme() {
 }
 
 export function terminalTheme(theme = currentTheme()) {
-  return { ...TERMINAL_THEMES[normaliseTheme(theme)] };
+  return { ...TERMINAL_THEMES[normaliseTheme(theme)], extendedAnsi: [...EXTENDED_ANSI] };
 }
 
 export function applyTheme(theme, { persist = false, notify = true } = {}) {

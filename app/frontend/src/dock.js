@@ -6,6 +6,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { BrowserOpenURL } from '../wailsjs/runtime/runtime';
 import { developerIcon } from './avatar.js';
 import { onThemeChange, terminalTheme } from './theme.js';
+import { TERMINAL_OPTIONS, setUpTerminal } from './terminal-setup.js';
 import { dockRefKey, normalizeDockRef, normalizeDockState, resolveLegacyDockRefs } from './dock-state.js';
 
 const STORE_KEY = 'magentic.dock';
@@ -264,19 +265,17 @@ function ensureLive(t) {
   t.live = true;
 
   const term = new Terminal({
+    ...TERMINAL_OPTIONS,
     fontSize: 13,
-    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+    lineHeight: 1.1,
     scrollback: 10000,
-    scrollSensitivity: 5,
-    fastScrollSensitivity: 12,
-    cursorBlink: true,
-    macOptionIsMeta: true,
     theme: terminalTheme(),
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.loadAddon(new WebLinksAddon((e, uri) => openURL(uri)));
   term.open(t.host);
+  setUpTerminal(term, () => fit.fit());
   bindKeys(term, t);
 
   term.onData(d => cb.write?.(t.ref, toB64(d)));

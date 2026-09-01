@@ -1,0 +1,16 @@
+╭─────────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.151.0)                          │
+│                                                     │
+│ model:     gpt-5.6-sol high   /model to change      │
+│ directory: /private/tmp/claude-503/…/scratchpad/cap │
+╰─────────────────────────────────────────────────────╯
+
+  Tip: New Use /fast to enable our fastest inference with increased plan usage.
+
+⚠ The mobbin MCP server requires OAuth reauthentication. Run `codex mcp login mobbin`.
+
+⚠ MCP startup incomplete (failed: mobbin)
+
+› Ask Codex to do anything
+
+  gpt-5.6-sol high · /private/tmp/claude-503/-Users-U751725-magentic/94439c4b-e1ac-48ab-bd8a-bfa1bb601442/scratchpad/cap

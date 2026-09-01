@@ -430,13 +430,14 @@ func TestAppHandoffSessionRejectsUnavailableOrUnknownTargetWithoutSending(t *tes
 		assertHandoffQueued(t, target.ID)
 	})
 
-	t.Run("unknown Codex readiness", func(t *testing.T) {
-		logPath := installHandoffFakeTmux(t, "Codex ready", "claude", "codex")
+	// Gemini wurde nie beobachtet; seine Eingabebereitschaft lässt sich nicht
+	// belegen, also geht kein Handoff dorthin.
+	t.Run("unbeobachteter Anbieter als Ziel", func(t *testing.T) {
+		logPath := installHandoffFakeTmux(t, "› Type your message", "claude", "gemini")
 		source, target := defaultHandoffSessions()
-		target.Kind = core.KindTerm
 		handoffTestState(t, source, target)
 		err := newHandoffTestApp().HandoffSession(string(source.ID), string(target.ID))
-		if err == nil || !strings.Contains(err.Error(), "für codex unbekannt") {
+		if err == nil || !strings.Contains(err.Error(), "für gemini unbekannt") {
 			t.Fatalf("HandoffSession() error = %v", err)
 		}
 		assertNoHandoffSend(t, logPath)
