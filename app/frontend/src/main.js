@@ -335,10 +335,15 @@ function makeTerm(sessionID, name) {
   cover.style.height = '0px';
   wrap.appendChild(cover);
 
-  const t = { term, fit, wrap, name, sessionID, connectionKey, cover, promptPattern: '' };
+  const t = { term, fit, wrap, name, sessionID, connectionKey, cover, promptPattern: '', userFocused: false };
   terms.set(name, t);
-  inner.addEventListener('focusin', () => updatePromptCover(t, 'focus'));
-  inner.addEventListener('focusout', () => setTimeout(() => updatePromptCover(t, lastStatus.get(name)), 0));
+  // Die Anwendung fokussiert das Terminal beim Öffnen selbst. Aufgedeckt wird
+  // deshalb nicht bei Fokus, sondern erst, wenn wirklich jemand hineingeklickt
+  // hat — sonst tippt man in eine verdeckte Zeile.
+  inner.addEventListener('pointerdown', () => {
+    t.userFocused = true;
+    updatePromptCover(t, lastStatus.get(name));
+  });
   return t;
 }
 
@@ -351,17 +356,23 @@ const lastStatus = new Map();
 // oder hat das Terminal den Fokus, bleibt alles sichtbar.
 function updatePromptCover(t, status) {
   if (!t?.cover) return;
-  const reveal = status === 'blocked' || status === 'focus' || t.wrap.contains(document.activeElement);
-  if (reveal || !t.promptPattern) { t.cover.style.height = '0px'; return; }
+  const reveal = status === 'blocked' || t.userFocused;
+  const screen = t.term.element?.querySelector('.xterm-screen');
+  if (reveal || !t.promptPattern || !screen) { t.cover.style.height = '0px'; return; }
   const buffer = t.term.buffer.active;
   const lines = [];
   for (let i = buffer.viewportY; i < buffer.viewportY + t.term.rows; i++) {
     lines.push(buffer.getLine(i)?.translateToString(true) ?? '');
   }
   const rows = promptCoverRows(lines, t.promptPattern);
-  const cellHeight = t.term.element?.querySelector('.xterm-rows')?.firstElementChild?.offsetHeight
-    || t.term.options.fontSize * (t.term.options.lineHeight || 1);
-  t.cover.style.height = `${rows * cellHeight}px`;
+  if (!rows) { t.cover.style.height = '0px'; return; }
+  // Gemessen wird an der gezeichneten Fläche, nicht am Wrapper: der WebGL-
+  // Renderer kennt kein .xterm-rows, und die Viewport-Höhe ist selten ein
+  // glattes Vielfaches der Zeilenhöhe. Sonst sitzt die Blende schief.
+  const screenRect = screen.getBoundingClientRect();
+  const wrapRect = t.wrap.getBoundingClientRect();
+  t.cover.style.bottom = `${Math.max(0, wrapRect.bottom - screenRect.bottom)}px`;
+  t.cover.style.height = `${(screenRect.height / t.term.rows) * rows}px`;
 }
 
 const termBarEl = $('term-bar');
@@ -459,6 +470,15 @@ termPromptEl.addEventListener('keydown', e => {
 }, true);
 
 termPromptEl.addEventListener('blur', () => setTimeout(closeCompletions, 120));
+
+// Wer in den Composer zurückkehrt, braucht die Eingabezeile des Agenten nicht
+// mehr zu sehen.
+termPromptEl.addEventListener('focus', () => {
+  const t = terms.get(activeTerm);
+  if (!t) return;
+  t.userFocused = false;
+  updatePromptCover(t, lastStatus.get(activeTerm));
+});
 
 termCompletionsEl.addEventListener('mousedown', e => {
   const row = e.target.closest('.row');
