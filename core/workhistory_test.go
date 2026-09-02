@@ -378,6 +378,23 @@ func TestHistoryLocationFallbackRanksOnlyProviderCompatibleSessions(t *testing.T
 	}
 }
 
+func TestSharedWorkHistoryReturnsOneInstance(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MAGENTIC_STATE", filepath.Join(dir, "state.json"))
+	resetSharedWorkHistoryForTest()
+	first, err := SharedWorkHistory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := SharedWorkHistory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatal("SharedWorkHistory returned two instances")
+	}
+}
+
 func openTestWorkHistory(t *testing.T) (*WorkHistory, string, string, string) {
 	t.Helper()
 	return openTestWorkHistoryWith(t, WorkHistoryConfig{})

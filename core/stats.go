@@ -420,7 +420,7 @@ func statsCommitResult(project string, fact RepositoryFact[RepositoryOwnCommitSe
 // its normalized facts with the independent Git commit metrics. Quota remains
 // a separate concept and is intentionally not read here.
 func BuildStats(state *State, days int) Stats {
-	history, openErr := OpenWorkHistory(WorkHistoryConfig{})
+	history, openErr := SharedWorkHistory()
 	return buildStats(context.Background(), state, days, history, time.Now(), openErr)
 }
 

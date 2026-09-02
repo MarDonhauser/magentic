@@ -469,6 +469,27 @@ func OpenWorkHistory(config WorkHistoryConfig) (*WorkHistory, error) {
 	return h, nil
 }
 
+var (
+	sharedWorkHistoryOnce sync.Once
+	sharedWorkHistory     *WorkHistory
+	sharedWorkHistoryErr  error
+)
+
+// SharedWorkHistory hält eine Instanz je Prozess. Der Index ist eine
+// gemeinsame Datenbank; jede Abfrage eine eigene Instanz zu öffnen würde
+// Verbindungen und Hintergrundläufe vervielfachen.
+func SharedWorkHistory() (*WorkHistory, error) {
+	sharedWorkHistoryOnce.Do(func() {
+		sharedWorkHistory, sharedWorkHistoryErr = OpenWorkHistory(WorkHistoryConfig{})
+	})
+	return sharedWorkHistory, sharedWorkHistoryErr
+}
+
+func resetSharedWorkHistoryForTest() {
+	sharedWorkHistoryOnce = sync.Once{}
+	sharedWorkHistory, sharedWorkHistoryErr = nil, nil
+}
+
 func ensurePrivateHistoryDir(path string) error {
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return fmt.Errorf("create work history index: %w", err)
