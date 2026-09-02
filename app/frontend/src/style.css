@@ -610,6 +610,11 @@ body.reordering .pname, body.reordering .divider-name { pointer-events: none; }
 }
 .sbranch .ico { width: 0.9em; height: 0.9em; }
 .sbranch.wt { color: var(--info); }
+.sservice {
+  flex: none; display: inline-flex; align-items: center; gap: 3px;
+  color: var(--good); font-size: var(--fs-micro); white-space: nowrap;
+}
+.sservice .ico { width: 0.9em; height: 0.9em; }
 .sstatus {
   color: var(--muted); font-size: var(--fs-meta);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -883,7 +888,18 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
   color: var(--muted); font-size: var(--fs-meta);
   border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px;
 }
-.tb-actions { margin-left: auto; display: flex; gap: 6px; }
+.tb-actions { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.tb-split { display: inline-flex; flex: none; }
+.tb-split .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.tb-split .tb-split-more { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 0; padding-inline: 5px; }
+#terms:not(.hydra) #term-bar .tb-split .tb-split-more { padding-inline: 6px; }
+.tb-split .tb-split-more .ico { width: 12px; height: 12px; }
+.tb-service {
+  display: inline-flex; align-items: center; gap: 4px; flex: none;
+  color: var(--good); font-size: var(--fs-meta);
+  border: 1px solid color-mix(in srgb, var(--good) 40%, var(--border)); border-radius: 999px; padding: 1px 8px;
+}
+.tb-service .ico { width: 11px; height: 11px; }
 
 .term-wrap { position: absolute; inset: 48px 8px 8px 10px; display: none; background: var(--term-bg); --wails-drop-target: drop; }
 .term-wrap.active { display: block; }
@@ -1334,6 +1350,11 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
 .pill .name { font-weight: var(--fw-semibold); }
 .kind { display: inline-flex; color: var(--info); margin-right: -2px; }
 .pill .st { color: var(--ink-2); }
+.pill .pill-service {
+  display: inline-flex; align-items: center; gap: 3px;
+  color: var(--good); font-size: var(--fs-micro);
+}
+.pill .pill-service .ico { width: 0.9em; height: 0.9em; }
 .pill .age { color: var(--muted); font-variant-numeric: tabular-nums; }
 
 .warn {
@@ -1546,6 +1567,13 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
 #submenu .linkurl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #submenu .linktime { margin-left: auto; padding-left: 10px; color: var(--muted); font-size: var(--fs-meta); flex: none; font-variant-numeric: tabular-nums; }
 #submenu .subname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#submenu .mi-sep { height: 1px; margin: 4px 6px; background: var(--border); }
+#submenu .mi-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+#submenu .mi-hint { color: var(--muted); font-size: var(--fs-micro); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#submenu .mi-kbd { margin-left: auto; padding-left: 12px; color: var(--muted); font-size: var(--fs-meta); flex: none; }
+#submenu .mi.danger { color: var(--critical); }
+#submenu .mi.danger:hover { background: rgba(224,108,117,0.14); }
+#submenu .mi > .ico { flex: none; }
 
 #search-view { position: absolute; inset: 0; display: none; flex-direction: column; padding: 4px 20px 10px; }
 #search-bar { display: flex; gap: 8px; padding: 8px 0 12px; }

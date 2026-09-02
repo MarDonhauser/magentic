@@ -61,6 +61,7 @@ const (
 	registryQueueDueAutomation
 	registryRecordAgentRun
 	registrySetVendor
+	registrySetService
 	registryAddDivider
 	registryRenameDivider
 	registryRemoveDivider
@@ -102,6 +103,7 @@ type RegistryChange struct {
 	automationID string
 	agentRun     AgentRunRef
 	vendor       AgentVendor
+	service      bool
 	at           time.Time
 }
 
@@ -195,6 +197,13 @@ func DequeueSessionMessage(sessionID SessionID, name, messageID string) Registry
 // deliverable again.
 func ResetQueuedMessageAttempt(sessionID SessionID, name, messageID string) RegistryChange {
 	return RegistryChange{kind: registryResetMessageAttempt, sessionID: sessionID, sessionName: name, messageID: messageID}
+}
+
+// SetSessionService marks a Session as a service runner: it only keeps a
+// process alive (dev server, watcher) and is not a working Session. Views
+// that show working Sessions side by side leave it out.
+func SetSessionService(sessionID SessionID, name string, service bool) RegistryChange {
+	return RegistryChange{kind: registrySetService, sessionID: sessionID, sessionName: name, service: service}
 }
 
 func SetSessionAutomation(sessionID SessionID, name string, automation SessionAutomation) RegistryChange {
@@ -356,7 +365,7 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 		id := state.Agents[idx].ID
 		state.Agents = append(state.Agents[:idx], state.Agents[idx+1:]...)
 		return true, "", id, nil
-	case registryMarkSeen, registryMarkLater, registryReopenSession, registryMarkDeploy, registryRenameSession, registryRecordAgentRun, registrySetVendor:
+	case registryMarkSeen, registryMarkLater, registryReopenSession, registryMarkDeploy, registryRenameSession, registryRecordAgentRun, registrySetVendor, registrySetService:
 		idx := sessionIndex(state, change.sessionID, change.sessionName)
 		if idx < 0 {
 			return false, "", "", fmt.Errorf("Session %q nicht gefunden", change.sessionName)
@@ -412,6 +421,11 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 				return false, "", session.ID, nil
 			}
 			session.Vendor = change.vendor
+		case registrySetService:
+			if session.Service == change.service {
+				return false, "", session.ID, nil
+			}
+			session.Service = change.service
 		case registryRenameSession:
 			if change.newName == "" {
 				return false, "", "", fmt.Errorf("leerer Session-Name")

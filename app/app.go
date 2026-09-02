@@ -328,6 +328,15 @@ func (a *App) MarkSeen(sessionID string) error {
 	return err
 }
 
+func (a *App) SetSessionService(sessionID string, service bool) error {
+	_, session, err := loadSessionByID(sessionID)
+	if err != nil {
+		return err
+	}
+	_, err = core.OpenRegistry(core.StatePath()).Change(a.ctx, core.SetSessionService(session.ID, session.Name, service))
+	return err
+}
+
 func (a *App) GitGraph(projectID string, limit int) (core.GitGraph, error) {
 	st, project, err := loadProjectByID(projectID)
 	if err != nil {

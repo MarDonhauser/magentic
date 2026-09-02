@@ -116,6 +116,7 @@ type Session struct {
 	DeployAt         time.Time           `json:"deploy_at,omitzero"`
 	LaterAt          time.Time           `json:"later_at,omitzero"`
 	SeenAt           time.Time           `json:"seen_at,omitzero"`
+	Service          bool                `json:"service,omitempty"`
 	Outbox           []QueuedMessage     `json:"outbox,omitempty"`
 	Automation       *SessionAutomation  `json:"automation,omitempty"`
 }

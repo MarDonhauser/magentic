@@ -27,6 +27,7 @@ type OvAgent struct {
 	Branch        string    `json:"branch,omitempty"`
 	Unread        bool      `json:"unread"`
 	Dock          bool      `json:"dock"`
+	Service       bool      `json:"service"`
 	HandoffSource bool      `json:"handoffSource"`
 	HandoffTarget bool      `json:"handoffTarget"`
 
@@ -614,6 +615,7 @@ func toOvAgent(a Agent, observed SessionObservation, branch string) OvAgent {
 		Branch:        branch,
 		Unread:        observed.Unread,
 		Dock:          a.IsDock(),
+		Service:       a.Service,
 		HandoffSource: handoffSource,
 		HandoffTarget: handoffTarget,
 		Queued:        queuedMessagesOverview(a.Outbox),
