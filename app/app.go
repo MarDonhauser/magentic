@@ -89,6 +89,7 @@ func (a *App) startup(ctx context.Context) {
 			Key: "startup:restore", Kind: core.AttentionEventStartupFailed,
 		})
 	}
+	startControlAPI()
 	go a.watchLoop()
 	go a.hookReportLoop()
 }
@@ -125,6 +126,7 @@ func escapeTermPath(p string) string {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	stopControlAPI()
 	destroyNotchWindow()
 	installNotchOwner(nil)
 	a.mu.Lock()

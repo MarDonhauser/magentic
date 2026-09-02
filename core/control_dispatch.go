@@ -250,11 +250,15 @@ func (s *ControlService) sessionStart(ctx context.Context, request ControlReques
 		return controlFailure(request.ID, ControlFailed, fmt.Sprintf("Session konnte nicht gestartet werden: %v", err))
 	}
 	view := controlSessionView(result.Session)
-	return ControlResponse{ID: request.ID, Outcome: ControlOK, Result: &ControlResult{
-		SessionID: result.Session.ID, Session: &view,
-		Dir: result.Session.Dir, Worktree: result.Session.Dir, WorktreeRef: scope.Reference,
+	response := &ControlResult{
+		SessionID: result.Session.ID, Session: &view, Dir: result.Session.Dir,
 		Vendor: vendor, Delivery: controlPromptDelivery(result.Record.PromptDelivery),
-	}}
+	}
+	if result.Session.Worktree {
+		// Only a Session that actually runs in a Worktree reports one.
+		response.Worktree, response.WorktreeRef = result.Session.Dir, scope.Reference
+	}
+	return ControlResponse{ID: request.ID, Outcome: ControlOK, Result: response}
 }
 
 func controlSupportedVendors() string {

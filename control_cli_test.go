@@ -142,19 +142,34 @@ func TestControlCLIMachineReadableOutput(t *testing.T) {
 func TestControlCLIKeepsDiagnosticsOffStandardOutput(t *testing.T) {
 	socket := controlCLITestSocket(t, func(request core.ControlRequest) core.ControlResponse {
 		return core.ControlResponse{ID: request.ID, Outcome: core.ControlOK,
-			Message: "Ein Hinweis, der die Standardausgabe nicht verunreinigen darf.",
+			Message: "Ein Hinweis für Menschen.",
 			Result:  &core.ControlResult{SessionID: "session-1"}}
 	})
-	stdout, stderr, _ := runControlCLI(t, socket, "list", "--json")
-	if strings.Contains(stdout, "Hinweis") {
-		t.Fatalf("Diagnose landete auf der Standardausgabe: %q", stdout)
+	// In machine-readable mode the document is the only thing on standard
+	// output, and it stays parseable on its own.
+	stdout, _, _ := runControlCLI(t, socket, "list", "--json")
+	if lines := strings.Split(strings.TrimSpace(stdout), "\n"); len(lines) != 1 {
+		t.Fatalf("Standardausgabe = %d Zeilen, want genau ein Dokument", len(lines))
 	}
 	var response core.ControlResponse
 	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &response); err != nil {
-		t.Fatalf("Dokument nicht parsebar: %v", err)
+		t.Fatalf("Dokument nicht parsebar: %v (%s)", err, stdout)
+	}
+	if response.Message != "Ein Hinweis für Menschen." {
+		t.Fatalf("Das Dokument trägt die Begründung nicht: %+v", response)
+	}
+
+	// In human-readable mode the same facts are shown, and the prose goes to
+	// the error output rather than into whatever a caller might pipe.
+	stdout, stderr, _ := runControlCLI(t, socket, "list")
+	if strings.Contains(stdout, "Hinweis") {
+		t.Fatalf("Die Begründung landete auf der Standardausgabe: %q", stdout)
 	}
 	if !strings.Contains(stderr, "Hinweis") {
-		t.Fatalf("Diagnose fehlt auf der Fehlerausgabe: %q", stderr)
+		t.Fatalf("Die Begründung fehlt auf der Fehlerausgabe: %q", stderr)
+	}
+	if !strings.Contains(stdout, "session-1") {
+		t.Fatalf("Die Standardausgabe nennt die SessionID nicht: %q", stdout)
 	}
 }
 

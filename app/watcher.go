@@ -48,6 +48,7 @@ func (a *App) storeObservation(snapshot core.ObservationSnapshot, sessions []cor
 	a.observationAt = time.Now()
 	a.observationInput = observationFingerprints(sessions)
 	a.observationMu.Unlock()
+	publishControlObservation(sessions, snapshot)
 }
 
 func (a *App) observationFor(sessions []core.Session, fresh bool) core.ObservationSnapshot {

@@ -82,18 +82,18 @@
 
 ## 6. CLI front door
 
-- [ ] 6.1 Add the `magentic session` verb tree to the root package as a socket
+- [x] 6.1 Add the `magentic session` verb tree to the root package as a socket
       client, and verify a test asserts it performs no direct Registry, tmux, or
       Git access on its own path
-- [ ] 6.2 Implement the machine-readable output mode (exactly one JSON document
+- [x] 6.2 Implement the machine-readable output mode (exactly one JSON document
       on stdout, diagnostics on stderr) and verify tests parse the document for a
       success and a failure invocation
-- [ ] 6.3 Implement exit codes distinguishing success, refused/failed request,
+- [x] 6.3 Implement exit codes distinguishing success, refused/failed request,
       and addressing error, and verify a test covers each
-- [ ] 6.4 Report a distinct unavailable outcome naming the expected socket path
+- [x] 6.4 Report a distinct unavailable outcome naming the expected socket path
       when nothing serves, and verify a test asserts no Magentic process is
       started implicitly
-- [ ] 6.5 Extend `magentic --help` with the new verbs and verify the output lists
+- [x] 6.5 Extend `magentic --help` with the new verbs and verify the output lists
       every verb in the spec
 
 ## 7. Serving process and interfaces

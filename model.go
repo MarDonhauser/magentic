@@ -720,6 +720,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.poll.observation = msg.observation
 		m.poll.observed = msg.observed
+		// Die Steuer-API leitet ihre Ereignisse aus genau diesem Durchlauf ab.
+		publishControlObservation(m.state.Agents, msg.observation)
 		m.poll.discovery = msg.discovery
 		m.poll.diskState = msg.diskState
 		m.poll.zeitgeist = msg.zeitgeist
