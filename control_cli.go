@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -270,4 +271,51 @@ func controlSessionHelp() string {
 	help.WriteString("\n  --json     Genau ein JSON-Dokument auf die Standardausgabe\n")
 	help.WriteString("  --socket   Abweichende Sitzungs-Adresse der Steuer-API\n")
 	return help.String()
+}
+
+// cliControlSkill installs the shipped agent instruction file into a Project.
+// A second install replaces Magentic's section instead of duplicating it.
+func cliControlSkill(args []string) {
+	mode := ""
+	if len(args) > 0 {
+		mode = args[0]
+	}
+	if mode != "install" {
+		fmt.Fprintln(os.Stderr, "magentic skill install [pfad] — die Agent-Anleitung in ein Projekt schreiben")
+		os.Exit(1)
+	}
+	path := "."
+	if len(args) > 1 {
+		path = args[1]
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	state, err := core.LoadState()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	var project core.Project
+	for _, registered := range state.Projects {
+		if registered.Path == absolute {
+			project = registered
+		}
+	}
+	if project.Path == "" {
+		fmt.Fprintf(os.Stderr, "%s ist kein registriertes Projekt — zuerst »magentic add« aufrufen.\n", absolute)
+		os.Exit(1)
+	}
+	changed, err := core.InstallControlSkill(project)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if !changed {
+		fmt.Printf("Nichts zu tun: %s trägt die Anleitung bereits so.\n", core.ControlSkillPath(project))
+		return
+	}
+	fmt.Printf("Die Agent-Anleitung steht jetzt in %s.\n", core.ControlSkillPath(project))
 }

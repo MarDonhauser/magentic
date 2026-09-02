@@ -112,21 +112,21 @@
 
 ## 8. Agent integration
 
-- [ ] 8.1 Export `MAGENTIC_ENV=1`, the socket path, SessionID, ProjectID, and the
+- [x] 8.1 Export `MAGENTIC_ENV=1`, the socket path, SessionID, ProjectID, and the
       Worktree fact into every provisioned Session runtime, and verify tests cover
       an agent Session, a terminal Session, and an adopted runtime carrying no
       marker
-- [ ] 8.2 Implement the self-identification verb resolving the caller's claimed
+- [x] 8.2 Implement the self-identification verb resolving the caller's claimed
       marker facts against the Registry, and verify tests cover a managed
       occupant and the `not-managed` outcome for unresolvable facts
-- [ ] 8.3 Verify with tests that a request addressing a Session in another Project
+- [x] 8.3 Verify with tests that a request addressing a Session in another Project
       without naming it is refused, and that a verb requiring a Session never
       substitutes the caller's own Session
-- [ ] 8.4 Write the shipped agent instruction file covering every verb, the
+- [x] 8.4 Write the shipped agent instruction file covering every verb, the
       addressing rules, all wait outcome codes, the marker guard, and the
       spawn-in-Worktree/wait/read delegation pattern; verify a test asserts the
       file names every verb and every outcome code defined in code
-- [ ] 8.5 Implement installing the instruction file into a Project idempotently
+- [x] 8.5 Implement installing the instruction file into a Project idempotently
       and verify a test shows a second install does not duplicate its content
 
 ## 9. Documentation and end-to-end verification

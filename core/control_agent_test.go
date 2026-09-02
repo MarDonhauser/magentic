@@ -60,7 +60,7 @@ func TestControlRuntimeEnvironmentCarriesTheMarker(t *testing.T) {
 }
 
 func TestAdoptedRuntimeCarriesNoMarker(t *testing.T) {
-	lifecycle, runtime, registry, _ := lifecycleHarness(t)
+	_, runtime, registry, _ := lifecycleHarness(t)
 	project := registerLifecycleProject(t, registry)
 	adopted := Session{
 		ID: SessionID(NewUUID()), Name: "fremd", ProjectID: project.ID, Project: project.Name,
@@ -74,7 +74,6 @@ func TestAdoptedRuntimeCarriesNoMarker(t *testing.T) {
 	if runtime.startCalls != 0 {
 		t.Fatalf("Für eine adoptierte Session wurde ein Runtime gestartet (%d)", runtime.startCalls)
 	}
-	_ = lifecycle
 
 	// An occupant of such a runtime therefore presents no marker facts, and the
 	// control API answers not-managed rather than an identity.

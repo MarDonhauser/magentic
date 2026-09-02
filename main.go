@@ -37,6 +37,9 @@ func main() {
 		case "serve":
 			cliServe()
 			return
+		case "skill":
+			cliControlSkill(os.Args[2:])
+			return
 		case "-h", "--help", "help":
 			fmt.Println("magentic — TUI zum Verwalten von Coding-Agents über tmux")
 			fmt.Println()
@@ -46,6 +49,7 @@ func main() {
 			fmt.Println("  magentic hooks install    Claude-Code-Hooks für Status-Meldungen einrichten")
 			fmt.Println("  magentic hooks uninstall  Diese Hooks wieder entfernen")
 			fmt.Println("  magentic serve            Steuer-API ohne Oberfläche bedienen")
+			fmt.Println("  magentic skill install    Agent-Anleitung in ein Projekt schreiben")
 			fmt.Println()
 			fmt.Println("Steuer-API — Sessions aus einem Skript oder einem Coding-Agent heraus steuern:")
 			fmt.Print(controlSessionHelp())
