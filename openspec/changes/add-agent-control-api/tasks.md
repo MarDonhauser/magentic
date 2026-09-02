@@ -131,14 +131,14 @@
 
 ## 9. Documentation and end-to-end verification
 
-- [ ] 9.1 Add the control surface to `README.md` (verbs, socket, marker, skill
+- [x] 9.1 Add the control surface to `README.md` (verbs, socket, marker, skill
       installation) and verify the documented verbs match the implemented set
-- [ ] 9.2 Add the new Agent Control module to the architecture section of
+- [x] 9.2 Add the new Agent Control module to the architecture section of
       `README.md` and record the pinned-occupant wait decision as an ADR under
       `docs/adr/`, verified by the files existing and being referenced
-- [ ] 9.3 Run an end-to-end scenario — an agent inside a managed Session starts a
+- [x] 9.3 Run an end-to-end scenario — an agent inside a managed Session starts a
       reviewer Session in a fresh Worktree, waits for it, reads its output, kills
       it — and verify the Worktree survives and the wait reported `done`
-- [ ] 9.4 Run an end-to-end replacement scenario — kill and re-create the awaited
+- [x] 9.4 Run an end-to-end replacement scenario — kill and re-create the awaited
       Session while a wait is pending — and verify the wait ends
       `occupant-replaced`

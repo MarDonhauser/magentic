@@ -34,6 +34,8 @@ magentic                   # TUI starten
 magentic add [pfad]        # Projekt registrieren (Default: aktuelles Verzeichnis)
 magentic agents            # Status-Manifeste prüfen und ihre Quelle nennen
 magentic hooks install     # Claude-Code-Hooks für Status-Meldungen einrichten
+magentic serve             # Steuer-API ohne Oberfläche bedienen
+magentic skill install     # Agent-Anleitung in ein Projekt schreiben
 open app/build/bin/magentic.app   # Desktop-App
 ./start.sh                         # Desktop-App bequem starten
 ```
@@ -247,6 +249,68 @@ App bauen:
 cd app && wails build          # → app/build/bin/magentic.app
 ```
 
+## Steuer-API
+
+Sessions lassen sich nicht nur von Hand bedienen, sondern auch aus einem Skript
+oder aus einem Coding-Agent heraus. Dieselben Verben gibt es an zwei Türen: als
+`magentic session <verb>` und als Anfrage über eine lokale Sitzungs-Adresse. Die
+Kommandozeile ist dabei ein reiner Client dieser Adresse, damit beide Türen nie
+auseinanderlaufen.
+
+```sh
+magentic session start    # Session in einem Projekt oder Worktree starten
+magentic session list     # Sessions mit ihrer Beobachtung auflisten
+magentic session send     # Text an den Coding-Agent einer Session senden
+magentic session output   # Sichtbaren Inhalt einer Session lesen
+magentic session wait     # Auf die gepinnte Belegung einer Session warten
+magentic session kill     # Runtime einer Session beenden, der Worktree bleibt
+magentic session whoami   # Eigene Session aus den Marker-Angaben auflösen
+magentic session watch    # Zustandswechsel als Ereignisstrom mitlesen
+```
+
+Mit `--json` schreibt jedes Verb genau ein JSON-Dokument auf die Standardausgabe;
+alles andere geht auf die Fehlerausgabe. Der Exit-Code unterscheidet Erfolg (0),
+eine abgelehnte oder gescheiterte Anfrage (1) und einen Adressierungsfehler (2).
+
+### Sitzungs-Adresse
+
+Die Steuer-API hört auf einem Unix-Domain-Socket im Laufzeitverzeichnis des
+Benutzers, ersatzweise neben der Registry unter `~/.config/magentic/control.sock`.
+Es gibt keinen Netzwerk-Listener. Der Socket gehört dem Benutzer allein: er wird
+mit `0600` angelegt, und jede angenommene Verbindung wird gegen die
+Anmeldedaten der Gegenstelle geprüft. Ein Token gibt es bewusst nicht — wer den
+Socket erreicht, läuft ohnehin als dieser Benutzer.
+
+Bedient wird die API von dem Magentic-Prozess, der sie zuerst beansprucht: der
+TUI, der Desktop-App oder `magentic serve`. Ein zweiter Prozess übernimmt einen
+bedienten Socket nicht; einen verwaisten räumt er weg. Findet ein Client nichts
+Bedienendes, meldet er `unavailable` und nennt den erwarteten Pfad — er startet
+nie selbst einen Prozess. Abschalten lässt sich die API mit `MAGENTIC_CONTROL=0`.
+
+### Warten mit gepinnter Belegung
+
+`magentic session wait` löst die adressierte Session einmal zu Beginn in ihre
+Belegung auf — SessionID, RuntimeName und AgentRunRef — und pinnt dieses Tripel
+für die ganze Wartezeit. Wird die Belegung ersetzt, endet das Warten mit
+`occupant-replaced` statt von einem Fremden erfüllt zu werden. Eine nicht
+verfügbare Beobachtung erfüllt niemals eine Bedingung, und eine Rückfrage an den
+Menschen endet ein `--until done` mit `blocked`, statt bis zur Zeitgrenze zu
+hängen. Die Entscheidung steht in `docs/adr/0008-pin-the-awaited-session-occupant.md`.
+
+### Marker in der Session
+
+Jede von Magentic provisionierte Runtime bekommt `MAGENTIC_ENV=1` mit auf den
+Weg, dazu `MAGENTIC_SOCKET`, `MAGENTIC_SESSION_ID`, `MAGENTIC_PROJECT_ID` sowie
+`MAGENTIC_WORKTREE` und, falls zutreffend, `MAGENTIC_WORKTREE_DIR`. Ein Agent
+prüft zuerst diesen Marker und lässt die Steuer-API in Ruhe, wenn er fehlt.
+Adoptierte Runtimes bekommen ihn nicht nachträglich.
+
+`magentic skill install [pfad]` schreibt die mitgelieferte Agent-Anleitung in die
+`AGENTS.md` des Projekts. Sie erklärt die Verben, die Adressierung, den
+Warte-Vertrag mit allen Ergebnis-Codes und das Delegationsmuster: Session im
+frischen Worktree starten, warten, Ausgabe lesen. Eine zweite Installation
+ersetzt den Abschnitt, statt ihn zu verdoppeln.
+
 ## Git pro Session
 
 Die Git-Anzeige eines Agents zeigt nur, was **seit Start dieser Session**
@@ -397,6 +461,12 @@ Die gemeinsame Logik in `core/` ist entlang weniger tiefer Module organisiert:
   SpecificationRefs, hält physische Projektgrenzen ein und verbindet laufende
   Sessions nur über deren dauerhafte Referenz. Das Board scannt Archive nur
   explizit und begrenzt.
+- **Agent Control** stellt genau ein Anfrage-Vokabular bereit und bedient es
+  hinter der lokalen Sitzungs-Adresse. Das Modul ist Client von Registry,
+  Session Lifecycle, Observation und Repositories: keine zweite Datenhaltung,
+  kein zweiter Beobachtungslauf, kein zweiter Weg zu tmux. Ereignisse und
+  wartende Anfragen leiten sich aus demselben Observation-Durchlauf ab, den die
+  Oberfläche ohnehin fährt.
 - **Attention** leitet Benachrichtigungen, Dock-Badge, native Aufmerksamkeit
   und Pauseneskalation deterministisch aus einer Observation und expliziten
   AttentionEvents ab; der Watcher führt nur noch diese Intents aus.
