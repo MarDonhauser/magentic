@@ -560,6 +560,115 @@ func (h *WorkHistory) Summarize(ctx context.Context, associations HistoryAssocia
 	return summarizeHistory(events, query.Location, meta, eventQuery.Providers), nil
 }
 
+type HistoryConversationQuery struct {
+	Since, Before time.Time
+	Providers     []HistoryProvider
+	ProjectKeys   []string
+	SessionKeys   []string
+	Limit, Offset int
+}
+
+type HistoryConversation struct {
+	Provider       HistoryProvider        `json:"provider"`
+	ConversationID string                 `json:"conversationId"`
+	StartedAt      HistoryFact[time.Time] `json:"startedAt"`
+	LastActivityAt HistoryFact[time.Time] `json:"lastActivityAt"`
+	Turns          int                    `json:"turns"`
+	LastPrompt     HistoryFact[string]    `json:"lastPrompt"`
+	Attribution    HistoryAttribution     `json:"attribution"`
+}
+
+type HistoryConversationPage struct {
+	Conversations []HistoryConversation `json:"conversations"`
+	Total         int                   `json:"total"`
+	Meta          HistoryMeta           `json:"meta"`
+}
+
+// Conversations fasst die Roh-Events des Aufbewahrungsfensters zu Chats
+// zusammen. Ältere Chats erscheinen hier nicht mehr; ihre Kennzahlen leben in
+// Activity weiter.
+func (h *WorkHistory) Conversations(ctx context.Context, associations HistoryAssociations, query HistoryConversationQuery) (HistoryConversationPage, error) {
+	eventQuery := HistoryEventQuery{
+		Since: query.Since, Before: query.Before, Providers: query.Providers,
+		ProjectKeys: query.ProjectKeys, SessionKeys: query.SessionKeys,
+		Lineages: []HistoryLineage{HistoryLineagePrimary},
+	}
+	records, meta, err := h.read(ctx, eventQuery)
+	if err != nil {
+		return HistoryConversationPage{}, err
+	}
+	meta.AssociationRevision = associations.Revision
+	events, _ := queryHistoryRecords(records, associations, eventQuery, false)
+
+	type key struct {
+		provider       HistoryProvider
+		conversationID string
+	}
+	byKey := map[key]*HistoryConversation{}
+	var order []key
+	for _, event := range events {
+		if event.ConversationID.State != HistoryFactKnown || event.ConversationID.Value == "" {
+			continue
+		}
+		id := key{provider: event.Provider, conversationID: event.ConversationID.Value}
+		conversation := byKey[id]
+		if conversation == nil {
+			conversation = &HistoryConversation{
+				Provider: event.Provider, ConversationID: event.ConversationID.Value,
+				StartedAt:      historyUnknown[time.Time]("kein bekannter Zeitpunkt"),
+				LastActivityAt: historyUnknown[time.Time]("kein bekannter Zeitpunkt"),
+				LastPrompt:     historyUnknown[string]("kein Prompt im Fenster"),
+				Attribution:    event.Attribution,
+			}
+			byKey[id] = conversation
+			order = append(order, id)
+		}
+		if event.Kind == HistoryEventOutput {
+			conversation.Turns++
+		}
+		if event.OccurredAt.State != HistoryFactKnown {
+			continue
+		}
+		when := event.OccurredAt.Value
+		if conversation.StartedAt.State != HistoryFactKnown || when.Before(conversation.StartedAt.Value) {
+			conversation.StartedAt = historyKnown(when)
+		}
+		if conversation.LastActivityAt.State != HistoryFactKnown || when.After(conversation.LastActivityAt.Value) {
+			conversation.LastActivityAt = historyKnown(when)
+		}
+		if event.Kind == HistoryEventPrompt && event.Text.State == HistoryFactKnown {
+			// queryHistoryRecords liefert absteigend; der erste Prompt ist der jüngste.
+			if conversation.LastPrompt.State != HistoryFactKnown {
+				conversation.LastPrompt = historyKnown(event.Text.Value)
+			}
+		}
+	}
+	out := make([]HistoryConversation, 0, len(order))
+	for _, id := range order {
+		out = append(out, *byKey[id])
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.LastActivityAt.State != b.LastActivityAt.State {
+			return a.LastActivityAt.State == HistoryFactKnown
+		}
+		if a.LastActivityAt.State == HistoryFactKnown && !a.LastActivityAt.Value.Equal(b.LastActivityAt.Value) {
+			return a.LastActivityAt.Value.After(b.LastActivityAt.Value)
+		}
+		return a.ConversationID < b.ConversationID
+	})
+	total := len(out)
+	limit := query.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	out = historyPage(out, query.Offset, limit)
+	if out == nil {
+		out = []HistoryConversation{}
+	}
+	return HistoryConversationPage{Conversations: out, Total: total, Meta: meta}, nil
+}
+
 type HistoryActivityQuery struct {
 	Since, Before time.Time
 	Providers     []HistoryProvider

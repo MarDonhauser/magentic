@@ -272,3 +272,46 @@ func TestBuildStatsMatchesBetweenEventsAndBuckets(t *testing.T) {
 		t.Fatalf("heatmap differs")
 	}
 }
+
+func TestWorkHistoryConversationsGroupsByConversation(t *testing.T) {
+	history, home, _, codexHome := openTestWorkHistory(t)
+	writeHistoryTestFile(t, filepath.Join(home, ".claude", "projects", "-work-demo", "a.jsonl"), strings.Join([]string{
+		`{"type":"user","uuid":"u-1","timestamp":"2026-08-30T10:00:00Z","cwd":"/work/demo","sessionId":"conv-claude","message":{"role":"user","content":"Erster Prompt"}}`,
+		`{"type":"assistant","uuid":"a-1","timestamp":"2026-08-30T10:00:05Z","cwd":"/work/demo","sessionId":"conv-claude","message":{"role":"assistant","model":"claude-opus","content":"Antwort"}}`,
+		`{"type":"user","uuid":"u-2","timestamp":"2026-08-30T12:00:00Z","cwd":"/work/demo","sessionId":"conv-claude","message":{"role":"user","content":"Letzter Prompt"}}`,
+	}, "\n")+"\n")
+	writeHistoryTestFile(t, filepath.Join(codexHome, "sessions", "2026", "rollout-codex-1.jsonl"), strings.Join([]string{
+		`{"type":"session_meta","timestamp":"2026-08-29T11:00:00Z","payload":{"id":"conv-codex","cwd":"/work/demo","model":"gpt-5"}}`,
+		`{"type":"event_msg","timestamp":"2026-08-29T11:00:01Z","payload":{"type":"user_message","message":"Codex Prompt"}}`,
+	}, "\n")+"\n")
+	if err := history.indexOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	associations := HistoryAssociations{
+		Projects: []HistoryProjectAssociation{{Key: "project-1", Name: "Demo", Path: "/work/demo"}},
+		Sessions: []HistorySessionAssociation{{
+			Key: "session-1", Name: "Claude", ProjectKey: "project-1", Dir: "/work/demo",
+			Provider: HistoryProviderClaude, ConversationID: "conv-claude",
+		}},
+	}
+	page, err := history.Conversations(context.Background(), associations, HistoryConversationQuery{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 2 || len(page.Conversations) != 2 {
+		t.Fatalf("conversations = %d/%d, want 2", page.Total, len(page.Conversations))
+	}
+	first := page.Conversations[0]
+	if first.ConversationID != "conv-claude" {
+		t.Fatalf("newest first expected, got %#v", first)
+	}
+	if first.Turns != 1 || first.LastPrompt.Value != "Letzter Prompt" {
+		t.Fatalf("conversation = %#v", first)
+	}
+	if first.Attribution.SessionName.Value != "Claude" {
+		t.Fatalf("attribution = %#v", first.Attribution)
+	}
+	if page.Conversations[1].Provider != HistoryProviderCodex {
+		t.Fatalf("second = %#v", page.Conversations[1])
+	}
+}
