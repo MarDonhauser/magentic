@@ -275,6 +275,116 @@ body.dk-dragging .dk-body { pointer-events: none; }
 
 .dk-hint { margin-left: 4px; font-size: var(--fs-meta); color: var(--muted); opacity: .75; }
 
+.dk-topbar .dk-empty-title { flex: 1; }
+.dk-topbar .dk-actions { margin-left: auto; }
+
+.dk-dock.dk-blank .dk-leaf .dk-bar { display: none; }
+
+.dk-tree {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.dk-leaf {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dk-split {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+.dk-split-row { flex-direction: row; }
+.dk-split-column { flex-direction: column; }
+
+.dk-split-pane {
+  min-width: 0;
+  min-height: 0;
+  flex-basis: 0;
+  overflow: hidden;
+  display: flex;
+}
+
+.dk-split-pane > * { flex: 1; min-width: 0; min-height: 0; }
+
+.dk-split-grip {
+  flex: none;
+  position: relative;
+  z-index: 2;
+}
+
+.dk-split-row > .dk-split-grip { width: 7px; margin: 0 -3px; cursor: ew-resize; }
+.dk-split-column > .dk-split-grip { height: 7px; margin: -3px 0; cursor: ns-resize; }
+
+.dk-split-grip::after {
+  content: '';
+  position: absolute;
+  background: transparent;
+  transition: background .12s ease;
+}
+.dk-split-row > .dk-split-grip::after { left: 3px; top: 0; bottom: 0; width: 1px; }
+.dk-split-column > .dk-split-grip::after { top: 3px; left: 0; right: 0; height: 1px; }
+
+.dk-split-grip:hover::after,
+body.dk-dragging-split .dk-split-grip::after { background: var(--accent); }
+
+body.dk-dragging-split { user-select: none; }
+body.dk-dragging-split-row { cursor: ew-resize; }
+body.dk-dragging-split-column { cursor: ns-resize; }
+
+.dk-tab { cursor: grab; }
+.dk-tab:active { cursor: grabbing; }
+
+.dk-drop-overlay {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 2px solid var(--accent);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.dk-drop-overlay.dk-drop-hidden { display: none; }
+.dk-drop-overlay.dk-drop-left { clip-path: inset(0 75% 0 0); }
+.dk-drop-overlay.dk-drop-right { clip-path: inset(0 0 0 75%); }
+.dk-drop-overlay.dk-drop-top { clip-path: inset(0 0 75% 0); }
+.dk-drop-overlay.dk-drop-bottom { clip-path: inset(75% 0 0 0); }
+
+.dk-menu {
+  position: fixed;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 170px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px var(--shadow);
+}
+
+.dk-menu-item {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--fs-label);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dk-menu-item:hover { background: var(--raise); }
+
 body.dk-dragging {
   cursor: ns-resize;
   user-select: none;
