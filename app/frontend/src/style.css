@@ -2390,3 +2390,13 @@ body.session-magnet-dragging * { cursor: grabbing !important; user-select: none 
 .settings-option input { margin-top: 3px; accent-color: var(--accent); }
 .settings-option strong { color: var(--ink); }
 .settings-option span { color: var(--ink-2); font-size: 12.5px; line-height: 1.45; }
+
+.settings-option.settings-size { align-items: center; justify-content: space-between; max-width: 320px; }
+.settings-option select {
+  background: var(--raise);
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 5px 8px;
+  font-size: 12.5px;
+}

@@ -368,6 +368,51 @@ try {
 } catch { /* Speicher gesperrt — dann bleibt der Composer */ }
 termsEl.classList.toggle('terminal-input', inputMode === 'terminal');
 
+const TERM_FONT_SIZE_KEY = 'magentic-term-font-size';
+const TERM_FONT_KEY = 'magentic-term-font';
+const TERM_FONTS = {
+  system: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+  commit: '"Commit Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
+};
+let termFontSize = 14;
+let termFontFamily = 'system';
+try {
+  const size = Number(localStorage.getItem(TERM_FONT_SIZE_KEY));
+  if (size >= 11 && size <= 18) termFontSize = size;
+  if (TERM_FONTS[localStorage.getItem(TERM_FONT_KEY)]) termFontFamily = localStorage.getItem(TERM_FONT_KEY);
+} catch { /* Speicher gesperrt — dann gelten die Standardwerte */ }
+
+function applyTermFont() {
+  for (const t of terms.values()) {
+    t.term.options.fontFamily = TERM_FONTS[termFontFamily];
+    if (t.wrap.parentElement === termsEl) t.term.options.fontSize = termFontSize;
+    t.term.clearTextureAtlas?.();
+  }
+  const refit = [];
+  if (view === 'hydra') {
+    for (const t of terms.values()) {
+      if (t.wrap.parentElement === hydraGridEl) refit.push(t);
+    }
+  } else if (activeTerm && terms.get(activeTerm)?.wrap.classList.contains('active')) {
+    refit.push(terms.get(activeTerm));
+  }
+  for (const t of refit) {
+    t.fit.fit();
+    ResizeTerm(t.connectionKey, t.term.cols, t.term.rows);
+    t.term.refresh(0, t.term.rows - 1);
+  }
+}
+
+function setTermFont(family, size) {
+  termFontFamily = TERM_FONTS[family] ? family : termFontFamily;
+  termFontSize = size >= 11 && size <= 18 ? size : termFontSize;
+  try {
+    localStorage.setItem(TERM_FONT_KEY, termFontFamily);
+    localStorage.setItem(TERM_FONT_SIZE_KEY, String(termFontSize));
+  } catch { /* gilt dann nur für diese Sitzung */ }
+  applyTermFont();
+}
+
 function setInputMode(mode) {
   inputMode = mode;
   try { localStorage.setItem(INPUT_MODE_KEY, mode); } catch { /* gilt dann nur für diese Sitzung */ }
@@ -996,7 +1041,8 @@ async function openSession(sessionID, name) {
   const fresh = !t;
   if (!t) t = makeTerm(sessionID, name);
   else t.sessionID = sessionID;
-  t.term.options.fontSize = 15;
+  t.term.options.fontFamily = TERM_FONTS[termFontFamily];
+  t.term.options.fontSize = termFontSize;
   t.term.options.lineHeight = 1.35;
   if (t.wrap.parentElement !== termsEl) termsEl.appendChild(t.wrap);
   for (const [n, o] of terms) o.wrap.classList.toggle('active', n === name);
@@ -1076,6 +1122,16 @@ async function renderSettings() {
     `<label class="settings-option"><input type="radio" name="set-input-mode" value="terminal"${inputMode === 'terminal' ? ' checked' : ''}>` +
     `<span><strong>Eingabezeile der Session</strong><br>Du tippst direkt im Terminal in das Eingabefeld des Agenten. Composer und Blende sind aus, das Terminal nutzt die volle Höhe.</span></label>` +
     `</div>` +
+    `<div class="card"><div class="card-head"><h2>Terminal-Schrift</h2></div>` +
+    `<label class="settings-option"><input type="radio" name="set-term-font" value="system"${termFontFamily === 'system' ? ' checked' : ''}>` +
+    `<span><strong>SF Mono</strong> — System-Schrift von macOS</span></label>` +
+    `<label class="settings-option"><input type="radio" name="set-term-font" value="commit"${termFontFamily === 'commit' ? ' checked' : ''}>` +
+    `<span><strong>Commit Mono</strong> — mitgelieferte schmalere Schrift</span></label>` +
+    `<label class="settings-option settings-size"><span><strong>Größe</strong></span>` +
+    `<select id="set-term-size">${[12, 13, 14, 15, 16].map(size =>
+      `<option value="${size}"${size === termFontSize ? ' selected' : ''}>${size} px</option>`).join('')}</select>` +
+    `</label>` +
+    `</div>` +
     `<div class="card"><div class="card-head"><h2>Benachrichtigungen</h2></div>` +
     `<label class="settings-option"><input type="checkbox" id="set-notify"${notifyOn ? ' checked' : ''}>` +
     `<span><strong>Benachrichtigungen an</strong><br>Desktop-Meldungen (z. B. „bereit zum Review"), Dock-Hüpfen und In-den-Vordergrund-Holen. ` +
@@ -1084,6 +1140,10 @@ async function renderSettings() {
   for (const radio of document.querySelectorAll('input[name="set-input-mode"]')) {
     radio.onchange = () => setInputMode(radio.value);
   }
+  for (const radio of document.querySelectorAll('input[name="set-term-font"]')) {
+    radio.onchange = () => setTermFont(radio.value, termFontSize);
+  }
+  $('set-term-size').onchange = e => setTermFont(termFontFamily, Number(e.target.value));
   $('set-notify').onchange = e =>
     SetNotificationsEnabled(e.target.checked).catch(err => toast('Speichern fehlgeschlagen: ' + err, true));
 }
