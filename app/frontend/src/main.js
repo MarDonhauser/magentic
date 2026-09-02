@@ -382,6 +382,28 @@ try {
   if (TERM_FONTS[localStorage.getItem(TERM_FONT_KEY)]) termFontFamily = localStorage.getItem(TERM_FONT_KEY);
 } catch { /* Speicher gesperrt — dann gelten die Standardwerte */ }
 
+const DEFAULT_VENDOR_KEY = 'magentic-default-vendor';
+let defaultVendor = '';
+try { defaultVendor = localStorage.getItem(DEFAULT_VENDOR_KEY) || ''; } catch { /* Speicher gesperrt — dann fragt der Plus-Knopf */ }
+
+function setDefaultVendor(vendor) {
+  defaultVendor = vendor || '';
+  try {
+    if (defaultVendor) localStorage.setItem(DEFAULT_VENDOR_KEY, defaultVendor);
+    else localStorage.removeItem(DEFAULT_VENDOR_KEY);
+  } catch { /* gilt dann nur für diese Sitzung */ }
+}
+
+function resolvedDefaultVendor() {
+  const option = vendorCatalog.find(o => o.vendor === defaultVendor);
+  return option?.available ? option.vendor : '';
+}
+
+function startSession(projectID, worktree) {
+  const vendor = resolvedDefaultVendor();
+  return vendor ? NewSessionWithVendor(projectID, worktree, '', vendor) : NewSession(projectID, worktree, '');
+}
+
 function applyTermFont() {
   for (const t of terms.values()) {
     t.term.options.fontFamily = TERM_FONTS[termFontFamily];
@@ -1114,8 +1136,18 @@ function showSearch() {
 async function renderSettings() {
   let notifyOn = true;
   try { notifyOn = await NotificationsEnabled(); } catch { /* Backend nicht erreichbar — Standard anzeigen */ }
+  const currentVendor = resolvedDefaultVendor();
   $('settings-view').innerHTML =
     `<div class="view-head"><h2>Einstellungen</h2></div>` +
+    `<div class="card"><div class="card-head"><h2>Neue Session über „+“</h2></div>` +
+    `<label class="settings-option"><input type="radio" name="set-default-vendor" value=""${currentVendor === '' ? ' checked' : ''}>` +
+    `<span><strong>Immer fragen</strong><br>Der Plus-Knopf öffnet das Menü mit allen Harnesses.</span></label>` +
+    vendorCatalog.map(option =>
+      `<label class="settings-option${option.available ? '' : ' disabled'}">` +
+      `<input type="radio" name="set-default-vendor" value="${esc(option.vendor)}"${currentVendor === option.vendor ? ' checked' : ''}${option.available ? '' : ' disabled'}>` +
+      `<span><strong>${esc(option.label)}</strong>${option.available ? '' : ' — nicht installiert'}</span></label>`).join('') +
+    `<p class="settings-hint">Mit gesetztem Standard startet „+“ sofort damit. Rechtsklick auf „+“ zeigt weiterhin das Menü.</p>` +
+    `</div>` +
     `<div class="card"><div class="card-head"><h2>Eingabefeld in Sessions</h2></div>` +
     `<label class="settings-option"><input type="radio" name="set-input-mode" value="composer"${inputMode === 'composer' ? ' checked' : ''}>` +
     `<span><strong>magentic-Composer</strong><br>Eingabefeld unten mit @-/Slash-Menü und Bild-Anhang. Die Eingabezeile der Session wird im Terminal verdeckt.</span></label>` +
@@ -1137,6 +1169,9 @@ async function renderSettings() {
     `<span><strong>Benachrichtigungen an</strong><br>Desktop-Meldungen (z. B. „bereit zum Review"), Dock-Hüpfen und In-den-Vordergrund-Holen. ` +
     `Ausgeschaltet bleibt nur die Zahl am Dock-Icon.</span></label>` +
     `</div>`;
+  for (const radio of document.querySelectorAll('input[name="set-default-vendor"]')) {
+    radio.onchange = () => setDefaultVendor(radio.value);
+  }
   for (const radio of document.querySelectorAll('input[name="set-input-mode"]')) {
     radio.onchange = () => setInputMode(radio.value);
   }
@@ -1658,14 +1693,14 @@ function updateHydraBar() {
     `<span class="tb-name">${developerIcon('claude')} Hydra · ${esc(hydraProject)}</span>` +
     `<span class="tb-st">${agents.length} ${agents.length === 1 ? 'Session' : 'Sessions'} parallel</span>` +
     `<span class="tb-actions">` +
-    `<button class="btn tiny" id="tb-add" title="Neue Session in ${esc(hydraProject)} — erscheint direkt im Raster">${developerIcon('claude')} Session</button>` +
+    `<button class="btn tiny" id="tb-add" title="Neue Session in ${esc(hydraProject)} — erscheint direkt im Raster">${developerIcon(resolvedDefaultVendor() || 'claude')} Session</button>` +
     `<button class="btn tiny" id="tb-term" title="Reines Terminal in ${esc(hydraProject)} — Shell statt Claude">${developerIcon('bash')} Terminal</button></span>`;
   $('tb-back').onclick = showOverview;
   $('tb-add').onclick = async () => {
     try {
       const project = projectInfo(hydraProject);
       if (!project?.id) throw new Error(`Projekt „${hydraProject}" ist nicht mehr registriert`);
-      const n2 = await act(NewSession(project.id, false, ''), x => `Session „${x}" gestartet`);
+      const n2 = await act(startSession(project.id, false), x => `Session „${x}" gestartet`);
       if (n2) await focusHydraSession(n2);
     } catch { /* toast zeigt den Fehler */ }
   };
@@ -2020,7 +2055,7 @@ function projectRow(row) {
   const plus = document.createElement('button');
   plus.className = 'proj-add';
   plus.textContent = '+';
-  plus.title = 'Neue Session in ' + p.name + ' (⌥-Klick: in frischem Worktree · ⇧-Klick: reines Terminal)';
+  plus.title = 'Neue Session in ' + p.name + ' (⌥-Klick: in frischem Worktree · ⇧-Klick: reines Terminal · Rechtsklick: Harness wählen)';
   plus.onclick = async e => {
     e.stopPropagation();
     if (e.shiftKey) {
@@ -2032,6 +2067,24 @@ function projectRow(row) {
       } catch { /* toast zeigt den Fehler */ }
       return;
     }
+    const vendor = resolvedDefaultVendor();
+    if (!vendor) {
+      showVendorMenu(e.clientX, e.clientY, p, e.altKey);
+      return;
+    }
+    try {
+      const name = await act(
+        NewSessionWithVendor(p.id, e.altKey, '', vendor),
+        n => (e.altKey ? `Worktree-Session „${n}“ gestartet` : `Session „${n}“ gestartet`),
+      );
+      if (!name) return;
+      if (view === 'hydra' && hydraProject === p.name) await focusHydraSession(name);
+      else openSessionByName(name);
+    } catch { /* toast zeigt den Fehler */ }
+  };
+  plus.oncontextmenu = e => {
+    e.preventDefault();
+    e.stopPropagation();
     showVendorMenu(e.clientX, e.clientY, p, e.altKey);
   };
   head.appendChild(plus);
@@ -2822,8 +2875,8 @@ overviewEl.addEventListener('click', async e => {
         await act(Deploy(d.project), n => `Deploy-Agent „${n}" gestartet (/deploy)`);
         startDeployWatch();
         break;
-      case 'newsession': await act(NewSession(d.project, false, ''), n => `Session „${n}" gestartet`); break;
-      case 'newworktree': await act(NewSession(d.project, true, ''), n => `Worktree-Session „${n}" gestartet`); break;
+      case 'newsession': await act(startSession(d.project, false), n => `Session „${n}" gestartet`); break;
+      case 'newworktree': await act(startSession(d.project, true), n => `Worktree-Session „${n}" gestartet`); break;
       case 'newterm': {
         const n = await act(NewTermSession(d.project, false, ''), x => `Terminal „${x}" geöffnet`);
         if (n) openSessionByName(n);

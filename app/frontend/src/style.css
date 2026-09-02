@@ -2392,6 +2392,8 @@ body.session-magnet-dragging * { cursor: grabbing !important; user-select: none 
 .settings-option span { color: var(--ink-2); font-size: 12.5px; line-height: 1.45; }
 
 .settings-option.settings-size { align-items: center; justify-content: space-between; max-width: 320px; }
+.settings-option.disabled { opacity: 0.5; cursor: default; }
+.settings-hint { color: var(--ink-2); font-size: 12px; padding: 6px 4px 0; margin: 0; }
 .settings-option select {
   background: var(--raise);
   color: var(--ink);
