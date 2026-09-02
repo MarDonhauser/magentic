@@ -421,6 +421,14 @@ func (a *App) SnoozeBreak() error {
 	return nil
 }
 
+func (a *App) NotificationsEnabled() bool {
+	return core.NotificationsEnabled()
+}
+
+func (a *App) SetNotificationsEnabled(on bool) error {
+	return core.SetNotificationsEnabled(on)
+}
+
 func (a *App) BreakConfig() core.BreakConfig {
 	return core.GetBreakConfig()
 }

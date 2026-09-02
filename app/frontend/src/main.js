@@ -18,6 +18,7 @@ import {
   Zeitgeist, ZeitgeistStart, ZeitgeistPause, ZeitgeistResume, ZeitgeistStop,
   MarkSeen, GitGraph, Board, BoardArchive, Stats, StartBoardItem, NewDockSession, MigrateDockSessions, BuildInfo,
   Breaks, BreakHeartbeat, TakeBreak, EndBreak, SnoozeBreak, BreakConfig, SetBreakConfig, BreakOver,
+  NotificationsEnabled, SetNotificationsEnabled,
   CompleteFiles, CompleteCommands, PromptLinePattern,
 } from '../wailsjs/go/main/App';
 import { usagePages, clampUsagePage } from './usage-state.js';
@@ -1064,7 +1065,9 @@ function showSearch() {
   renderSidebar();
 }
 
-function renderSettings() {
+async function renderSettings() {
+  let notifyOn = true;
+  try { notifyOn = await NotificationsEnabled(); } catch { /* Backend nicht erreichbar — Standard anzeigen */ }
   $('settings-view').innerHTML =
     `<div class="view-head"><h2>Einstellungen</h2></div>` +
     `<div class="card"><div class="card-head"><h2>Eingabefeld in Sessions</h2></div>` +
@@ -1072,10 +1075,17 @@ function renderSettings() {
     `<span><strong>magentic-Composer</strong><br>Eingabefeld unten mit @-/Slash-Menü und Bild-Anhang. Die Eingabezeile der Session wird im Terminal verdeckt.</span></label>` +
     `<label class="settings-option"><input type="radio" name="set-input-mode" value="terminal"${inputMode === 'terminal' ? ' checked' : ''}>` +
     `<span><strong>Eingabezeile der Session</strong><br>Du tippst direkt im Terminal in das Eingabefeld des Agenten. Composer und Blende sind aus, das Terminal nutzt die volle Höhe.</span></label>` +
+    `</div>` +
+    `<div class="card"><div class="card-head"><h2>Benachrichtigungen</h2></div>` +
+    `<label class="settings-option"><input type="checkbox" id="set-notify"${notifyOn ? ' checked' : ''}>` +
+    `<span><strong>Benachrichtigungen an</strong><br>Desktop-Meldungen (z. B. „bereit zum Review"), Dock-Hüpfen und In-den-Vordergrund-Holen. ` +
+    `Ausgeschaltet bleibt nur die Zahl am Dock-Icon.</span></label>` +
     `</div>`;
   for (const radio of document.querySelectorAll('input[name="set-input-mode"]')) {
     radio.onchange = () => setInputMode(radio.value);
   }
+  $('set-notify').onchange = e =>
+    SetNotificationsEnabled(e.target.checked).catch(err => toast('Speichern fehlgeschlagen: ' + err, true));
 }
 
 function showSettings() {

@@ -251,6 +251,15 @@ var platformAttentionExecutor = attentionPlanExecutor{
 }
 
 func executeAttentionPlan(plan core.AttentionPlan) {
+	// Stummgeschaltet bleibt nur das Aufdringliche: Popups, Dock-Hüpfen und
+	// In-den-Vordergrund-Holen. Badge und Cancel räumen weiter auf.
+	if !core.NotificationsEnabled() {
+		plan.Notifications = nil
+		plan.BringToFront = false
+		if plan.NativeAttention == core.NativeAttentionInformational || plan.NativeAttention == core.NativeAttentionCritical {
+			plan.NativeAttention = core.NativeAttentionUnchanged
+		}
+	}
 	platformAttentionExecutor.execute(plan)
 }
 
