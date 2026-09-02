@@ -779,7 +779,7 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
 #terms { position: absolute; inset: 0; display: none; background: var(--term-bg); }
 
 #terms:not(.hydra) {
-  --term-gui-content-max: 1120px;
+  --term-gui-content-max: 1600px;
   --term-gui-gutter: clamp(12px, 3vw, 32px);
   color-scheme: inherit;
   background: var(--term-bg);
@@ -2361,4 +2361,15 @@ body.session-magnet-dragging * { cursor: grabbing !important; user-select: none 
   bottom: 0;
   background: var(--term-bg);
   pointer-events: none;
+}
+
+#terms.terminal-input #term-composer,
+#terms.terminal-input #term-session-state,
+#terms.terminal-input .term-completions {
+  display: none;
+}
+
+#terms:not(.hydra).terminal-input > .term-wrap {
+  bottom: 16px;
+  border-bottom: 0;
 }

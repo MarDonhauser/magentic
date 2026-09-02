@@ -360,12 +360,33 @@ function makeTerm(sessionID, name) {
 // Blende wissen, in welchen Zustand sie zurückfällt.
 const lastStatus = new Map();
 
+const INPUT_MODE_KEY = 'magentic-input-mode';
+let inputMode = 'composer';
+try {
+  if (localStorage.getItem(INPUT_MODE_KEY) === 'terminal') inputMode = 'terminal';
+} catch { /* Speicher gesperrt — dann bleibt der Composer */ }
+termsEl.classList.toggle('terminal-input', inputMode === 'terminal');
+
+function setInputMode(mode) {
+  inputMode = mode;
+  try { localStorage.setItem(INPUT_MODE_KEY, mode); } catch { /* gilt dann nur für diese Sitzung */ }
+  termsEl.classList.toggle('terminal-input', inputMode === 'terminal');
+  for (const [name, t] of terms) updatePromptCover(t, lastStatus.get(name));
+  const t = activeTerm && terms.get(activeTerm);
+  if (t && t.wrap.parentElement === termsEl) {
+    t.fit.fit();
+    ResizeTerm(t.connectionKey, t.term.cols, t.term.rows);
+    if (inputMode === 'terminal') t.term.focus();
+  }
+  updateTermBar();
+}
+
 // updatePromptCover legt die Eingabezeile des Agenten unter eine Blende,
 // solange sie nicht gebraucht wird. Wartet die Session auf eine Entscheidung
 // oder hat das Terminal den Fokus, bleibt alles sichtbar.
 function updatePromptCover(t, status) {
   if (!t?.cover) return;
-  const reveal = status === 'blocked' || t.userFocused;
+  const reveal = status === 'blocked' || t.userFocused || inputMode === 'terminal';
   const screen = t.term.element?.querySelector('.xterm-screen');
   if (reveal || !t.promptPattern || !screen) { t.cover.style.height = '0px'; return; }
   const buffer = t.term.buffer.active;
@@ -579,6 +600,7 @@ function updateTermBar() {
     `<span class="tb-st">${visHtml(v)}</span>` +
     (a?.project && a.project !== '(ohne Projekt)' ? `<span class="tb-proj">${esc(a.project)}</span>` : '') +
     `<span class="tb-actions">` + claudeActions + automationAction +
+    `<button class="btn tiny" id="tb-input" title="Eingabefeld umschalten — aktuell: ${inputMode === 'terminal' ? 'Eingabezeile der Session im Terminal' : 'magentic-Composer unten'}">${inputMode === 'terminal' ? 'Session-Input' : 'Composer'}</button>` +
     `<button class="btn tiny" id="tb-links" title="Links aus dieser Session anzeigen — Klick öffnet im Browser, ⌥-Klick kopiert">${icon('link')} links</button>` +
     `<button class="btn tiny" id="tb-later" title="Für später schließen (⌘⇧W) — bleibt in der Seitenleiste und lässt sich wieder öffnen">${icon('clock')}</button>` +
     `<button class="btn tiny danger" id="tb-kill" title="Session endgültig beenden">${icon('x')}</button></span>`;
@@ -597,6 +619,12 @@ function updateTermBar() {
     $('tb-automation').onclick = () => openAutomationDialog(sessionID, sessionName);
   }
   wireVendorSwitch(sessionID, sessionName);
+  $('tb-input').onclick = () => {
+    setInputMode(inputMode === 'terminal' ? 'composer' : 'terminal');
+    toast(inputMode === 'terminal'
+      ? 'Eingabe direkt in der Session — Composer ausgeblendet'
+      : 'magentic-Composer aktiv — Eingabezeile der Session wird verdeckt');
+  };
   $('tb-links').onclick = e => openLinksMenu(e.currentTarget);
   $('tb-later').onclick = () => parkSession(sessionID, sessionName);
   $('tb-kill').onclick = e => {
@@ -974,8 +1002,8 @@ async function openSession(sessionID, name) {
   const fresh = !t;
   if (!t) t = makeTerm(sessionID, name);
   else t.sessionID = sessionID;
-  t.term.options.fontSize = 14;
-  t.term.options.lineHeight = 1.25;
+  t.term.options.fontSize = 15;
+  t.term.options.lineHeight = 1.35;
   if (t.wrap.parentElement !== termsEl) termsEl.appendChild(t.wrap);
   for (const [n, o] of terms) o.wrap.classList.toggle('active', n === name);
   t.fit.fit();

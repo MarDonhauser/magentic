@@ -14,7 +14,7 @@
 
 import { WebglAddon } from '@xterm/addon-webgl';
 
-export const TERMINAL_FONT = '"Commit Mono", ui-monospace, SFMono-Regular, Menlo, monospace';
+export const TERMINAL_FONT = 'ui-monospace, SFMono-Regular, "Commit Mono", Menlo, monospace';
 
 // Gemeinsame Optionen beider Terminal-Oberflächen. Größe und Zeilenhöhe setzen
 // die Aufrufer, weil die Agentenansicht und das Raster unterschiedlich dicht sind.
