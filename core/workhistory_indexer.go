@@ -101,6 +101,9 @@ type historyIndexCandidate struct {
 }
 
 func (h *WorkHistory) indexAllProviders(ctx context.Context) error {
+	if err := h.adoptLegacyIndex(ctx); err != nil {
+		return err
+	}
 	var candidates []historyIndexCandidate
 	changed := false
 	for _, adapter := range h.adapters {
