@@ -600,7 +600,6 @@ function updateTermBar() {
     `<span class="tb-st">${visHtml(v)}</span>` +
     (a?.project && a.project !== '(ohne Projekt)' ? `<span class="tb-proj">${esc(a.project)}</span>` : '') +
     `<span class="tb-actions">` + claudeActions + automationAction +
-    `<button class="btn tiny" id="tb-input" title="Eingabefeld umschalten — aktuell: ${inputMode === 'terminal' ? 'Eingabezeile der Session im Terminal' : 'magentic-Composer unten'}">${inputMode === 'terminal' ? 'Session-Input' : 'Composer'}</button>` +
     `<button class="btn tiny" id="tb-links" title="Links aus dieser Session anzeigen — Klick öffnet im Browser, ⌥-Klick kopiert">${icon('link')} links</button>` +
     `<button class="btn tiny" id="tb-later" title="Für später schließen (⌘⇧W) — bleibt in der Seitenleiste und lässt sich wieder öffnen">${icon('clock')}</button>` +
     `<button class="btn tiny danger" id="tb-kill" title="Session endgültig beenden">${icon('x')}</button></span>`;
@@ -619,12 +618,6 @@ function updateTermBar() {
     $('tb-automation').onclick = () => openAutomationDialog(sessionID, sessionName);
   }
   wireVendorSwitch(sessionID, sessionName);
-  $('tb-input').onclick = () => {
-    setInputMode(inputMode === 'terminal' ? 'composer' : 'terminal');
-    toast(inputMode === 'terminal'
-      ? 'Eingabe direkt in der Session — Composer ausgeblendet'
-      : 'magentic-Composer aktiv — Eingabezeile der Session wird verdeckt');
-  };
   $('tb-links').onclick = e => openLinksMenu(e.currentTarget);
   $('tb-later').onclick = () => parkSession(sessionID, sessionName);
   $('tb-kill').onclick = e => {
@@ -1016,12 +1009,20 @@ async function openSession(sessionID, name) {
     ResizeTerm(t.connectionKey, t.term.cols, t.term.rows);
   }
   t.term.focus();
+  // Beim Wechsel zwischen Sessions verliert der WebGL-Renderer Glyphen aus dem
+  // Textur-Atlas — dann fehlen ganze Textstücke, bis tmux zufällig neu zeichnet.
+  const shown = t;
+  requestAnimationFrame(() => {
+    if (!shown.wrap.classList.contains('active')) return;
+    shown.term.clearTextureAtlas?.();
+    shown.term.refresh(0, shown.term.rows - 1);
+  });
   renderSidebar();
   updateTermBar();
 }
 
-const PANELS = ['overview', 'search-view', 'terms', 'inbox-view', 'graph-view', 'board-view', 'stats-view'];
-const NAV_FOR = { overview: 'nav-overview', 'search-view': 'nav-search', 'inbox-view': 'nav-inbox', 'graph-view': 'nav-graph', 'board-view': 'nav-board', 'stats-view': 'nav-stats' };
+const PANELS = ['overview', 'search-view', 'terms', 'inbox-view', 'graph-view', 'board-view', 'stats-view', 'settings-view'];
+const NAV_FOR = { overview: 'nav-overview', 'search-view': 'nav-search', 'inbox-view': 'nav-inbox', 'graph-view': 'nav-graph', 'board-view': 'nav-board', 'stats-view': 'nav-stats', 'settings-view': 'nav-settings' };
 
 function showPanel(id) {
   for (const p of PANELS) {
@@ -1060,6 +1061,28 @@ function showSearch() {
   leaveTerm();
   showPanel('search-view');
   $('search-input').focus();
+  renderSidebar();
+}
+
+function renderSettings() {
+  $('settings-view').innerHTML =
+    `<div class="view-head"><h2>Einstellungen</h2></div>` +
+    `<div class="card"><div class="card-head"><h2>Eingabefeld in Sessions</h2></div>` +
+    `<label class="settings-option"><input type="radio" name="set-input-mode" value="composer"${inputMode === 'composer' ? ' checked' : ''}>` +
+    `<span><strong>magentic-Composer</strong><br>Eingabefeld unten mit @-/Slash-Menü und Bild-Anhang. Die Eingabezeile der Session wird im Terminal verdeckt.</span></label>` +
+    `<label class="settings-option"><input type="radio" name="set-input-mode" value="terminal"${inputMode === 'terminal' ? ' checked' : ''}>` +
+    `<span><strong>Eingabezeile der Session</strong><br>Du tippst direkt im Terminal in das Eingabefeld des Agenten. Composer und Blende sind aus, das Terminal nutzt die volle Höhe.</span></label>` +
+    `</div>`;
+  for (const radio of document.querySelectorAll('input[name="set-input-mode"]')) {
+    radio.onchange = () => setInputMode(radio.value);
+  }
+}
+
+function showSettings() {
+  view = 'settings';
+  leaveTerm();
+  showPanel('settings-view');
+  renderSettings();
   renderSidebar();
 }
 
@@ -1334,6 +1357,7 @@ AgentVendors()
 $('nav-overview').onclick = showOverview;
 $('sidebar-head').onclick = showOverview;
 $('nav-search').onclick = showSearch;
+$('nav-settings').onclick = showSettings;
 $('nav-inbox').onclick = () => showInbox();
 $('nav-graph').onclick = () => showGraph();
 $('nav-board').onclick = () => showBoard();

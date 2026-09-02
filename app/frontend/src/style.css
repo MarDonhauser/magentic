@@ -2373,3 +2373,20 @@ body.session-magnet-dragging * { cursor: grabbing !important; user-select: none 
   bottom: 16px;
   border-bottom: 0;
 }
+
+#settings-view {
+  position: absolute; inset: 0; overflow: auto; display: none;
+  padding: 4px 20px 40px;
+}
+
+.settings-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 4px;
+  cursor: pointer;
+}
+
+.settings-option input { margin-top: 3px; accent-color: var(--accent); }
+.settings-option strong { color: var(--ink); }
+.settings-option span { color: var(--ink-2); font-size: 12.5px; line-height: 1.45; }
