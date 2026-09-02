@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -160,5 +161,51 @@ func TestWorkHistoryIndexerKeepsAggregatesBeyondRetention(t *testing.T) {
 	}
 	if prompts != 1 {
 		t.Fatalf("aggregated prompts = %d, want 1 — Aggregate müssen den Verfall überleben", prompts)
+	}
+}
+
+func TestWorkHistoryActivityResolvesAttributionAfterRename(t *testing.T) {
+	history, home, _, _ := openTestWorkHistory(t)
+	path := filepath.Join(home, ".claude", "projects", "-work-demo", "a.jsonl")
+	writeHistoryTestFile(t, path, strings.Join([]string{
+		`{"type":"user","uuid":"u-1","timestamp":"2026-08-30T10:00:00Z","cwd":"/work/demo","sessionId":"conv-1","message":{"role":"user","content":"Prompt"}}`,
+		`{"type":"assistant","uuid":"a-1","timestamp":"2026-08-30T10:00:05Z","cwd":"/work/demo","sessionId":"conv-1","message":{"role":"assistant","model":"claude-opus","content":"Antwort","usage":{"input_tokens":10,"output_tokens":5}}}`,
+	}, "\n")+"\n")
+	if err := history.indexOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	associations := HistoryAssociations{
+		Revision: "registry-1",
+		Projects: []HistoryProjectAssociation{{Key: "project-1", Name: "Neuer Name", Path: "/work/demo"}},
+		Sessions: []HistorySessionAssociation{{
+			Key: "session-1", Name: "Claude", ProjectKey: "project-1", Dir: "/work/demo",
+			Provider: HistoryProviderClaude, ConversationID: "conv-1",
+		}},
+	}
+	page, err := history.Activity(context.Background(), associations, HistoryActivityQuery{Location: time.UTC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Prompt (ohne Modell) und Ausgabe (mit Modell) derselben Conversation-Stunde
+	// liegen bewusst in getrennten Zeilen (siehe core/workhistory_store.go,
+	// historyActivityKey); Summieren über den Tag ist Aufgabe von addBucket
+	// (Task 10), nicht dieser Abfrage.
+	if len(page.Buckets) != 2 {
+		t.Fatalf("buckets = %#v", page.Buckets)
+	}
+	var prompts, turns int
+	for _, bucket := range page.Buckets {
+		prompts += bucket.Prompts
+		turns += bucket.Turns
+		if bucket.Attribution.ProjectName.State != HistoryFactKnown || bucket.Attribution.ProjectName.Value != "Neuer Name" {
+			t.Fatalf("project attribution = %#v", bucket.Attribution.ProjectName)
+		}
+		if bucket.Attribution.SessionKey.Value != "session-1" {
+			t.Fatalf("session attribution = %#v", bucket.Attribution.SessionKey)
+		}
+	}
+	if prompts != 1 || turns != 1 {
+		t.Fatalf("counts across buckets = prompts=%d turns=%d", prompts, turns)
 	}
 }

@@ -560,6 +560,82 @@ func (h *WorkHistory) Summarize(ctx context.Context, associations HistoryAssocia
 	return summarizeHistory(events, query.Location, meta, eventQuery.Providers), nil
 }
 
+type HistoryActivityQuery struct {
+	Since, Before time.Time
+	Providers     []HistoryProvider
+	Location      *time.Location
+}
+
+type HistoryActivityBucket struct {
+	Day                     string             `json:"day"`
+	Hour                    int                `json:"hour"`
+	Provider                HistoryProvider    `json:"provider"`
+	ConversationID          string             `json:"conversationId"`
+	Model                   string             `json:"model"`
+	Prompts                 int                `json:"prompts"`
+	Turns                   int                `json:"turns"`
+	Usage                   HistoryUsage       `json:"usage"`
+	Cost                    float64            `json:"cost"`
+	PricedEvents            int                `json:"pricedEvents"`
+	UnpricedEvents          int                `json:"unpricedEvents"`
+	KnownInputEvents        int                `json:"knownInputEvents"`
+	UnknownInputEvents      int                `json:"unknownInputEvents"`
+	KnownOutputEvents       int                `json:"knownOutputEvents"`
+	UnknownOutputEvents     int                `json:"unknownOutputEvents"`
+	KnownCacheReadEvents    int                `json:"knownCacheReadEvents"`
+	UnknownCacheReadEvents  int                `json:"unknownCacheReadEvents"`
+	KnownCacheWriteEvents   int                `json:"knownCacheWriteEvents"`
+	UnknownCacheWriteEvents int                `json:"unknownCacheWriteEvents"`
+	Attribution             HistoryAttribution `json:"attribution"`
+}
+
+type HistoryActivityPage struct {
+	Buckets []HistoryActivityBucket `json:"buckets"`
+	Meta    HistoryMeta             `json:"meta"`
+}
+
+// Activity liefert die dauerhaften Kennzahlen. Sie überdauern das
+// Aufbewahrungsfenster der Roh-Events und tragen die Merkmale, aus denen
+// dieselbe Attribution entsteht wie bei Events.
+func (h *WorkHistory) Activity(ctx context.Context, associations HistoryAssociations, query HistoryActivityQuery) (HistoryActivityPage, error) {
+	h.ensureIndexing(ctx)
+	rows, err := h.store.activityRows(ctx, query.Since, query.Before, query.Providers, query.Location)
+	if err != nil {
+		return HistoryActivityPage{}, err
+	}
+	meta, err := h.snapshotMeta(ctx)
+	if err != nil {
+		return HistoryActivityPage{}, err
+	}
+	meta.AssociationRevision = associations.Revision
+	resolver := newHistoryAssociationResolver(associations)
+	buckets := make([]HistoryActivityBucket, 0, len(rows))
+	for _, row := range rows {
+		attribution := resolver.resolve(historyRecord{
+			Provider: row.Provider, ConversationID: row.ConversationID,
+			CWD: row.CWD, ProjectAlias: row.ProjectAlias,
+		})
+		buckets = append(buckets, HistoryActivityBucket{
+			Day: row.Day, Hour: row.Hour, Provider: row.Provider,
+			ConversationID: row.ConversationID, Model: row.Model,
+			Prompts: row.Prompts, Turns: row.Turns,
+			Usage: HistoryUsage{
+				InputTokens:      historyKnown(row.Input),
+				OutputTokens:     historyKnown(row.Output),
+				CacheReadTokens:  historyKnown(row.CacheRead),
+				CacheWriteTokens: historyKnown(row.CacheWrite),
+			},
+			Cost: row.Cost, PricedEvents: row.PricedEvents, UnpricedEvents: row.UnpricedEvents,
+			KnownInputEvents: row.KnownInputEvents, UnknownInputEvents: row.UnknownInputEvents,
+			KnownOutputEvents: row.KnownOutputEvents, UnknownOutputEvents: row.UnknownOutputEvents,
+			KnownCacheReadEvents: row.KnownCacheReadEvents, UnknownCacheReadEvents: row.UnknownCacheReadEvents,
+			KnownCacheWriteEvents: row.KnownCacheWriteEvents, UnknownCacheWriteEvents: row.UnknownCacheWriteEvents,
+			Attribution: attribution,
+		})
+	}
+	return HistoryActivityPage{Buckets: buckets, Meta: meta}, nil
+}
+
 // read stößt bei Bedarf einen Indexlauf an und liest anschließend die passenden
 // Datensätze samt Zustandsbericht aus dem Speicher.
 func (h *WorkHistory) read(ctx context.Context, query HistoryEventQuery) ([]historyRecord, HistoryMeta, error) {

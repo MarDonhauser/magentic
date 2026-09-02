@@ -874,3 +874,59 @@ func (s *historyStore) writeActivity(ctx context.Context, rows []historyActivity
 	}
 	return tx.Commit()
 }
+
+// activityRows liest die dauerhaften Aggregatzeilen aus der Tabelle activity.
+// Namen von Projekten und Sessions sind hier bewusst nicht enthalten; sie
+// werden vom Aufrufer frisch aufgelöst (siehe (*WorkHistory).Activity).
+func (s *historyStore) activityRows(ctx context.Context, since, before time.Time, providers []HistoryProvider, loc *time.Location) ([]historyActivityRow, error) {
+	if loc == nil {
+		loc = time.Local
+	}
+	where := []string{"1 = 1"}
+	var args []any
+	if !since.IsZero() {
+		where = append(where, "day >= ?")
+		args = append(args, since.In(loc).Format(statsDateLayout))
+	}
+	if !before.IsZero() {
+		where = append(where, "day < ?")
+		args = append(args, before.In(loc).Format(statsDateLayout))
+	}
+	if len(providers) > 0 {
+		names := historyStrings(providers)
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(names)), ",")
+		where = append(where, "provider IN ("+placeholders+")")
+		for _, name := range names {
+			args = append(args, name)
+		}
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT agg_key, day, hour, provider, model, source_id,
+		written_from_mod_time, conversation_id, cwd, project_alias, prompts, turns,
+		input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+		cost, priced_events, unpriced_events,
+		known_input_events, unknown_input_events, known_output_events, unknown_output_events,
+		known_cache_read_events, unknown_cache_read_events, known_cache_write_events, unknown_cache_write_events
+		FROM activity WHERE `+strings.Join(where, " AND ")+` ORDER BY day, hour`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("read activity: %w", err)
+	}
+	defer rows.Close()
+	var out []historyActivityRow
+	for rows.Next() {
+		var row historyActivityRow
+		var provider string
+		if err := rows.Scan(&row.AggKey, &row.Day, &row.Hour, &provider, &row.Model, &row.SourceID,
+			&row.WrittenFromModTime, &row.ConversationID, &row.CWD, &row.ProjectAlias,
+			&row.Prompts, &row.Turns, &row.Input, &row.Output, &row.CacheRead, &row.CacheWrite,
+			&row.Cost, &row.PricedEvents, &row.UnpricedEvents,
+			&row.KnownInputEvents, &row.UnknownInputEvents,
+			&row.KnownOutputEvents, &row.UnknownOutputEvents,
+			&row.KnownCacheReadEvents, &row.UnknownCacheReadEvents,
+			&row.KnownCacheWriteEvents, &row.UnknownCacheWriteEvents); err != nil {
+			return nil, fmt.Errorf("read activity: %w", err)
+		}
+		row.Provider = HistoryProvider(provider)
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
