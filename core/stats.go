@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -316,6 +315,54 @@ func (a *statsAcc) addEvent(event HistoryEvent) {
 	projectSlot.add(activity)
 }
 
+// addBucket ist der dauerhafte Weg in dieselben Kennzahlen. Ein Bucket fasst
+// die Ereignisse einer Stunde zusammen; Zuordnung und Kostenzustand entstehen
+// aus denselben Merkmalen wie bei addEvent.
+func (a *statsAcc) addBucket(bucket HistoryActivityBucket) {
+	day := statsSlotFor(a.days, bucket.Day)
+	project := statsBucketProject(bucket)
+	projectSlot := statsSlotFor(a.projects, project)
+	if session := statsBucketSession(bucket); session != "" {
+		day.sessions[session] = true
+		projectSlot.sessions[session] = true
+	}
+	if bucket.Prompts > 0 {
+		a.hours[bucket.Hour] += bucket.Prompts
+		if weekday := statsWeekdayIndex(bucket.Day); weekday >= 0 {
+			a.heatmap[weekday][bucket.Hour] += bucket.Prompts
+		}
+	}
+	activity := statsAgg{
+		Prompts: bucket.Prompts, Turns: bucket.Turns,
+		Input:       knownHistoryValue(bucket.Usage.InputTokens),
+		Output:      knownHistoryValue(bucket.Usage.OutputTokens),
+		CacheRead:   knownHistoryValue(bucket.Usage.CacheReadTokens),
+		CacheWrite:  knownHistoryValue(bucket.Usage.CacheWriteTokens),
+		Cost:        bucket.Cost,
+		costPriced:  bucket.PricedEvents > 0,
+		costUnknown: bucket.UnpricedEvents > 0,
+	}
+	day.add(activity)
+	projectSlot.add(activity)
+}
+
+func statsBucketProject(bucket HistoryActivityBucket) string {
+	if bucket.Attribution.ProjectName.State == HistoryFactKnown && bucket.Attribution.ProjectName.Value != "" {
+		return bucket.Attribution.ProjectName.Value
+	}
+	return statsOtherProject
+}
+
+func statsBucketSession(bucket HistoryActivityBucket) string {
+	if bucket.Attribution.SessionKey.State == HistoryFactKnown {
+		return bucket.Attribution.SessionKey.Value
+	}
+	if bucket.ConversationID != "" {
+		return string(bucket.Provider) + "\x00" + bucket.ConversationID
+	}
+	return ""
+}
+
 func statsUsageFactState(usage HistoryUsage) (known, unknown bool) {
 	states := [...]HistoryFactState{
 		usage.InputTokens.State,
@@ -451,25 +498,28 @@ func buildStatsWithRepositories(ctx context.Context, state *State, days int, his
 	commitsByDay, commitsByProject := selectStatsCommits(commits.ByProject, fromKey, toKey)
 	result.CommitCoverage = commits.Coverage
 
-	var summary HistorySummary
-	var events []HistoryEvent
+	var buckets []HistoryActivityBucket
+	var activityCoverage []HistoryProviderCoverage
 	if historyErr == nil && history != nil {
 		// Prompts, Turns, tokens, and costs use the same primary-lineage
 		// population. Delegated work needs a separate aggregate before it can be
 		// shown without turning subagent prompts into developer prompts.
-		query := HistoryEventQuery{
-			Since: first, Before: before,
-			Lineages: []HistoryLineage{HistoryLineagePrimary},
+		var page HistoryActivityPage
+		page, historyErr = history.Activity(ctx, NewHistoryAssociations(*state), HistoryActivityQuery{
+			Since: first, Before: before, Location: time.Local,
+		})
+		if historyErr == nil {
+			buckets = page.Buckets
+			activityCoverage = page.Meta.Coverage
 		}
-		summary, events, historyErr = coherentStatsHistory(ctx, history, NewHistoryAssociations(*state), query)
 	}
 	if historyErr != nil {
 		result.Err = "Arbeitsverlauf nicht lesbar: " + historyErr.Error()
 	}
 
 	acc := newStatsAcc()
-	for _, event := range events {
-		acc.addEvent(event)
+	for _, bucket := range buckets {
+		acc.addBucket(bucket)
 	}
 	registered := registeredStatsProjects(state)
 
@@ -505,15 +555,30 @@ func buildStatsWithRepositories(ctx context.Context, state *State, days int, his
 		}
 	}
 
-	// These totals come from WorkHistory.Summarize so every consumer shares
-	// prompt, output, Session, and usage semantics, including explicit unknowns.
-	totals.Prompts = summary.Totals.Prompts
-	totals.Turns = summary.Totals.Outputs
-	totals.Sessions = summary.Totals.Sessions
-	totals.Input = summary.Totals.Usage.InputTokens.Value
-	totals.Output = summary.Totals.Usage.OutputTokens.Value
-	totals.CacheRead = summary.Totals.Usage.CacheReadTokens.Value
-	totals.CacheWrite = summary.Totals.Usage.CacheWriteTokens.Value
+	// These totals come from the activity buckets so every consumer shares
+	// prompt, output, Session, and usage semantics, including explicit unknowns,
+	// and survives past the raw-event retention window.
+	var bucketTotals statsAgg
+	sessionKeys := map[string]bool{}
+	for _, bucket := range buckets {
+		bucketTotals.add(statsAgg{
+			Prompts: bucket.Prompts, Turns: bucket.Turns,
+			Input:      knownHistoryValue(bucket.Usage.InputTokens),
+			Output:     knownHistoryValue(bucket.Usage.OutputTokens),
+			CacheRead:  knownHistoryValue(bucket.Usage.CacheReadTokens),
+			CacheWrite: knownHistoryValue(bucket.Usage.CacheWriteTokens),
+		})
+		if key := statsBucketSession(bucket); key != "" {
+			sessionKeys[key] = true
+		}
+	}
+	totals.Prompts = bucketTotals.Prompts
+	totals.Turns = bucketTotals.Turns
+	totals.Sessions = len(sessionKeys)
+	totals.Input = bucketTotals.Input
+	totals.Output = bucketTotals.Output
+	totals.CacheRead = bucketTotals.CacheRead
+	totals.CacheWrite = bucketTotals.CacheWrite
 	totals.Tokens = totals.Input + totals.Output + totals.CacheRead + totals.CacheWrite
 	totals.CostState = totalCosts.costState()
 	if base := totals.CacheRead + totals.Input + totals.CacheWrite; base > 0 {
@@ -528,9 +593,9 @@ func buildStatsWithRepositories(ctx context.Context, state *State, days int, his
 		cursor = cursor.AddDate(0, 0, -1)
 	}
 	result.Projects = buildStatsProjects(acc, state, registered, commitsByProject, commits.ProjectStates)
-	result.Models = buildStatsModels(summary)
-	result.Providers = buildStatsProviders(summary)
-	if statsHistoryCoverageIncomplete(summary.Meta.Coverage) {
+	result.Models = buildStatsModelsFromBuckets(buckets)
+	result.Providers = buildStatsProvidersFromBuckets(buckets, activityCoverage)
+	if statsHistoryCoverageIncomplete(activityCoverage) {
 		totals.CostState = partialStatsCostState(totals.CostState)
 		for i := range result.Days {
 			result.Days[i].CostState = partialStatsCostState(result.Days[i].CostState)
@@ -574,49 +639,6 @@ func partialStatsCostState(state StatsCostState) StatsCostState {
 		return StatsCostPartial
 	}
 	return state
-}
-
-func coherentStatsHistory(ctx context.Context, history *WorkHistory, associations HistoryAssociations, query HistoryEventQuery) (HistorySummary, []HistoryEvent, error) {
-	for attempt := 0; attempt < 3; attempt++ {
-		summary, err := history.Summarize(ctx, associations, HistorySummaryQuery{Events: query, Location: time.Local})
-		if err != nil {
-			return HistorySummary{}, nil, err
-		}
-		events, revision, err := pagedStatsHistory(ctx, history, associations, query)
-		if err != nil {
-			return HistorySummary{}, nil, err
-		}
-		if revision == summary.Meta.Revision {
-			return summary, events, nil
-		}
-	}
-	return HistorySummary{}, nil, fmt.Errorf("work history changed repeatedly while statistics were read")
-}
-
-func pagedStatsHistory(ctx context.Context, history *WorkHistory, associations HistoryAssociations, query HistoryEventQuery) ([]HistoryEvent, uint64, error) {
-	query.Limit = 1000
-	query.Offset = 0
-	var events []HistoryEvent
-	var revision uint64
-	for {
-		page, err := history.Events(ctx, associations, query)
-		if err != nil {
-			return nil, 0, err
-		}
-		if revision == 0 {
-			revision = page.Meta.Revision
-		} else if page.Meta.Revision != revision {
-			return nil, page.Meta.Revision, nil
-		}
-		events = append(events, page.Events...)
-		if len(events) >= page.Total {
-			return events, revision, nil
-		}
-		if len(page.Events) == 0 {
-			return nil, 0, fmt.Errorf("work history pagination made no progress")
-		}
-		query.Offset += len(page.Events)
-	}
 }
 
 type statsCommitCollection struct {
@@ -782,33 +804,55 @@ func statsProjectCommitState(states map[string]HistorySourceState, project strin
 	return HistorySourceAbsent
 }
 
-func buildStatsModels(summary HistorySummary) []StatsModel {
-	models := make([]StatsModel, 0, len(summary.Models))
-	for _, model := range summary.Models {
-		name := model.Model
+func buildStatsModelsFromBuckets(buckets []HistoryActivityBucket) []StatsModel {
+	type key struct {
+		provider HistoryProvider
+		model    string
+	}
+	acc := map[key]*StatsModel{}
+	priced := map[key]bool{}
+	unpriced := map[key]bool{}
+	var order []key
+	for _, bucket := range buckets {
+		if bucket.Turns == 0 && bucket.PricedEvents == 0 && bucket.UnpricedEvents == 0 {
+			// Reine Prompt-Buckets tragen kein Modell und keine Nutzung; sie
+			// würden sonst als eigenständiges "unbekannt"-Modell erscheinen.
+			continue
+		}
+		name := bucket.Model
 		if name == "unknown" || name == "" {
 			name = "unbekannt"
 		}
-		input := model.Usage.InputTokens.Value
-		output := model.Usage.OutputTokens.Value
-		cacheRead := model.Usage.CacheReadTokens.Value
-		cacheWrite := model.Usage.CacheWriteTokens.Value
-		knownUsage, unknownUsage := statsUsageSummaryState(model.Usage)
-		cost, priced := modelCost(model.Provider, name, input, output, cacheRead, cacheWrite)
-		costState := StatsCostNone
-		switch {
-		case priced && knownUsage && unknownUsage:
-			costState = StatsCostPartial
-		case priced && knownUsage:
-			costState = StatsCostPriced
-		case model.Turns > 0 || knownUsage || unknownUsage:
-			costState = StatsCostUnpriced
+		id := key{provider: bucket.Provider, model: name}
+		model := acc[id]
+		if model == nil {
+			model = &StatsModel{Model: name, Provider: string(bucket.Provider), Source: bucket.Provider.Label()}
+			acc[id] = model
+			order = append(order, id)
 		}
-		models = append(models, StatsModel{
-			Model: name, Provider: string(model.Provider), Source: model.Provider.Label(), Turns: model.Turns,
-			Input: input, Output: output, CacheRead: cacheRead, CacheWrite: cacheWrite,
-			Cost: cost, CostState: costState,
-		})
+		model.Turns += bucket.Turns
+		model.Input += knownHistoryValue(bucket.Usage.InputTokens)
+		model.Output += knownHistoryValue(bucket.Usage.OutputTokens)
+		model.CacheRead += knownHistoryValue(bucket.Usage.CacheReadTokens)
+		model.CacheWrite += knownHistoryValue(bucket.Usage.CacheWriteTokens)
+		model.Cost += bucket.Cost
+		priced[id] = priced[id] || bucket.PricedEvents > 0
+		unpriced[id] = unpriced[id] || bucket.UnpricedEvents > 0
+	}
+	models := make([]StatsModel, 0, len(order))
+	for _, id := range order {
+		model := *acc[id]
+		switch {
+		case priced[id] && unpriced[id]:
+			model.CostState = StatsCostPartial
+		case priced[id]:
+			model.CostState = StatsCostPriced
+		case unpriced[id] || model.Turns > 0:
+			model.CostState = StatsCostUnpriced
+		default:
+			model.CostState = StatsCostNone
+		}
+		models = append(models, model)
 	}
 	sort.Slice(models, func(i, j int) bool {
 		if models[i].Cost != models[j].Cost {
@@ -822,33 +866,59 @@ func buildStatsModels(summary HistorySummary) []StatsModel {
 	return models
 }
 
-func statsUsageSummaryState(usage HistoryUsageSummary) (known, unknown bool) {
-	measures := [...]HistoryMeasure{
-		usage.InputTokens,
-		usage.OutputTokens,
-		usage.CacheReadTokens,
-		usage.CacheWriteTokens,
-	}
-	for _, measure := range measures {
-		known = known || measure.KnownEvents > 0
-		unknown = unknown || measure.UnknownEvents > 0
-	}
-	return known, unknown
-}
-
-func buildStatsProviders(summary HistorySummary) []StatsProvider {
+func buildStatsProvidersFromBuckets(buckets []HistoryActivityBucket, coverage []HistoryProviderCoverage) []StatsProvider {
+	states := map[HistoryProvider]HistorySourceState{}
 	problems := map[HistoryProvider][]HistoryProblem{}
-	for _, coverage := range summary.Meta.Coverage {
-		problems[coverage.Provider] = append([]HistoryProblem(nil), coverage.Problems...)
+	for _, entry := range coverage {
+		states[entry.Provider] = entry.State
+		problems[entry.Provider] = append([]HistoryProblem(nil), entry.Problems...)
 	}
-	providers := make([]StatsProvider, 0, len(summary.Providers))
-	for _, provider := range summary.Providers {
-		usage := provider.Usage
+	type providerAcc struct {
+		prompts, turns                       int
+		input, output, cacheRead, cacheWrite historyMeasureAcc
+	}
+	acc := map[HistoryProvider]*providerAcc{}
+	var order []HistoryProvider
+	for _, bucket := range buckets {
+		entry := acc[bucket.Provider]
+		if entry == nil {
+			entry = &providerAcc{}
+			acc[bucket.Provider] = entry
+			order = append(order, bucket.Provider)
+		}
+		entry.prompts += bucket.Prompts
+		entry.turns += bucket.Turns
+		entry.input.value += knownHistoryValue(bucket.Usage.InputTokens)
+		entry.input.known += bucket.KnownInputEvents
+		entry.input.unknown += bucket.UnknownInputEvents
+		entry.output.value += knownHistoryValue(bucket.Usage.OutputTokens)
+		entry.output.known += bucket.KnownOutputEvents
+		entry.output.unknown += bucket.UnknownOutputEvents
+		entry.cacheRead.value += knownHistoryValue(bucket.Usage.CacheReadTokens)
+		entry.cacheRead.known += bucket.KnownCacheReadEvents
+		entry.cacheRead.unknown += bucket.UnknownCacheReadEvents
+		entry.cacheWrite.value += knownHistoryValue(bucket.Usage.CacheWriteTokens)
+		entry.cacheWrite.known += bucket.KnownCacheWriteEvents
+		entry.cacheWrite.unknown += bucket.UnknownCacheWriteEvents
+	}
+	providers := make([]StatsProvider, 0, len(order))
+	for _, id := range order {
+		entry := acc[id]
+		// sourceComplete has the same meaning as in summarizeHistory: a provider
+		// counts as complete when its source coverage is Available or Absent, so a
+		// field with no observed usage is not mistaken for missing coverage.
+		sourceComplete := states[id] == HistorySourceAvailable || states[id] == HistorySourceAbsent
+		usage := HistoryUsageSummary{
+			InputTokens:      historyMeasureResult(entry.input, sourceComplete),
+			OutputTokens:     historyMeasureResult(entry.output, sourceComplete),
+			CacheReadTokens:  historyMeasureResult(entry.cacheRead, sourceComplete),
+			CacheWriteTokens: historyMeasureResult(entry.cacheWrite, sourceComplete),
+		}
 		providers = append(providers, StatsProvider{
-			Provider: string(provider.Provider), Source: provider.Provider.Label(), State: provider.State,
-			Prompts: provider.Prompts, Turns: provider.Outputs,
+			Provider: string(id), Source: id.Label(), State: states[id],
+			Prompts: entry.prompts, Turns: entry.turns,
 			Tokens: usage.InputTokens.Value + usage.OutputTokens.Value + usage.CacheReadTokens.Value + usage.CacheWriteTokens.Value,
-			Usage:  usage, Problems: problems[provider.Provider],
+			Usage:  usage, Problems: problems[id],
 		})
 	}
 	return providers

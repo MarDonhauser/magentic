@@ -719,6 +719,9 @@ func historyActivityRowsFor(records []historyRecord, sourceID string, modTime in
 	byKey := map[historyActivityKey]*historyActivityRow{}
 	order := make([]historyActivityKey, 0, len(records))
 	for _, record := range records {
+		if record.Lineage != HistoryLineagePrimary {
+			continue
+		}
 		if record.Timestamp == "" {
 			continue
 		}

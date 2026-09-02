@@ -209,3 +209,66 @@ func TestWorkHistoryActivityResolvesAttributionAfterRename(t *testing.T) {
 		t.Fatalf("counts across buckets = prompts=%d turns=%d", prompts, turns)
 	}
 }
+
+func TestBuildStatsMatchesBetweenEventsAndBuckets(t *testing.T) {
+	history, home, _, _ := openTestWorkHistory(t)
+	path := filepath.Join(home, ".claude", "projects", "-work-demo", "a.jsonl")
+	writeHistoryTestFile(t, path, strings.Join([]string{
+		`{"type":"user","uuid":"u-1","timestamp":"2026-08-30T10:00:00Z","cwd":"/work/demo","sessionId":"conv-1","message":{"role":"user","content":"Prompt"}}`,
+		`{"type":"assistant","uuid":"a-1","timestamp":"2026-08-30T10:00:05Z","cwd":"/work/demo","sessionId":"conv-1","message":{"role":"assistant","model":"claude-opus-4-8","content":"Antwort","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":3}}}`,
+		`{"type":"user","uuid":"u-2","timestamp":"2026-08-31T14:00:00Z","cwd":"/work/demo","sessionId":"conv-1","message":{"role":"user","content":"Noch ein Prompt"}}`,
+	}, "\n")+"\n")
+	if err := history.indexOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	state := &State{
+		Projects: []Project{{ID: "project-1", Name: "Demo", Path: "/work/demo"}},
+		Agents: []Session{{
+			ID: "session-1", Name: "Claude", ProjectID: "project-1", Project: "Demo", Dir: "/work/demo",
+			SessionKind: SessionKindCodingAgent,
+			AgentRuns:   []AgentRunRef{{Vendor: AgentVendorClaude, ExternalID: "conv-1"}},
+		}},
+	}
+	associations := NewHistoryAssociations(*state)
+	query := HistoryEventQuery{
+		Since:    time.Date(2026, 8, 25, 0, 0, 0, 0, time.Local),
+		Before:   time.Date(2026, 9, 2, 0, 0, 0, 0, time.Local),
+		Lineages: []HistoryLineage{HistoryLineagePrimary},
+	}
+	events, err := history.Events(context.Background(), associations, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromEvents := newStatsAcc()
+	for _, event := range events.Events {
+		fromEvents.addEvent(event)
+	}
+	activity, err := history.Activity(context.Background(), associations, HistoryActivityQuery{
+		Since: query.Since, Before: query.Before, Location: time.Local,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromBuckets := newStatsAcc()
+	for _, bucket := range activity.Buckets {
+		fromBuckets.addBucket(bucket)
+	}
+	for day, slot := range fromEvents.days {
+		other := fromBuckets.days[day]
+		if other == nil {
+			t.Fatalf("bucket path is missing day %s", day)
+		}
+		if slot.Prompts != other.Prompts || slot.Turns != other.Turns ||
+			slot.Input != other.Input || slot.Output != other.Output ||
+			slot.CacheRead != other.CacheRead || slot.costState() != other.costState() ||
+			len(slot.sessions) != len(other.sessions) {
+			t.Fatalf("day %s: events %#v vs buckets %#v", day, slot, other)
+		}
+	}
+	if fromEvents.hours != fromBuckets.hours {
+		t.Fatalf("hours: events %#v vs buckets %#v", fromEvents.hours, fromBuckets.hours)
+	}
+	if fromEvents.heatmap != fromBuckets.heatmap {
+		t.Fatalf("heatmap differs")
+	}
+}
