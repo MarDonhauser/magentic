@@ -143,6 +143,9 @@ type model struct {
 	repoBusy       bool
 	previewPending    bool
 	previewGeneration int
+	inbox             core.AttentionInbox
+	inboxOpen         bool
+	inboxCursor       int
 	usage          UsageInfo
 }
 
@@ -182,9 +185,76 @@ func (m *model) executeAttentionPlan() {
 	plan := m.attention.Plan(core.AttentionInput{
 		Observation: m.poll.observation, SessionLabels: labels, Now: time.Now(),
 	})
+	// Der Posteingang kommt aus genau diesem Plan; die TUI leitet nichts eigenes ab.
+	m.inbox = plan.Inbox
+	if m.inboxCursor >= len(m.inbox.Entries) {
+		m.inboxCursor = 0
+	}
 	for _, notification := range plan.Notifications {
 		notifyDesktop(notification.Title, notification.Message, notification.Sound)
 	}
+}
+
+// inboxRow joins one planned entry with the Session the TUI knows it by. The
+// order of the plan is kept as it is.
+type inboxRow struct {
+	entry core.AttentionInboxEntry
+	agent Agent
+	known bool
+}
+
+func (m model) inboxRows() []inboxRow {
+	byID := make(map[core.SessionID]Agent, len(m.state.Agents))
+	for _, session := range m.state.Agents {
+		id := session.ID
+		if observed, found := m.poll.observed[sessionKey(session)]; found && observed.SessionID != "" {
+			id = observed.SessionID
+		}
+		if id != "" {
+			byID[id] = session
+		}
+	}
+	rows := make([]inboxRow, 0, len(m.inbox.Entries))
+	for _, entry := range m.inbox.Entries {
+		row := inboxRow{entry: entry}
+		if session, found := byID[entry.SessionID]; found {
+			row.agent, row.known = session, true
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// selectInboxEntry moves the tree selection to the Session of the selected
+// entry and closes the inbox.
+func (m *model) selectInboxEntry() {
+	rows := m.inboxRows()
+	if m.inboxCursor < 0 || m.inboxCursor >= len(rows) {
+		return
+	}
+	row := rows[m.inboxCursor]
+	if !row.known {
+		m.setFlash("Session ist nicht mehr registriert", true)
+		return
+	}
+	m.inboxOpen = false
+	if row.agent.Project != "" {
+		m.collapsed[row.agent.Project] = false
+	}
+	m.selectAgent(row.agent.Name)
+}
+
+func (m *model) moveInboxCursor(delta int) {
+	count := len(m.inbox.Entries)
+	if count == 0 {
+		m.inboxCursor = 0
+		return
+	}
+	next := m.inboxCursor + delta
+	if next < 0 || next >= count {
+		return
+	}
+	m.inboxCursor = next
 }
 
 func (m model) orphanAgents() []Agent {
