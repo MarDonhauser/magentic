@@ -32,6 +32,22 @@ type OvAgent struct {
 
 	Queued     []OvQueuedMessage `json:"queued,omitempty"`
 	Automation *OvAutomation     `json:"automation,omitempty"`
+	StatusLine *OvStatusLine     `json:"statusLine,omitempty"`
+}
+
+// OvStatusLine is what the vendor last reported about its run — the facts the
+// agent's own status line would show, so the app can draw that line itself.
+type OvStatusLine struct {
+	Model          string  `json:"model,omitempty"`
+	Effort         string  `json:"effort,omitempty"`
+	ContextPercent int     `json:"contextPercent"`
+	ContextWindow  int     `json:"contextWindow,omitempty"`
+	ContextTokens  int     `json:"contextTokens,omitempty"`
+	CostUSD        float64 `json:"costUsd"`
+	Version        string  `json:"version,omitempty"`
+	OutputStyle    string  `json:"outputStyle,omitempty"`
+	FastMode       bool    `json:"fastMode"`
+	Age            string  `json:"age"`
 }
 
 type OvAutomation struct {
@@ -252,6 +268,14 @@ func buildOverviewFromSurvey(s *State, snapshot ObservationSnapshot, survey Repo
 	for id := range later {
 		assigned[id] = true
 	}
+	statusLines := StatusReportsForSessions(readStatusReports(), s.Agents)
+	agentOverview := func(a Agent, observed SessionObservation, branch string) OvAgent {
+		agent := toOvAgent(a, observed, branch)
+		if report, ok := statusLines[a.ID]; ok {
+			agent.StatusLine = ovStatusLine(report)
+		}
+		return agent
+	}
 
 	for _, p := range s.Projects {
 		repository, found := overviewRepositoryProject(p, survey.Projects)
@@ -273,7 +297,7 @@ func buildOverviewFromSurvey(s *State, snapshot ObservationSnapshot, survey Repo
 				if proj.Worktrees[i].CheckoutKnown {
 					branch = proj.Worktrees[i].Branch
 				}
-				proj.Worktrees[i].Agents = append(proj.Worktrees[i].Agents, toOvAgent(a, observationForSession(a, observations), branch))
+				proj.Worktrees[i].Agents = append(proj.Worktrees[i].Agents, agentOverview(a, observationForSession(a, observations), branch))
 			}
 		}
 		for _, a := range overviewSessionsForProject(s, p) {
@@ -285,7 +309,7 @@ func buildOverviewFromSurvey(s *State, snapshot ObservationSnapshot, survey Repo
 			if proj.Worktrees[0].CheckoutKnown {
 				branch = proj.Worktrees[0].Branch
 			}
-			proj.Worktrees[0].Agents = append(proj.Worktrees[0].Agents, toOvAgent(a, observationForSession(a, observations), branch))
+			proj.Worktrees[0].Agents = append(proj.Worktrees[0].Agents, agentOverview(a, observationForSession(a, observations), branch))
 		}
 		finishWarnings(&proj)
 		ov.Projects = append(ov.Projects, proj)
@@ -304,7 +328,7 @@ func buildOverviewFromSurvey(s *State, snapshot ObservationSnapshot, survey Repo
 			continue
 		}
 		hasOrphans = true
-		orphanWt.Agents = append(orphanWt.Agents, toOvAgent(a, observationForSession(a, observations), ""))
+		orphanWt.Agents = append(orphanWt.Agents, agentOverview(a, observationForSession(a, observations), ""))
 	}
 	if hasOrphans {
 		orphanWt.Branch = "—"
@@ -538,6 +562,24 @@ func overviewSessionsForProject(state *State, project Project) []Session {
 		}
 	}
 	return sessions
+}
+
+var readStatusReports = func() []StatusReport { return ReadStatusReports(StatusReportDir()) }
+
+func ovStatusLine(report StatusReport) *OvStatusLine {
+	percent := int(report.ContextPercent + 0.5)
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	return &OvStatusLine{
+		Model: report.Model, Effort: report.Effort,
+		ContextPercent: percent, ContextWindow: report.ContextWindow, ContextTokens: report.ContextTokens,
+		CostUSD: report.CostUSD, Version: report.Version, OutputStyle: report.OutputStyle,
+		FastMode: report.FastMode, Age: FormatAge(report.At),
+	}
 }
 
 func toOvAgent(a Agent, observed SessionObservation, branch string) OvAgent {

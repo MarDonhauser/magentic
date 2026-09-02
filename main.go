@@ -46,7 +46,7 @@ func main() {
 			fmt.Println("  magentic                  TUI starten")
 			fmt.Println("  magentic add [pfad]       Projekt hinzufügen (Default: aktuelles Verzeichnis)")
 			fmt.Println("  magentic agents           Status-Manifeste prüfen und ihre Quelle nennen")
-			fmt.Println("  magentic hooks install    Claude-Code-Hooks für Status-Meldungen einrichten")
+			fmt.Println("  magentic hooks install    Claude-Code-Hooks und Statuszeile für Status-Meldungen einrichten")
 			fmt.Println("  magentic hooks uninstall  Diese Hooks wieder entfernen")
 			fmt.Println("  magentic serve            Steuer-API ohne Oberfläche bedienen")
 			fmt.Println("  magentic skill install    Agent-Anleitung in ein Projekt schreiben")
@@ -140,13 +140,17 @@ func cliClaudeHooks() {
 	switch mode {
 	case "install":
 		fmt.Printf("Magentic schreibt in %s:\n", path)
-		for _, definition := range core.ClaudeHookDefinitions() {
+		for _, definition := range append(core.ClaudeHookDefinitions(), core.ClaudeStatusLineDefinition()) {
 			fmt.Printf("  %-16s %s\n", definition.Event, definition.Command)
 		}
 		written, err := core.InstallClaudeHooks(path)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
+		}
+		if command, ours, _ := core.ClaudeStatusLineCommand(path); command != "" && !ours {
+			fmt.Printf("Hinweis: statusLine bleibt bei %q — Modell und Kontext erscheinen in Magentic erst, wenn dort %q steht.\n",
+				command, core.ClaudeStatusLineDefinition().Command)
 		}
 		if len(written) == 0 {
 			fmt.Println("Nichts zu tun: die Hooks stehen bereits so in der Datei.")
@@ -176,10 +180,27 @@ func cliHookReport() {
 		}
 	}
 	payload, _ := io.ReadAll(os.Stdin)
+	if event == core.ClaudeStatusEvent {
+		cliStatusReport(payload)
+		return
+	}
 	report, err := core.HookReportFromClaudePayload(event, payload, core.HookRuntimeName(), time.Now())
 	if err != nil {
 		// A hook must never fail the agent it is attached to.
 		return
 	}
 	_ = core.AppendHookReport(core.HookReportPath(), report)
+}
+
+// cliStatusReport is what the installed statusLine calls. It writes nothing to
+// stdout on purpose: an empty status line is how Claude Code stops drawing one.
+func cliStatusReport(payload []byte) {
+	report, err := core.StatusReportFromClaudePayload(payload, time.Now())
+	if err != nil {
+		return
+	}
+	if report.RuntimeName == "" {
+		report.RuntimeName = core.HookRuntimeName()
+	}
+	_ = core.WriteStatusReport(core.StatusReportDir(), report)
 }

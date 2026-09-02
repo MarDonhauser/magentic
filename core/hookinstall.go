@@ -35,6 +35,14 @@ func ClaudeHookDefinitions() []ClaudeHookDefinition {
 	return definitions
 }
 
+// ClaudeStatusLineDefinition is the statusLine entry. Claude Code runs it on
+// every change with model, effort and context facts on stdin. It prints
+// nothing, so Claude Code draws no status line of its own — Magentic shows the
+// facts under the terminal instead.
+func ClaudeStatusLineDefinition() ClaudeHookDefinition {
+	return ClaudeHookDefinition{Event: ClaudeStatusEvent, Command: claudeHookMarker + " --event " + ClaudeStatusEvent}
+}
+
 // hookStateForClaudeEvent maps one Claude Code lifecycle event onto the
 // vendor-neutral report vocabulary. PostToolUse only refreshes the freshness
 // window: a long tool call is still the same turn.
@@ -129,10 +137,37 @@ func InstallClaudeHooks(path string) ([]ClaudeHookDefinition, error) {
 		written = append(written, definition)
 	}
 	settings["hooks"] = hooks
+	// A statusLine the developer configured stays: it is their line, and
+	// replacing it silently would take their status line away.
+	if claudeStatusLineCommand(settings) == "" {
+		definition := ClaudeStatusLineDefinition()
+		settings["statusLine"] = map[string]any{"type": "command", "command": definition.Command}
+		written = append(written, definition)
+	}
 	if len(written) == 0 {
 		return nil, nil
 	}
 	return written, writeClaudeSettings(path, settings)
+}
+
+// ClaudeStatusLineCommand reports which statusLine command the settings file
+// names and whether Magentic wrote it.
+func ClaudeStatusLineCommand(path string) (command string, ours bool, err error) {
+	settings, err := readClaudeSettings(path)
+	if err != nil {
+		return "", false, err
+	}
+	command = claudeStatusLineCommand(settings)
+	return command, strings.Contains(command, claudeHookMarker), nil
+}
+
+func claudeStatusLineCommand(settings map[string]any) string {
+	entry, ok := settings["statusLine"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	command, _ := entry["command"].(string)
+	return strings.TrimSpace(command)
 }
 
 // UninstallClaudeHooks removes only the definitions Magentic wrote. Affected
@@ -163,6 +198,10 @@ func UninstallClaudeHooks(path string) ([]ClaudeHookDefinition, error) {
 			continue
 		}
 		hooks[event] = kept
+	}
+	if command := claudeStatusLineCommand(settings); command != "" && strings.Contains(command, claudeHookMarker) {
+		delete(settings, "statusLine")
+		removed = append(removed, ClaudeHookDefinition{Event: ClaudeStatusEvent, Command: command})
 	}
 	if len(removed) == 0 {
 		return nil, nil

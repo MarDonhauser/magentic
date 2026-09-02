@@ -36,6 +36,7 @@ import {
 import { renderGitGraph } from './gitgraph.js';
 import { completionTrigger, applyCompletion } from './features/composer/completion-state.js';
 import { promptCoverRows } from './features/composer/prompt-cover.js';
+import { statusLineItems } from './features/statusline/statusline-state.js';
 import { renderBoard } from './board.js';
 import { renderStats } from './stats.js';
 import { mountDock, toggleDock, isDockOpen, closeDockTab, dockTabs, refitDock } from './dock.js';
@@ -474,6 +475,7 @@ function updatePromptCover(t, status) {
 }
 
 const termBarEl = $('term-bar');
+const termStatusLineEl = $('term-statusline');
 const termStateEl = $('term-session-state');
 const termStateIconEl = $('term-state-icon');
 const termStateTitleEl = $('term-state-title');
@@ -595,7 +597,8 @@ function agentInfo(name, sessionID = '') {
     for (const wt of p.worktrees || []) {
       for (const a of wt.agents || []) {
         if ((sessionID && a.id === sessionID) || (!sessionID && a.name === name)) {
-          return { ...a, project: p.name, projectID: p.id };
+          const { agents, ...checkout } = wt;
+          return { ...a, project: p.name, projectID: p.id, mainBranch: p.mainBranch, checkout };
         }
       }
     }
@@ -697,7 +700,17 @@ function updateTermBar() {
       if (b.isConnected) { delete b.dataset.confirm; b.innerHTML = icon('x'); }
     }, 3000);
   };
+  updateTermStatusLine(a, gone);
   updateTermComposer(a, v, gone);
+}
+
+function updateTermStatusLine(a, gone) {
+  const items = statusLineItems(a, { gone });
+  termStatusLineEl.hidden = items.length === 0;
+  termStatusLineEl.innerHTML = items.map(item =>
+    `<span class="tsl-item${item.tone ? ' ' + item.tone : ''}" title="${esc(item.title || '')}">` +
+      (item.meter == null ? '' : `<span class="tsl-meter" aria-hidden="true"><i style="width:${item.meter}%"></i></span>`) +
+      `<span>${esc(item.text)}</span></span>`).join('');
 }
 
 function updateComposerControls(gone) {

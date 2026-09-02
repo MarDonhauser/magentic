@@ -416,6 +416,17 @@ Benutzer lesbar), die Magentic beim nächsten Blick einliest. Eine Meldung gilt
 60 Sekunden lang; danach zählt wieder der Bildschirm. Ohne Hooks ändert sich
 nichts: jede Session wird weiter über ihr Manifest gedeutet.
 
+Derselbe Lauf trägt auch die **Statuszeile** ein: `statusLine` in
+`~/.claude/settings.json` zeigt auf `magentic hook-report --event Status`.
+Claude Code ruft das bei jeder Änderung mit Modell, Effort, Kontext-Auslastung
+und Kosten auf; der Befehl gibt nichts aus, deshalb zeichnet Claude Code keine
+eigene Statuszeile mehr. Magentic legt den letzten Stand pro Session unter
+`~/.config/magentic/status-reports/` ab und zeigt ihn in der Desktop-App als
+Leiste unter dem Terminal — zusammen mit dem Git-Zustand des Checkouts
+(uncommitted / clear / committed, ahead/behind). Eine bereits vorhandene,
+eigene `statusLine` bleibt unangetastet; dann fehlen in der Leiste nur Modell
+und Kontext.
+
 Rechts daneben: `✓` Arbeitsverzeichnis sauber, `±` uncommitted Änderungen, `⑂` läuft im Worktree.
 
 Agents sind pro Projekt nach Dringlichkeit sortiert: Wer auf Input wartet,
