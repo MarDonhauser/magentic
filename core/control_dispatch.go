@@ -99,6 +99,8 @@ func (s *ControlService) Dispatch(ctx context.Context, request ControlRequest) C
 		return s.sessionKill(ctx, request)
 	case ControlSessionWait:
 		return s.sessionWait(ctx, request)
+	case ControlSessionWhoami:
+		return s.sessionWhoami(ctx, request)
 	case ControlSessionWatch:
 		return controlFailure(request.ID, ControlInvalidRequest,
 			"session.watch meldet eine Verbindung am Ereignisstrom an und wird nicht als einzelne Anfrage beantwortet.")
@@ -396,4 +398,33 @@ func (s *ControlService) sessionKill(ctx context.Context, request ControlRequest
 	return ControlResponse{ID: request.ID, Outcome: ControlOK, Result: &ControlResult{
 		SessionID: session.ID, Stopped: true, AlreadyGone: alreadyGone, Dir: session.Dir,
 	}}
+}
+
+// sessionWhoami resolves the caller's own marker facts against the Registry, so
+// an agent learns its Project, Worktree, and SessionID without parsing state
+// files. The facts are a claim: a copied environment that resolves to nothing
+// is answered not-managed rather than with somebody else's identity.
+func (s *ControlService) sessionWhoami(ctx context.Context, request ControlRequest) ControlResponse {
+	state, failure := s.state(ctx)
+	if failure != nil {
+		return failure.response(request.ID)
+	}
+	marker := request.Args.Marker
+	session := state.SessionByID(marker.SessionID)
+	if marker.SessionID == "" || session == nil {
+		return controlFailure(request.ID, ControlNotManaged, fmt.Sprintf(
+			"%s löst keine registrierte Session auf — dieser Aufruf läuft nicht in einer von Magentic verwalteten Session.",
+			controlMarkerDescription(marker)))
+	}
+	if marker.ProjectID != "" && session.ProjectID != marker.ProjectID {
+		return controlFailure(request.ID, ControlNotManaged, fmt.Sprintf(
+			"Die Marker-Angaben widersprechen sich: Session %s gehört nicht zu ProjectID %s.",
+			marker.SessionID, marker.ProjectID))
+	}
+	view := controlSessionViews(state, []Session{*session})[0]
+	result := &ControlResult{SessionID: session.ID, Session: &view, Dir: session.Dir, Vendor: view.Vendor}
+	if session.Worktree {
+		result.Worktree = session.Dir
+	}
+	return ControlResponse{ID: request.ID, Outcome: ControlOK, Result: result}
 }

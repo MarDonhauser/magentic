@@ -98,16 +98,16 @@
 
 ## 7. Serving process and interfaces
 
-- [ ] 7.1 Start the control server from the TUI and the desktop app, with a way
+- [x] 7.1 Start the control server from the TUI and the desktop app, with a way
       to disable it, and verify a manual run shows the socket answering while
       each interface runs
-- [ ] 7.2 Add a headless serve mode that serves the API without an interface, and
+- [x] 7.2 Add a headless serve mode that serves the API without an interface, and
       verify a manual run shows a Session started through it surviving the client
       exiting
-- [ ] 7.3 Verify with a test that a control mutation and an interface action on
+- [x] 7.3 Verify with a test that a control mutation and an interface action on
       the same Session are both applied as coordinated semantic changes with no
       lost update
-- [ ] 7.4 Verify with a test that `session list` and `session output` still answer
+- [x] 7.4 Verify with a test that `session list` and `session output` still answer
       while a long-running mutation holds a Session transition
 
 ## 8. Agent integration

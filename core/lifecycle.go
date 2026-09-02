@@ -1748,7 +1748,7 @@ func (tmuxLifecycleRuntime) Start(ctx context.Context, session Session, mode str
 			return fmt.Errorf("%s ist nicht installiert (%s nicht im PATH)", provider.Vendor(), provider.Binary())
 		}
 	}
-	args := []string{"new-session", "-d", "-s", session.TmuxName(), "-c", session.Dir, "-x", "220", "-y", "50"}
+	args := tmuxNewSessionArgs(session)
 	if out, err := exec.CommandContext(ctx, "tmux", args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("tmux new-session: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -1767,6 +1767,13 @@ func (tmuxLifecycleRuntime) Start(ctx context.Context, session Session, mode str
 		return fmt.Errorf("submit coding-agent command: %w", err)
 	}
 	return nil
+}
+
+// tmuxNewSessionArgs builds the command that creates a Session runtime. Every
+// provisioned runtime carries the Magentic environment marker.
+func tmuxNewSessionArgs(session Session) []string {
+	args := []string{"new-session", "-d", "-s", session.TmuxName(), "-c", session.Dir, "-x", "220", "-y", "50"}
+	return append(args, controlEnvironmentArgs(session)...)
 }
 
 func (tmuxLifecycleRuntime) Stop(ctx context.Context, session Session) error {
