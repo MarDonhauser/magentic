@@ -396,6 +396,8 @@ const termAttachEl = $('term-attach');
 const termImageEl = $('term-image');
 const termComposeHintEl = $('term-compose-hint');
 const termCompletionsEl = $('term-completions');
+const termQueueEl = $('term-queue');
+const termQueueTextEl = $('term-queue-text');
 
 // Das Menü lebt allein von der Schreibmarke im Textfeld. token verwirft
 // Antworten, die zu einer älteren Eingabe gehören.
@@ -554,6 +556,7 @@ function updateTermBar() {
   const v = agentVisual(a, a?.project);
   const gone = !a || ['exited', 'dead'].includes(a.status);
   const claudeActions = a?.term ? '' :
+    `<button class="btn tiny" id="tb-queue"${gone ? ' disabled' : ''} title="Nachricht einreihen — wird erst zugestellt, wenn die Session ihre aktuelle Arbeit beendet hat">${icon('clock')} einreihen</button>` +
     `<button class="btn tiny" id="tb-done"${gone ? ' disabled' : ''} title="/done in diese Session senden — committen und auf dev bringen">${icon('check')} done</button>` +
     `<button class="btn tiny" id="tb-deploy"${gone ? ' disabled' : ''} title="/deploy in diese Session senden">${icon('rocket')} deploy</button>` +
     `<button class="btn tiny" id="tb-dd"${gone ? ' disabled' : ''} title="/done senden und danach automatisch /deploy">${icon('check')}+${icon('rocket')} beides</button>`;
@@ -581,6 +584,7 @@ function updateTermBar() {
     `<button class="btn tiny danger" id="tb-kill" title="Session endgültig beenden">${icon('x')}</button></span>`;
   $('tb-back').onclick = showOverview;
   if (!a?.term) {
+    $('tb-queue').onclick = () => toggleQueueForm();
     $('tb-done').onclick = () =>
       act(DoneAgent(sessionID), `/done an „${sessionName}" gesendet — Plan in der Session bestätigen`).catch(() => {});
     $('tb-deploy').onclick = () =>
@@ -750,6 +754,45 @@ termImageEl.onchange = () => {
   termImageEl.value = '';
 };
 
+// Das Einreih-Overlay ist die eingebettete Fassung von sendSessionMessage()
+// (Übersicht) und answerInboxEntry() (Posteingang): dieselbe durable Outbox,
+// aber ohne die Terminalansicht zu verlassen, wenn eine Session gerade
+// beschäftigt ist und die Nachricht erst warten soll.
+function toggleQueueForm(show = termQueueEl.classList.contains('is-hidden')) {
+  termQueueEl.classList.toggle('is-hidden', !show);
+  if (show) {
+    termQueueTextEl.focus();
+  } else {
+    const t = activeTerm && terms.get(activeTerm);
+    t?.term.focus();
+  }
+}
+
+termQueueEl.addEventListener('submit', async e => {
+  e.preventDefault();
+  const text = termQueueTextEl.value.trim();
+  const sessionID = activeSessionID;
+  const sessionName = activeTerm;
+  if (!text || !sessionID) return;
+  try {
+    await SendMessage(sessionID, text);
+    termQueueTextEl.value = '';
+    toggleQueueForm(false);
+    toast(`Nachricht für „${sessionName}“ eingereiht — wird zugestellt, sobald die Session frei ist`);
+  } catch (err) {
+    toast('Einreihen fehlgeschlagen: ' + errorText(err), true);
+  }
+});
+termQueueTextEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    termQueueEl.requestSubmit();
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    toggleQueueForm(false);
+  }
+});
+
 const automationDialogEl = $('automation-dialog');
 const automationFormEl = $('automation-form');
 const automationFieldsEl = $('automation-fields');
@@ -916,6 +959,7 @@ async function openSession(sessionID, name) {
   activeTerm = name;
   activeSessionID = sessionID;
   SetActiveTerm(sessionID);
+  toggleQueueForm(false);
   showPanel('terms');
   let t = terms.get(name);
   if (t && t.sessionID !== sessionID) {

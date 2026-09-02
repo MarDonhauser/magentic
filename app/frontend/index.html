@@ -108,6 +108,14 @@
                     <input id="term-image" type="file" accept="image/*" hidden>
                 </div>
             </form>
+            <form id="term-queue" class="is-hidden">
+                <label class="sr-only" for="term-queue-text">Nachricht für die Session einreihen</label>
+                <textarea id="term-queue-text" rows="3" spellcheck="true" placeholder="Nachricht einreihen — wird erst zugestellt, wenn die Session ihre aktuelle Arbeit beendet hat …"></textarea>
+                <div class="term-queue-bar">
+                    <span class="term-queue-hint">↵ einreihen · ⇧↵ Zeilenumbruch · Esc schließen</span>
+                    <button type="submit" class="btn tiny">einreihen</button>
+                </div>
+            </form>
         </div>
     </main>
     <aside id="timeline">

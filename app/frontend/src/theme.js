@@ -89,7 +89,15 @@ const GREY_RAMP = [
   '#b7bdc4', '#c2c7cd', '#cdd0d6', '#d7dadf', '#e2e4e7', '#edeef0',
 ];
 
-const EXTENDED_ANSI = (() => {
+// Die Rampe kodiert Helligkeitsstufen für einen dunklen Terminal-Grund: Grau
+// 237 (Index 5, nahe Schwarz) trägt bei Claude Code den Hintergrund seines
+// Prompt-Kastens — ein dezenter Kasten auf dunklem Grund, ein schwarzer Klotz
+// auf hellem. Wie schon bei ANSI-Schwarz/Weiß in TERMINAL_THEMES kehrt sich im
+// hellen Modus die Helligkeitsordnung um: derselbe Index trägt jetzt eine
+// helle statt einer dunklen Stufe.
+const GREY_RAMP_LIGHT = [...GREY_RAMP].reverse();
+
+function buildExtendedAnsi(rampLight) {
   const step = v => (v === 0 ? 0 : 55 + 40 * v);
   const hex = v => v.toString(16).padStart(2, '0');
   const cube = [];
@@ -97,8 +105,10 @@ const EXTENDED_ANSI = (() => {
     for (let g = 0; g < 6; g++)
       for (let b = 0; b < 6; b++)
         cube.push('#' + hex(step(r)) + hex(step(g)) + hex(step(b)));
-  return [...cube, ...GREY_RAMP];
-})();
+  return [...cube, ...(rampLight ? GREY_RAMP_LIGHT : GREY_RAMP)];
+}
+
+const EXTENDED_ANSI = { dark: buildExtendedAnsi(false), light: buildExtendedAnsi(true) };
 
 let initialised = false;
 
@@ -141,7 +151,8 @@ export function currentTheme() {
 }
 
 export function terminalTheme(theme = currentTheme()) {
-  return { ...TERMINAL_THEMES[normaliseTheme(theme)], extendedAnsi: [...EXTENDED_ANSI] };
+  const resolved = normaliseTheme(theme);
+  return { ...TERMINAL_THEMES[resolved], extendedAnsi: [...EXTENDED_ANSI[resolved]] };
 }
 
 // Der 256er-Würfel, aus dem Claude Code malt, ist für ein schwarzes Terminal
@@ -151,9 +162,10 @@ export function terminalTheme(theme = currentTheme()) {
 // einebnen. Auf hellem Grund bricht dagegen fast alles weg: Gelb 220 liegt bei
 // 1.37:1, Grün 114 bei 1.69:1, das Logo-Rosa bei 2.57:1.
 //
-// Diese 240 Farben lassen sich nicht sinnvoll pro Theme umschreiben, weil der
-// Würfel auch Hintergründe trägt. xterm.js kann stattdessen die Vordergrundfarbe
-// je Zelle gegen den echten Hintergrund anheben, und nur dort, wo sie durchfällt.
+// Der 216-Farb-Würfel selbst lässt sich nicht sinnvoll pro Theme umschreiben,
+// weil er auch Hintergründe trägt und fremde Produktfarben sind (s.o.). Für
+// seine Vordergrund-Verwendungen kann xterm.js stattdessen die Farbe je Zelle
+// gegen den echten Hintergrund anheben, und nur dort, wo sie durchfällt.
 // Deshalb bleibt der Boden im Dunklen aus und greift nur im Hellen.
 export function terminalContrastFloor(theme = currentTheme()) {
   return normaliseTheme(theme) === 'light' ? 4.5 : 1;

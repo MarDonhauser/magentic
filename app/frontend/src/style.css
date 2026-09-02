@@ -2236,7 +2236,8 @@ body.session-magnet-dragging * { cursor: grabbing !important; user-select: none 
 #term-send .ico { width: 18px; height: 18px; }
 
 #terms.hydra #term-session-state,
-#terms.hydra #term-composer { display: none; }
+#terms.hydra #term-composer,
+#terms.hydra #term-queue { display: none; }
 
 @media (max-height: 720px) {
   #terms:not(.hydra) > .term-wrap { bottom: 154px; }
@@ -2252,6 +2253,64 @@ body.session-magnet-dragging * { cursor: grabbing !important; user-select: none 
   #term-composer,
   .term-attach,
   #term-send { transition: none; }
+}
+
+#term-queue {
+  position: absolute;
+  right: max(var(--term-gui-gutter), calc((100% - var(--term-gui-content-max)) / 2));
+  left: max(var(--term-gui-gutter), calc((100% - var(--term-gui-content-max)) / 2));
+  bottom: calc(16px + 126px + var(--space-sm));
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: 13px 14px 11px 16px;
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
+  border-radius: var(--radius-composer);
+  background: var(--surface);
+  box-shadow: var(--term-composer-shadow);
+}
+
+#term-queue.is-hidden { display: none; }
+
+#term-queue:focus-within {
+  border-color: color-mix(in srgb, var(--warning) 60%, transparent);
+}
+
+#term-queue-text {
+  min-height: 64px;
+  resize: none;
+  border: 0;
+  outline: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--ink);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+#term-queue-text::placeholder { color: var(--muted); opacity: 1; }
+
+.term-queue-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+
+.term-queue-hint {
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-height: 720px) {
+  #term-queue { bottom: calc(12px + 126px + var(--space-sm)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #term-queue { transition: none; }
 }
 
 .term-completions {
