@@ -744,7 +744,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case attachDoneMsg:
 		return m, m.pollNow()
 	case tea.MouseMsg:
-		if m.inputKind != inputNone || m.confirmKill || m.confirmRmProj {
+		if m.inputKind != inputNone || m.confirmKill || m.confirmRmProj || m.inboxOpen {
 			return m, nil
 		}
 		return m.updateMouse(msg)
@@ -754,6 +754,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.confirmKill || m.confirmRmProj {
 			return m.updateConfirm(msg)
+		}
+		if m.inboxOpen {
+			return m.updateInbox(msg)
 		}
 		return m.updateNormal(msg)
 	}
@@ -911,6 +914,36 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startInput(inputZgStart)
 	case "Z":
 		return m.zgTogglePause()
+	case "g":
+		return m, m.pollNow()
+	case "i":
+		m.inboxOpen = true
+		if m.inboxCursor >= len(m.inbox.Entries) {
+			m.inboxCursor = 0
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
+// updateInbox drives the read-only inbox: moving through the list, jumping to a
+// Session, closing it again. Answering stays in the desktop app.
+func (m model) updateInbox(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "esc", "i":
+		m.inboxOpen = false
+		return m, nil
+	case "up", "k":
+		m.moveInboxCursor(-1)
+		return m, nil
+	case "down", "j":
+		m.moveInboxCursor(1)
+		return m, nil
+	case "enter", " ":
+		m.selectInboxEntry()
+		return m, m.previewNow()
 	case "g":
 		return m, m.pollNow()
 	}

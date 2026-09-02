@@ -31,6 +31,9 @@ func main() {
 		case "hook-report":
 			cliHookReport()
 			return
+		case "session":
+			cliSession(os.Args[2:])
+			return
 		case "-h", "--help", "help":
 			fmt.Println("magentic — TUI zum Verwalten von Coding-Agents über tmux")
 			fmt.Println()
@@ -39,6 +42,9 @@ func main() {
 			fmt.Println("  magentic agents           Status-Manifeste prüfen und ihre Quelle nennen")
 			fmt.Println("  magentic hooks install    Claude-Code-Hooks für Status-Meldungen einrichten")
 			fmt.Println("  magentic hooks uninstall  Diese Hooks wieder entfernen")
+			fmt.Println()
+			fmt.Println("Steuer-API — Sessions aus einem Skript oder einem Coding-Agent heraus steuern:")
+			fmt.Print(controlSessionHelp())
 			return
 		}
 	}

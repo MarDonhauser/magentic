@@ -17,19 +17,19 @@
 
 ## 3. Desktop inbox view
 
-- [ ] 3.1 Build the inbox view in `app/frontend/` as a surface reachable from anywhere without tearing down an open terminal; verify by opening the inbox with a Session terminal open and returning to that Session unchanged
-- [ ] 3.2 Render each entry with Project, Session, waiting kind, waiting time (lower-bound waits marked as such), and the content excerpt, with an explicit marker when content is not known; verify against a Session whose Observation reports content as unknown
-- [ ] 3.3 Render the unavailable and incomplete list states as text instead of an empty inbox; verify by forcing an unavailable and a partial Observation
-- [ ] 3.4 Add the answer action on an entry, routed through the existing `SendMessage` binding, plus an action to open the Session; verify that answering an input-ready Session delivers the text and that answering a busy Session leaves it queued and visible as pending
-- [ ] 3.5 Verify that an entry stays until the next Observation reports the Session as no longer waiting — submitting an answer alone must not remove it
+- [x] 3.1 Build the inbox view in `app/frontend/` as a surface reachable from anywhere without tearing down an open terminal; verify by opening the inbox with a Session terminal open and returning to that Session unchanged
+- [x] 3.2 Render each entry with Project, Session, waiting kind, waiting time (lower-bound waits marked as such), and the content excerpt, with an explicit marker when content is not known; verify against a Session whose Observation reports content as unknown
+- [x] 3.3 Render the unavailable and incomplete list states as text instead of an empty inbox; verify by forcing an unavailable and a partial Observation
+- [x] 3.4 Add the answer action on an entry, routed through the existing `SendMessage` binding, plus an action to open the Session; verify that answering an input-ready Session delivers the text and that answering a busy Session leaves it queued and visible as pending
+- [x] 3.5 Verify that an entry stays until the next Observation reports the Session as no longer waiting — submitting an answer alone must not remove it
 
 ## 4. TUI inbox
 
-- [ ] 4.1 Render a read-only inbox list in the TUI from the same `AttentionPlan.Inbox`, with no re-sorting in the view layer; verify with a view test that the rendered order matches the core order
-- [ ] 4.2 Add jump-to-Session from a selected entry and verify with a model test that selecting an entry moves to that Session
-- [ ] 4.3 Verify with a test that the TUI and desktop projections come from the same planner output, so both surfaces list the same entries in the same order
+- [x] 4.1 Render a read-only inbox list in the TUI from the same `AttentionPlan.Inbox`, with no re-sorting in the view layer; verify with a view test that the rendered order matches the core order
+- [x] 4.2 Add jump-to-Session from a selected entry and verify with a model test that selecting an entry moves to that Session
+- [x] 4.3 Verify with a test that the TUI and desktop projections come from the same planner output, so both surfaces list the same entries in the same order
 
 ## 5. Verification
 
-- [ ] 5.1 Write the end-to-end core test covering the spec's clearing scenarios — Session resumes work, runtime becomes absent, waiting kind changes — and verify each removes or replaces the entry as specified
-- [ ] 5.2 Run `go build ./...` and `go vet ./...` in the repository root and in `app/`, and report the full test suite as ready to run rather than running it
+- [x] 5.1 Write the end-to-end core test covering the spec's clearing scenarios — Session resumes work, runtime becomes absent, waiting kind changes — and verify each removes or replaces the entry as specified
+- [x] 5.2 Run `go build ./...` and `go vet ./...` in the repository root and in `app/`, and report the full test suite as ready to run rather than running it

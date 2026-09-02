@@ -340,8 +340,107 @@ func (m model) usageLines(w int) []string {
 }
 
 func (m model) renderDetails(w, h int) string {
+	if m.inboxOpen {
+		return strings.Join(m.inboxLines(w, h), "\n")
+	}
 	lines, _ := m.detailContent(w, h)
 	return strings.Join(lines, "\n")
+}
+
+// waitingKindLabel names what the listed Session asks of the developer.
+func waitingKindLabel(kind core.AttentionWaitingKind) string {
+	if kind == core.AttentionWaitingReview {
+		return "Ergebnis wartet auf einen Blick"
+	}
+	return "Frage oder Freigabe offen"
+}
+
+// waitingTimeLabel keeps a wait whose start is unknown recognizable as a lower
+// bound instead of presenting it as a wait that just began.
+func waitingTimeLabel(entry core.AttentionInboxEntry) string {
+	if entry.WaitingSince.IsZero() {
+		return "wartet seit unbekannter Zeit"
+	}
+	if entry.WaitingSinceKnown {
+		return "wartet seit " + formatAge(entry.WaitingSince)
+	}
+	return "wartet mindestens seit " + formatAge(entry.WaitingSince)
+}
+
+// inboxLines renders the planned inbox read-only. The order is the one the
+// attention planner produced; nothing is sorted, filtered or derived here.
+func (m model) inboxLines(w, h int) []string {
+	var lines []string
+	add := func(s string) { lines = append(lines, trunc(s, w)) }
+	add(styleTitle.Render("Posteingang") + styleDim.Render(" · ⏎ öffnet die Session · esc schließt"))
+	switch m.inbox.State {
+	case core.AttentionInboxUnavailable:
+		add(styleWarn.Render("Die wartenden Sessions konnten gerade nicht gelesen werden."))
+		return lines
+	case core.AttentionInboxIncomplete:
+		add(styleWarn.Render("Von einem Teil der Sessions ist gerade nicht bekannt, ob sie warten."))
+	}
+	rows := m.inboxRows()
+	if len(rows) == 0 {
+		add(styleDim.Render("Im Moment wartet keine Session auf dich."))
+		return lines
+	}
+	// One block per entry, so a list longer than the panel scrolls by whole
+	// entries and the selected one always stays visible.
+	blocks := make([][]string, 0, len(rows))
+	for index, row := range rows {
+		name, project := string(row.entry.SessionID), "—"
+		if row.known {
+			name = row.agent.Name
+			if row.agent.Project != "" {
+				project = row.agent.Project
+			}
+		}
+		marker := "  "
+		if index == m.inboxCursor {
+			marker = styleTitle.Render("▸ ")
+		}
+		block := []string{
+			trunc(marker+styleText.Render(name)+styleDim.Render(" · "+project), w),
+			trunc("    "+styleWarn.Render(waitingKindLabel(row.entry.Kind))+
+				styleDim.Render(" · "+waitingTimeLabel(row.entry)), w),
+			trunc("    "+styleDim.Render(inboxReason(row.entry)), w),
+		}
+		blocks = append(blocks, block)
+	}
+	first := 0
+	for {
+		height := len(lines)
+		for _, block := range blocks[first:] {
+			height += len(block)
+		}
+		if height <= h || first >= m.inboxCursor {
+			break
+		}
+		first++
+	}
+	for _, block := range blocks[first:] {
+		lines = append(lines, block...)
+	}
+	if len(lines) > h {
+		lines = lines[:h]
+	}
+	return lines
+}
+
+// inboxReason gives the one line that explains the wait, or says that the
+// Session's output could not be read.
+func inboxReason(entry core.AttentionInboxEntry) string {
+	if !entry.ExcerptKnown {
+		return "Der Grund ist nicht bekannt — die Ausgabe konnte nicht gelesen werden."
+	}
+	lines := strings.Split(strings.TrimRight(entry.Excerpt, "\n"), "\n")
+	for index := len(lines) - 1; index >= 0; index-- {
+		if text := strings.TrimSpace(lines[index]); text != "" {
+			return text
+		}
+	}
+	return "Die Session zeigt gerade keinen Text, der die Frage erklärt."
 }
 
 func (m model) detailContent(w, h int) ([]string, int) {
@@ -699,7 +798,10 @@ func (m model) renderFooter() string {
 		}
 		return " " + styleOK.Render(m.flash)
 	}
-	keys := []string{"n neu", "w worktree", "T terminal", "⏎ attach", "d done", "D deploy", "z timer", "r name", "x kill", "p projekt", "q ende"}
+	if m.inboxOpen {
+		return " " + styleDim.Render(strings.Join([]string{"↑↓ wählen", "⏎ Session öffnen", "esc zurück", "g neu lesen", "q ende"}, " · "))
+	}
+	keys := []string{"n neu", "w worktree", "T terminal", "⏎ attach", "i posteingang", "d done", "D deploy", "z timer", "r name", "x kill", "p projekt", "q ende"}
 	return " " + styleDim.Render(strings.Join(keys, " · "))
 }
 

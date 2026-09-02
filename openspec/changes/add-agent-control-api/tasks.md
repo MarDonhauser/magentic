@@ -1,83 +1,83 @@
 ## 1. Request vocabulary
 
-- [ ] 1.1 Define the control request and response types in a new `core/` control
+- [x] 1.1 Define the control request and response types in a new `core/` control
       module — verb, arguments, request id, outcome code, result — and verify a
       table test round-trips every verb through JSON encode/decode unchanged
-- [ ] 1.2 Define the stable outcome-code set (success, not-found, ambiguous,
+- [x] 1.2 Define the stable outcome-code set (success, not-found, ambiguous,
       containment, refused, unavailable, not-managed, plus the wait outcomes) and
       verify a test asserts every code string is unique and stable
-- [ ] 1.3 Implement Session addressing — SessionID, Project-qualified name, bare
+- [x] 1.3 Implement Session addressing — SessionID, Project-qualified name, bare
       name — over the Registry, and verify tests cover resolution, the ambiguous
       bare name across two Projects, and the unknown Session case
-- [ ] 1.4 Implement Worktree scoping through Repositories with fresh resolution of
+- [x] 1.4 Implement Worktree scoping through Repositories with fresh resolution of
       the Project-qualified handle, and verify a test rejects a directory not
       physically contained in the addressed Project
 
 ## 2. Verb dispatch over the existing modules
 
-- [ ] 2.1 Implement `session list` against Registry plus Session Observation and
+- [x] 2.1 Implement `session list` against Registry plus Session Observation and
       verify a test shows an unavailable Observation is reported as unavailable,
       never as a concrete status
-- [ ] 2.2 Implement `session start` over Session Lifecycle (Project scope,
+- [x] 2.2 Implement `session start` over Session Lifecycle (Project scope,
       existing Worktree, fresh managed Worktree, vendor selection, terminal
       Session) and verify tests cover each scope and an unsupported vendor
-- [ ] 2.3 Wire the optional initial prompt to Lifecycle's explicit applied-fact
+- [x] 2.3 Wire the optional initial prompt to Lifecycle's explicit applied-fact
       delivery and verify a test asserts an unknown delivery outcome is reported
       as unknown and never re-sent automatically
-- [ ] 2.4 Implement `session send` over the outbox and verify tests cover
+- [x] 2.4 Implement `session send` over the outbox and verify tests cover
       delivered, queued, and the refusal for a terminal Session
-- [ ] 2.5 Implement `session output` returning normalized content with the
+- [x] 2.5 Implement `session output` returning normalized content with the
       Observation availability, honoring a trailing-line limit, and verify tests
       cover ANSI stripping, the limit, and the unreadable-runtime case
-- [ ] 2.6 Implement `session kill` over Lifecycle and verify tests cover the
+- [x] 2.6 Implement `session kill` over Lifecycle and verify tests cover the
       running Session, the idempotent already-stopped case, and that a managed
       Worktree survives
 
 ## 3. Pinned wait
 
-- [ ] 3.1 Implement occupant resolution into the pinned triple (SessionID,
+- [x] 3.1 Implement occupant resolution into the pinned triple (SessionID,
       RuntimeName, AgentRunRef) and verify tests cover a pinned coding-agent
       Session and the no-occupant refusal
-- [ ] 3.2 Implement the `done` and `waiting` conditions evaluated from
+- [x] 3.2 Implement the `done` and `waiting` conditions evaluated from
       Observation, and verify tests assert an unavailable or partial Observation
       satisfies neither condition
-- [ ] 3.3 Implement replacement detection and verify tests cover a recreated
+- [x] 3.3 Implement replacement detection and verify tests cover a recreated
       runtime under a new RuntimeName, a different AgentRunRef, a removed and
       re-created Session under the same name, and a replacement idling without
       satisfying a pending `done` wait
-- [ ] 3.4 Implement the terminal outcomes `blocked`, `session-gone`, `timeout`,
+- [x] 3.4 Implement the terminal outcomes `blocked`, `session-gone`, `timeout`,
       and `cancelled`, and verify tests assert exactly one outcome per wait and
       that a confirmed-gone runtime never returns `done`
-- [ ] 3.5 Verify with a test that a pending wait holds no Registry coordination
+- [x] 3.5 Verify with a test that a pending wait holds no Registry coordination
       and no Session transition, and that several concurrent waits on one Session
       each resolve independently
 
 ## 4. Local socket server
 
-- [ ] 4.1 Implement socket creation in the user's runtime directory with
+- [x] 4.1 Implement socket creation in the user's runtime directory with
       owner-only permissions, stale-socket reclamation, and refusal to take over
       a live socket; verify tests cover the permission bits, the stale case, and
       the live case
-- [ ] 4.2 Implement peer-credential authorization against the owning user id and
+- [x] 4.2 Implement peer-credential authorization against the owning user id and
       verify a test refuses a connection whose credentials differ
-- [ ] 4.3 Implement the line-delimited JSON request loop with request-id
+- [x] 4.3 Implement the line-delimited JSON request loop with request-id
       correlation and verify tests cover a malformed document, an unknown verb,
       and two sequential requests keeping the connection open
-- [ ] 4.4 Verify with a test that no TCP or otherwise network-reachable listener
+- [x] 4.4 Verify with a test that no TCP or otherwise network-reachable listener
       is opened by the control API
 
 ## 5. Event stream
 
-- [ ] 5.1 Emit status-transition and availability-change events by diffing each
+- [x] 5.1 Emit status-transition and availability-change events by diffing each
       observation pass against the last observed state per Session, and verify a
       test asserts one event per real change and none for an unchanged pass
-- [ ] 5.2 Implement subscriptions with optional Project and Session filters and
+- [x] 5.2 Implement subscriptions with optional Project and Session filters and
       clean release on disconnect or unsubscribe, and verify tests cover
       filtering and release
-- [ ] 5.3 Implement bounded per-subscription buffering that drops a stalled
+- [x] 5.3 Implement bounded per-subscription buffering that drops a stalled
       subscriber with an explicit outcome, and verify a test shows the
       observation pass is never blocked by a non-reading subscriber
-- [ ] 5.4 Feed the pending waits from the same event fan-out and verify an
+- [x] 5.4 Feed the pending waits from the same event fan-out and verify an
       integration test drives a wait to `done` purely through observation events
 
 ## 6. CLI front door
