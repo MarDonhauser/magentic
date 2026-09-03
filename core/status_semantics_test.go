@@ -1,6 +1,7 @@
 package core
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -101,5 +102,130 @@ func TestClaudeIgnoresSynchronousShellCommand(t *testing.T) {
 	evaluated := evaluateAgentKind(kind, "⏺ running 1 shell command…\n❯ \n  🌿 main")
 	if evaluated.Status != StatusIdle || evaluated.Detail != "" {
 		t.Fatalf("Status = %v, Detail = %q, want idle ohne Detail", evaluated.Status.Label(), evaluated.Detail)
+	}
+}
+
+// Runtime weg, Satz intakt: Die Session ist fortsetzbar und weder laufend
+// noch tot. Mit vorhandener Runtime gibt es keine Fortsetzbar-Lesung.
+func TestResumableReadingForAbsentRuntime(t *testing.T) {
+	session := Session{
+		ID: "session-1", Name: "hera", RuntimeName: "mgt-hera",
+		Dir: "/work/hera", SessionKind: SessionKindCodingAgent,
+		Vendor:    AgentVendorClaude,
+		AgentRuns: []AgentRunRef{{Vendor: AgentVendorClaude, ExternalID: "run-1"}},
+	}
+	provider := stubResumeProvider{
+		vendor: AgentVendorClaude, behavior: ResumeByRunRef,
+		exists: map[string]bool{"run-1": true},
+	}
+	dirExists := func(string) bool { return true }
+	absent := SessionObservation{
+		SessionID: session.ID, Availability: ObservationAvailable,
+		Presence: SessionPresenceAbsent, Status: StatusDead,
+	}
+
+	res := ClassifyResumability(session, absent, provider, dirExists)
+	if !res.Resumable || res.FreshOnly || res.Unknown || res.Reason != "" {
+		t.Fatalf("intakter Satz nach Runtime-Verlust = %+v, want resumable", res)
+	}
+
+	present := SessionObservation{
+		SessionID: session.ID, Availability: ObservationAvailable,
+		Presence: SessionPresencePresent, Status: StatusBlocked,
+	}
+	if res := ClassifyResumability(session, present, provider, dirExists); res.Resumable || res.Reason != "" || res.Unknown {
+		t.Fatalf("laufende Session = %+v, want weder fortsetzbar noch tot", res)
+	}
+}
+
+// Jeder Grund, aus dem eine Session ohne Runtime nicht fortsetzbar ist, wird
+// als eigener Fall mit eigenem Grund nachgewiesen.
+func TestDeadReadingCarriesItsReason(t *testing.T) {
+	byRef := func(exists map[string]bool) stubResumeProvider {
+		return stubResumeProvider{vendor: AgentVendorClaude, behavior: ResumeByRunRef, exists: exists}
+	}
+	coding := Session{
+		ID: "session-1", Name: "hera", RuntimeName: "mgt-hera",
+		Dir: "/work/hera", SessionKind: SessionKindCodingAgent,
+		Vendor:    AgentVendorClaude,
+		AgentRuns: []AgentRunRef{{Vendor: AgentVendorClaude, ExternalID: "run-1"}},
+	}
+	term := Session{ID: "term-1", Name: "term-hera", RuntimeName: "mgt-term-hera", Dir: "/work/hera", Kind: KindTerm}
+	managed := coding
+	managed.ID = "session-managed"
+	managed.Name = "managed-hera"
+	managed.RuntimeName = "managed-hera-runtime"
+	managed.Runtime = RuntimeManaged
+	absent := func(id SessionID) SessionObservation {
+		return SessionObservation{
+			SessionID: id, Availability: ObservationAvailable,
+			Presence: SessionPresenceAbsent, Status: StatusDead,
+		}
+	}
+	tests := []struct {
+		name        string
+		session     Session
+		provider    AgentProvider
+		dirKnown    bool
+		wantPart    string
+		wantActions []string
+	}{
+		{name: "Verzeichnis fehlt", session: coding, provider: byRef(map[string]bool{"run-1": true}), wantPart: "Arbeitsverzeichnis"},
+		{name: "unbekannter Vendor", session: coding, provider: nil, dirKnown: true, wantPart: "unbekannter Agent-Vendor"},
+		{name: "keine Run-Referenz", session: func() Session { s := coding; s.AgentRuns = nil; return s }(), provider: byRef(map[string]bool{}), dirKnown: true, wantPart: "keine gespeicherte Konversation"},
+		{name: "Terminal-Session", session: term, provider: nil, dirKnown: true, wantPart: "Terminal", wantActions: []string{SessionActionRestartShell}},
+		{name: "verwaltete Runtime", session: managed, provider: byRef(map[string]bool{"run-1": true}), dirKnown: true, wantPart: "verwaltete"},
+		{name: "Anbieter ohne Resume", session: coding, provider: stubResumeProvider{vendor: AgentVendorClaude, behavior: ResumeUnsupported}, dirKnown: true, wantPart: "keine Konversation"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dirExists := func(string) bool { return test.dirKnown }
+			res := ClassifyResumability(test.session, absent(test.session.ID), test.provider, dirExists)
+			if res.Resumable || res.Unknown || res.Reason == "" {
+				t.Fatalf("Lesung = %+v, want tot mit Grund", res)
+			}
+			if !strings.Contains(res.Reason, test.wantPart) {
+				t.Fatalf("Grund = %q, want Anteil %q", res.Reason, test.wantPart)
+			}
+			var want []string = test.wantActions
+			var got []string
+			for _, action := range SessionActionsFor(test.session, absent(test.session.ID), res) {
+				got = append(got, action.ID)
+			}
+			if len(got) != len(want) {
+				t.Fatalf("Aktionen = %v, want %v", got, want)
+			}
+			for i := range want {
+				if got[i] != want[i] {
+					t.Fatalf("Aktionen = %v, want %v", got, want)
+				}
+			}
+		})
+	}
+}
+
+// Ein nicht beobachtbarer Probe-Lauf bleibt unbekannt: weder fortsetzbar noch
+// tot, und weder Fortsetzen noch Verwerfen wird angeboten.
+func TestUnobservableRuntimeStaysUnknown(t *testing.T) {
+	session := Session{
+		ID: "session-1", Name: "hera", RuntimeName: "mgt-hera",
+		Dir: "/work/hera", SessionKind: SessionKindCodingAgent,
+		Vendor:    AgentVendorClaude,
+		AgentRuns: []AgentRunRef{{Vendor: AgentVendorClaude, ExternalID: "run-1"}},
+	}
+	provider := stubResumeProvider{
+		vendor: AgentVendorClaude, behavior: ResumeByRunRef,
+		exists: map[string]bool{"run-1": true},
+	}
+	timedOut := SessionObservation{
+		SessionID: session.ID, Availability: ObservationUnavailable,
+		Presence: SessionPresenceUnknown, Status: StatusUnknown,
+	}
+	res := ClassifyResumability(session, timedOut, provider, func(string) bool { return true })
+	if !res.Unknown || res.Resumable || res.Reason == "" {
+		t.Fatalf("unbeobachtbare Runtime = %+v, want unbekannt", res)
+	}
+	if actions := SessionActionsFor(session, timedOut, res); len(actions) != 0 {
+		t.Fatalf("unbekannte Verfügbarkeit bietet an: %+v", actions)
 	}
 }

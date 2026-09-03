@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -285,6 +286,47 @@ func TestProvisionRejectsUnknownVendor(t *testing.T) {
 	}
 }
 
+func TestProvisionRejectsManagedRuntimeForUnsupportedVendor(t *testing.T) {
+	lifecycle, _, registry, _ := lifecycleHarness(t)
+	project := registerLifecycleProject(t, registry)
+	_, err := lifecycle.Provision(context.Background(), SessionProvision{
+		ProjectID: project.ID, Name: "navi", Directory: project.Path,
+		Kind: SessionKindCodingAgent, Vendor: AgentVendorCodex, Runtime: RuntimeManaged,
+	})
+	if err == nil {
+		t.Fatal("ein Vendor ohne managed-Unterstützung muss abgelehnt werden")
+	}
+	if !strings.Contains(err.Error(), "codex") {
+		t.Fatalf("Ablehnung nennt den Vendor nicht: %v", err)
+	}
+	snapshot, snapErr := registry.Snapshot(context.Background())
+	if snapErr != nil {
+		t.Fatal(snapErr)
+	}
+	if len(snapshot.State().Agents) != 0 {
+		t.Fatalf("eine abgelehnte managed-Provision darf keinen Session-Record schreiben, gefunden: %+v", snapshot.State().Agents)
+	}
+}
+
+func TestProvisionRejectsManagedRuntimeForTerminalSession(t *testing.T) {
+	lifecycle, _, registry, _ := lifecycleHarness(t)
+	project := registerLifecycleProject(t, registry)
+	_, err := lifecycle.Provision(context.Background(), SessionProvision{
+		ProjectID: project.ID, Name: "navi", Directory: project.Path,
+		Kind: SessionKindTerminal, Runtime: RuntimeManaged,
+	})
+	if err == nil {
+		t.Fatal("eine Terminal-Session darf den managed Runtime nicht bekommen")
+	}
+	snapshot, snapErr := registry.Snapshot(context.Background())
+	if snapErr != nil {
+		t.Fatal(snapErr)
+	}
+	if len(snapshot.State().Agents) != 0 {
+		t.Fatalf("eine abgelehnte managed-Provision darf keinen Session-Record schreiben, gefunden: %+v", snapshot.State().Agents)
+	}
+}
+
 func TestRegistryMigrationDefaultsVendor(t *testing.T) {
 	state := &State{Agents: []Session{{
 		ID: "s1", Name: "navi", RuntimeName: "mgt-navi", Dir: "/work/navi",
@@ -422,5 +464,120 @@ func TestTerminalSessionHasNoConversation(t *testing.T) {
 	}
 	if reading.Availability == ConversationRecordNotFound {
 		t.Fatal("nicht anwendbar darf nicht als fehlend gelesen werden")
+	}
+}
+
+func TestEveryBuiltinVendorDeclaresAResumeBehavior(t *testing.T) {
+	providers := builtinAgentProviders()
+	if len(providers) == 0 {
+		t.Fatal("keine Builtin-Provider registriert")
+	}
+	for _, provider := range providers {
+		switch behavior := provider.ResumeBehavior(); behavior {
+		case ResumeByRunRef, ResumeFreshOnly, ResumeUnsupported:
+		default:
+			t.Errorf("%q erklärt ResumeBehavior = %d, want eine der drei Stufen", provider.Vendor(), int(behavior))
+		}
+	}
+}
+
+func TestBuiltinVendorsPinTheirResumeBehavior(t *testing.T) {
+	want := map[AgentVendor]ResumeBehavior{
+		AgentVendorClaude:      ResumeByRunRef,
+		AgentVendorCodex:       ResumeByRunRef,
+		AgentVendorCopilot:     ResumeByRunRef,
+		AgentVendorGemini:      ResumeFreshOnly,
+		AgentVendorAntigravity: ResumeByRunRef,
+	}
+	providers := builtinAgentProviders()
+	if len(providers) != len(want) {
+		t.Fatalf("%d Builtin-Provider, der Test deckt %d ab", len(providers), len(want))
+	}
+	for _, provider := range providers {
+		vendor := provider.Vendor()
+		pinned, covered := want[vendor]
+		if !covered {
+			t.Fatalf("Vendor %q ist im Test nicht abgedeckt", vendor)
+		}
+		// Antigravity meldet ResumeByRunRef, weil sein StartCommand eine
+		// gespeicherte Referenz mit --conversation wieder aufnimmt (ohne mit
+		// --continue) und RunExists sie gegen das Brain-Verzeichnis prüft, das
+		// auch der History-Adapter liest.
+		if got := provider.ResumeBehavior(); got != pinned {
+			t.Errorf("%q erklärt ResumeBehavior = %d, want %d", vendor, int(got), int(pinned))
+		}
+	}
+}
+
+func TestEveryVendorDeclaresARuntimeSetContainingTmux(t *testing.T) {
+	providers := builtinAgentProviders()
+	if len(providers) == 0 {
+		t.Fatal("keine Builtin-Provider registriert")
+	}
+	for _, provider := range providers {
+		runtimes := provider.Runtimes()
+		if len(runtimes) == 0 {
+			t.Errorf("%q erklärt keine AgentRuntimes", provider.Vendor())
+		}
+		if !SupportsRuntime(provider, RuntimeTmux) {
+			t.Errorf("%q erklärt keinen tmux-Runtime", provider.Vendor())
+		}
+	}
+}
+
+func TestOnlyClaudeDeclaresManagedRuntimeSupport(t *testing.T) {
+	want := map[AgentVendor]bool{
+		AgentVendorClaude:      true,
+		AgentVendorCodex:       false,
+		AgentVendorGemini:      false,
+		AgentVendorCopilot:     false,
+		AgentVendorAntigravity: false,
+	}
+	providers := builtinAgentProviders()
+	if len(providers) != len(want) {
+		t.Fatalf("%d Builtin-Provider, der Test deckt %d ab", len(providers), len(want))
+	}
+	for _, provider := range providers {
+		vendor := provider.Vendor()
+		supportsManaged, covered := want[vendor]
+		if !covered {
+			t.Fatalf("Vendor %q ist im Test nicht abgedeckt", vendor)
+		}
+		if got := SupportsRuntime(provider, RuntimeManaged); got != supportsManaged {
+			t.Errorf("%q unterstützt managed = %v, want %v", vendor, got, supportsManaged)
+		}
+	}
+}
+
+func TestResumeCommandPerVendorUsesRecordedRun(t *testing.T) {
+	session := Session{Name: "navi", RuntimeName: "mgt-navi"}
+	runID := "abc 123"
+	tests := []struct {
+		vendor AgentVendor
+		want   string
+	}{
+		{vendor: AgentVendorClaude, want: "claude --name 'mgt-navi' --resume 'abc 123'"},
+		{vendor: AgentVendorCodex, want: "codex resume 'abc 123'"},
+		{vendor: AgentVendorCopilot, want: "copilot --name 'mgt-navi' --resume='abc 123'"},
+		{vendor: AgentVendorAntigravity, want: "agy --conversation 'abc 123'"},
+		// Gemini hat keine verifizierte Resume-Form: frischer Start, die
+		// gespeicherte Referenz wird nie in die Kommandozeile übernommen.
+		{vendor: AgentVendorGemini, want: "gemini"},
+	}
+	for _, test := range tests {
+		t.Run(string(test.vendor), func(t *testing.T) {
+			provider, ok := providerForVendor(test.vendor)
+			if !ok {
+				t.Fatalf("kein Provider für %q registriert", test.vendor)
+			}
+			run := AgentRunRef{Vendor: test.vendor, ExternalID: runID}
+			got, err := provider.StartCommand(session, &run, "resume")
+			if err != nil {
+				t.Fatalf("StartCommand: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("StartCommand = %q, want %q", got, test.want)
+			}
+		})
 	}
 }

@@ -20,6 +20,50 @@ const (
 	AgentVendorAntigravity AgentVendor = "antigravity"
 )
 
+// AgentRuntime names what owns a Session's coding-agent process: the tmux
+// runtime, driving it by keystrokes in a pane, or the managed runtime, where
+// the daemon owns the process directly and speaks its protocol. It is chosen
+// when a Session is created and does not change for that Session's life.
+type AgentRuntime string
+
+const (
+	RuntimeTmux    AgentRuntime = "tmux"
+	RuntimeManaged AgentRuntime = "managed"
+)
+
+// Runtime action identities offered for a live Session, derived from its
+// AgentRuntime. These govern what a running Session offers, distinct from
+// SessionActionsFor's absent-runtime readings.
+const (
+	RuntimeActionAttach           = "attach"
+	RuntimeActionInterrupt        = "interrupt"
+	RuntimeActionAnswerPermission = "answer-permission"
+)
+
+// RuntimeActionsFor lists the actions a Session's AgentRuntime offers while
+// it is live. Attach is offered only for tmux, because a managed Session has
+// no pane to attach to. Interrupting a turn and answering a permission
+// decision are offered only for managed, because a tmux Session answers both
+// in its own pane. An action absent from this list MUST NOT be offered for
+// that runtime; it does not fail at execution time as the way of
+// communicating that.
+func RuntimeActionsFor(runtime AgentRuntime) []string {
+	if runtime == RuntimeManaged {
+		return []string{RuntimeActionInterrupt, RuntimeActionAnswerPermission}
+	}
+	return []string{RuntimeActionAttach}
+}
+
+// RuntimeOffersAction reports whether the given AgentRuntime offers action.
+func RuntimeOffersAction(runtime AgentRuntime, action string) bool {
+	for _, a := range RuntimeActionsFor(runtime) {
+		if a == action {
+			return true
+		}
+	}
+	return false
+}
+
 type AgentRunRef struct {
 	Vendor     AgentVendor `json:"vendor"`
 	ExternalID string      `json:"external_id"`
@@ -114,6 +158,7 @@ type Session struct {
 	BaseDirty        []string            `json:"base_dirty,omitempty"`
 	SessionID        string              `json:"session_id,omitempty"` // legacy Claude run identifier
 	Vendor           AgentVendor         `json:"vendor,omitempty"`
+	Runtime          AgentRuntime        `json:"runtime,omitempty"`
 	AgentRuns        []AgentRunRef       `json:"agent_runs,omitempty"`
 	DeployAt         time.Time           `json:"deploy_at,omitzero"`
 	LaterAt          time.Time           `json:"later_at,omitzero"`
@@ -125,11 +170,11 @@ type Session struct {
 	// string label (see AgentStatus.PersistedLabel), never as the iota
 	// ordinal, so inserting a status constant later cannot rewrite history.
 	// The zero value reads as never observed, never as a status.
-	LastStatus   AgentStatus `json:"-"`
-	LastStatusAt time.Time   `json:"last_status_at,omitzero"`
-	Service          bool                `json:"service,omitempty"`
-	Outbox           []QueuedMessage     `json:"outbox,omitempty"`
-	Automation       *SessionAutomation  `json:"automation,omitempty"`
+	LastStatus   AgentStatus        `json:"-"`
+	LastStatusAt time.Time          `json:"last_status_at,omitzero"`
+	Service      bool               `json:"service,omitempty"`
+	Outbox       []QueuedMessage    `json:"outbox,omitempty"`
+	Automation   *SessionAutomation `json:"automation,omitempty"`
 }
 
 // Agent remains as a source-compatible name while callers migrate to Session.
@@ -272,6 +317,16 @@ func (a Session) SessionVendor() AgentVendor {
 		return a.Vendor
 	}
 	return AgentVendorClaude
+}
+
+// SessionRuntime is the durable AgentRuntime that owns this Session's
+// process. An empty stored value means tmux, so every Session record written
+// before the managed runtime existed keeps working unchanged.
+func (a Session) SessionRuntime() AgentRuntime {
+	if a.Runtime == "" {
+		return RuntimeTmux
+	}
+	return a.Runtime
 }
 
 func (s *State) AgentByName(name string) *Agent {

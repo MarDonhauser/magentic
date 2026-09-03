@@ -63,6 +63,10 @@ _Avoid_: SessionKind, SessionPresentation, mode
 A time-bounded account of an external Session runtime's availability, activity, content, and attention needs.
 _Avoid_: Status, Registry state
 
+**Resumable**:
+The derived reading of a Session whose external runtime is absent but whose durable record still carries everything a resume needs: Project, working directory, agent kind, conversation reference, name, and last observed status with its time. It is computed from the record plus the current Observation, never stored; resuming it creates a new runtime and hands the vendor its stored conversation back.
+_Avoid_: dead Session, running Session, Observation
+
 **LifecycleTransition**:
 A uniquely identified durable intent to move a Session toward a desired state, together with the applied progress needed to reconcile it.
 _Avoid_: Event, log entry, command

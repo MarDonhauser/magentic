@@ -40,12 +40,12 @@ func TestOverviewCarriesSessionVendor(t *testing.T) {
 		ID: "s1", Name: "navi", Dir: "/work/navi", SessionKind: SessionKindCodingAgent,
 		Vendor: AgentVendorCodex, CreatedAt: time.Now(),
 	}
-	ov := toOvAgent(agent, SessionObservation{Status: StatusIdle, Tool: AgentToolCodex}, "main")
+	ov := toOvAgent(agent, SessionObservation{Status: StatusIdle, Tool: AgentToolCodex}, "main", SessionResumability{})
 	if ov.Vendor != string(AgentVendorCodex) {
 		t.Fatalf("OvAgent.Vendor = %q, want %q", ov.Vendor, AgentVendorCodex)
 	}
 	term := Session{ID: "s2", Name: "term-navi", Kind: KindTerm, CreatedAt: time.Now()}
-	if got := toOvAgent(term, SessionObservation{Status: StatusTerm, Tool: AgentToolBash}, "main").Vendor; got != "" {
+	if got := toOvAgent(term, SessionObservation{Status: StatusTerm, Tool: AgentToolBash}, "main", SessionResumability{}).Vendor; got != "" {
 		t.Fatalf("Terminal-Vendor = %q, want leer", got)
 	}
 }

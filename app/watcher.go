@@ -175,6 +175,10 @@ func (a *App) watchLoop() {
 			}
 		}
 		snapshot := core.Observe(context.Background(), st.Agents)
+		if _, err := core.RecordObservationStatuses(context.Background(), core.OpenRegistry(core.StatePath()), snapshot); err != nil && time.Since(lastErrLog) > time.Minute {
+			core.Logf("watchLoop: Status-Facts konnten nicht geschrieben werden: %v", err)
+			lastErrLog = time.Now()
+		}
 		a.storeObservation(snapshot, st.Agents)
 		core.DispatchOutbox(context.Background(), st, snapshot)
 		a.publishConversationUpdates(st.Agents)

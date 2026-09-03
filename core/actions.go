@@ -418,6 +418,14 @@ func queueForPromptTarget(session string) *promptTargetQueue {
 	return q.(*promptTargetQueue)
 }
 
+// forgetPromptTargetQueue drops the delivery queue of a removed Session. The
+// map lives for the process lifetime, so without this every removed Session
+// leaves one entry behind — and a reused runtime address would inherit stale
+// pending entries.
+func forgetPromptTargetQueue(session string) {
+	promptTargetQueues.Delete(session)
+}
+
 func (q *promptTargetQueue) begin(key string) (*pendingPrompt, bool) {
 	q.pendingMu.Lock()
 	defer q.pendingMu.Unlock()
@@ -1073,4 +1081,69 @@ func RemoveRegisteredSession(st *State, name string) error {
 		return err
 	}
 	return refreshState(st)
+}
+
+// ResumeSessionByID resumes the Session with this ID after its runtime was
+// observed absent: a fresh runtime in the recorded working directory running
+// the agent kind's resume command for the recorded conversation. The Session
+// keeps its identity, name, Project and conversation reference.
+func ResumeSessionByID(id SessionID) error {
+	st, err := LoadState()
+	if err != nil {
+		return err
+	}
+	session := st.SessionByID(id)
+	if session == nil {
+		return fmt.Errorf("unbekannte SessionID: %s", id)
+	}
+	_, err = defaultSessionLifecycle().ResumeAfterRestart(context.Background(), session.ID, session.Name)
+	return err
+}
+
+// ResumeFreshSessionByID starts the agent fresh in the Session's recorded
+// directory, without restoring the stored conversation. It serves vendors
+// that cannot resume by reference and Sessions whose recorded conversation
+// the vendor no longer holds; the existing reopen path downgrades to the
+// fresh start form on its own.
+func ResumeFreshSessionByID(id SessionID) error {
+	st, err := LoadState()
+	if err != nil {
+		return err
+	}
+	session := st.SessionByID(id)
+	if session == nil {
+		return fmt.Errorf("unbekannte SessionID: %s", id)
+	}
+	_, err = defaultSessionLifecycle().Resume(context.Background(), session.ID, session.Name)
+	return err
+}
+
+// DiscardSessionByID drops the record of a Session whose runtime was observed
+// absent, so a stale record after a reboot can be cleared without ambiguity.
+// It removes only the Registry entry: the working directory, the Worktree and
+// the vendor's own conversation history are left untouched.
+//
+// The observed absence is a precondition, never re-probed here. Discard must
+// not race a live runtime, so ending a running Session keeps going through
+// the existing removal action instead.
+func DiscardSessionByID(id SessionID, observed SessionObservation) error {
+	st, err := LoadState()
+	if err != nil {
+		return err
+	}
+	session := st.SessionByID(id)
+	if session == nil {
+		return fmt.Errorf("unbekannte SessionID: %s", id)
+	}
+	if observed.SessionID != id {
+		return fmt.Errorf("Beobachtung gehört nicht zu Session %q", session.Name)
+	}
+	if observed.Presence == SessionPresencePresent {
+		return fmt.Errorf("Session %q hat noch eine Runtime — Verwerfen geht nur ohne Runtime", session.Name)
+	}
+	if observed.Availability != ObservationAvailable || observed.Presence != SessionPresenceAbsent {
+		return fmt.Errorf("Session %q kann derzeit nicht verlässlich geprüft werden", session.Name)
+	}
+	_, err = OpenRegistry(StatePath()).Change(context.Background(), RemoveSession(session.ID, session.Name))
+	return err
 }

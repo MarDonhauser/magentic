@@ -314,7 +314,9 @@ function ensureLive(t) {
     ...TERMINAL_OPTIONS,
     fontSize: 13,
     lineHeight: 1.1,
-    scrollback: 10000,
+    // Dock-Tabs gibt es viele gleichzeitig: Scrollback kleiner als in der
+    // Agentenansicht, sonst wächst je ein voller Buffer plus WebGL-Textur pro Tab.
+    scrollback: 3000,
     theme: terminalTheme(),
     minimumContrastRatio: terminalContrastFloor(),
   });

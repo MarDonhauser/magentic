@@ -2472,7 +2472,9 @@ function agentPill(a, project) {
     `<span class="name">${esc(a.name)}</span>` +
     (a.service ? `<span class="pill-service" title="Service-Session — im Hydra-Modus ausgeblendet">${icon('server')}Service</span>` : '') +
     `<span class="st">${visHtml(v)}</span>` +
-    `<span class="age">${esc(a.age)}</span>${compose}${open}${done}</span>`;
+    `<span class="age">${esc(a.age)}</span>` +
+    (compose || open || done ? `<span class="pill-actions">${compose}${open}${done}</span>` : '') +
+    `</span>`;
 }
 
 // queuedBlock lists the durably queued messages of one Session under its row.
@@ -2517,11 +2519,18 @@ function composeBlock(a) {
 function attentionOverview() {
   const { waiting, active, unread, unknown } = attentionState();
   if (!waiting.length && unknown.length) {
-    const label = unknown.length === 1 ? '1 Session ist nicht beobachtbar.' : `${unknown.length} Sessions sind nicht beobachtbar.`;
-    return `<section class="attention-summary is-unknown" role="status" aria-label="Session-Status teilweise unbekannt">` +
+    // Nicht beobachtbar ist nicht beendet — der Unterschied gehört in denselben
+    // Satz wie der Befund, nicht in eine zweite Zeile und eine Zahlenkachel.
+    const subject = unknown.length === 1
+      ? '1 Session ist nicht beobachtbar'
+      : `${unknown.length} Sessions sind nicht beobachtbar`;
+    const rest = active.length
+      ? ` ${active.length === 1 ? '1 weitere Session arbeitet' : `${active.length} weitere Sessions arbeiten`}.`
+      : '';
+    return `<section class="attention-summary is-unknown" role="status">` +
       `<div class="attention-summary-lead"><span class="attention-summary-icon">${icon('warn')}</span>` +
-      `<div><h1>Session-Status teilweise unbekannt</h1><p>${label} Das ist nicht dasselbe wie beendet oder ohne offene Entscheidung.</p></div></div>` +
-      `<div class="attention-totals"><span><strong>${active.length}</strong> sicher aktiv</span></div></section>`;
+      `<div><h1>${esc(subject)} — das heißt nicht beendet</h1>` +
+      `<p>Was dort offen ist, weiß Magentic gerade nicht.${rest}</p></div></div></section>`;
   }
   if (!waiting.length) {
     const activity = active.length === 1
@@ -2556,12 +2565,42 @@ function attentionOverview() {
     `<div class="attention-queue">${queue}</div></section>`;
 }
 
+// worktreeFactsIncomplete: eine Zeile, deren Git-Fakten Magentic nicht lesen
+// konnte. Unlesbare Änderungen, unbekannter Abstand und unbekannter Checkout
+// sind Folgen desselben Fehlschlags, nicht drei Befunde.
+function worktreeFactsIncomplete(wt) {
+  if (!wt || wt.branch === '(kein git)') return false;
+  return (wt.problems || []).length > 0 || !wt.changesKnown || !wt.divergenceKnown || !wt.checkoutKnown;
+}
+
+// repoUnknownNotice sagt einmal pro Karte, was am Repository nicht gelesen
+// werden konnte. Vorher stand derselbe Fehlschlag in jeder Worktree-Zeile
+// dreimal: als Ursache und als seine beiden Folgen.
+function repoUnknownNotice(p) {
+  const worktrees = (p.worktrees || []).filter(wt => wt.branch !== '(kein git)');
+  const affected = worktrees.filter(worktreeFactsIncomplete);
+  if (!affected.length) return { html: '', covers: () => false, reasonFor: () => '' };
+
+  const reasons = [...new Set(affected.flatMap(wt => (wt.problems || [])
+    .map(problem => problem?.message).filter(Boolean)))];
+  const all = affected.length === worktrees.length;
+  const scope = all
+    ? 'Kein Worktree dieses Repositorys ist lesbar.'
+    : `Betrifft ${affected.length} von ${worktrees.length} Worktrees.`;
+  const reason = reasons.length ? reasons.join(' · ') : 'Git hat keine Auskunft gegeben.';
+  return {
+    // Die Zeilen selbst markieren den Befund nur noch, wenn er sie
+    // unterscheidet — betrifft er alle, ist die Markierung inhaltsleer.
+    covers: () => all,
+    reasonFor: wt => (wt.problems || []).map(problem => problem?.message).filter(Boolean).join('; ')
+      || 'Git-Fakten für diesen Worktree sind unvollständig',
+    html: `<p class="repo-unknown-notice" title="${esc(reason)}">${icon('warn')}` +
+      `<span><strong>Git-Fakten unvollständig.</strong> ${esc(scope)} ${esc(reason)}</span></p>`,
+  };
+}
+
 function gitState(p, wt) {
-  if (wt.branch === '(kein git)') return '';
-  if (!wt.changesKnown) {
-    const detail = (wt.problems || []).map(problem => problem?.message).filter(Boolean).join('; ');
-    return `<span class="git-state unknown" title="${esc(detail || 'Git-Änderungen konnten nicht ermittelt werden')}">${icon('warn')} Status unbekannt</span>`;
-  }
+  if (wt.branch === '(kein git)' || !wt.changesKnown) return '';
   if (wt.clean) return `<span class="git-state clean">${icon('check')} sauber</span>`;
   const parts = [];
   if (wt.staged) parts.push(`${wt.staged} staged`);
@@ -2585,49 +2624,51 @@ function worktreeActions(p, wt) {
     if (wt.changesKnown && wt.divergenceKnown && (!wt.clean || wt.ahead > 0)) {
       btns += `<button class="btn" data-act="cleanup" data-project="${esc(projectRef)}" data-worktree="${esc(wt.reference)}" title="Claude-Session zum Committen und Mergen">${icon('broom')} Cleanup</button>`;
     }
-    if (!wt.changesKnown) {
-      btns += `<button class="btn danger" disabled title="Git-Änderungen sind unbekannt — Entfernen wäre nicht sicher">${icon('trash')} entfernen</button>`;
-    } else if (wt.clean) {
+    // Ein Knopf, der in diesem Zustand nie auslösen kann, ist Rauschen: der
+    // Hinweis an der Karte sagt bereits, warum nichts entfernt werden kann.
+    if (wt.changesKnown && wt.clean) {
       const key = projectRef + '|' + wt.reference;
       btns += confirmRemove === key
         ? `<button class="btn danger confirm" data-act="remove2" data-project="${esc(projectRef)}" data-worktree="${esc(wt.reference)}">wirklich entfernen?</button>`
         : `<button class="btn danger" data-act="remove1" data-project="${esc(projectRef)}" data-worktree="${esc(wt.reference)}">${icon('trash')} entfernen</button>`;
-    } else {
+    } else if (wt.changesKnown) {
       btns += `<button class="btn danger" disabled title="uncommittete Änderungen — erst aufräumen">${icon('trash')} entfernen</button>`;
     }
   }
   return btns ? `<span class="actions">${btns}</span>` : '';
 }
 
-function worktreeRow(p, wt, idx, total) {
+function worktreeRow(p, wt, notice) {
   const cls = ['row', wt.isMain ? 'main-row' : 'wt-row'];
+  // Unlesbare Fakten bekommen genau eine Markierung pro Zeile — und keine,
+  // wenn der Hinweis an der Karte ohnehin für jede Zeile gilt.
+  const unreadable = worktreeFactsIncomplete(wt) && !notice.covers()
+    ? `<span class="git-state unknown" title="${esc(notice.reasonFor(wt))}">?</span>`
+    : '';
   const ab = [];
   if (wt.divergenceKnown && wt.ahead) ab.push(`↑${wt.ahead}`);
   if (wt.divergenceKnown && wt.behind) ab.push(`↓${wt.behind}`);
   let abHtml = ab.length ? `<span class="ab" title="gegenüber ${esc(p.mainBranch)}">${ab.join(' ')}</span>` : '';
   if (!wt.divergenceKnown && wt.branch !== '(kein git)') {
-    abHtml = `<span class="ab unknown" title="Abstand zum Hauptbranch konnte nicht ermittelt werden">?</span>`;
+    abHtml = '';
   } else if (p.mainBranchKnown && !wt.ahead && wt.branch !== p.mainBranch && wt.branch !== '(kein git)' && wt.branch !== '—' && p.path) {
-    abHtml += `<span class="git-state" style="color:var(--good)" title="alle Commits sind in ${esc(p.mainBranch)}">${icon('check')} in ${esc(p.mainBranch)}</span>`;
+    abHtml += `<span class="git-state in-main" title="alle Commits sind in ${esc(p.mainBranch)}">${icon('check')} in ${esc(p.mainBranch)}</span>`;
   }
   const rowAgents = (wt.agents || []).filter(a => !a.dock);
   const agents = rowAgents.map(a => agentPill(a, p.name)).join('');
   const sessionPanels = rowAgents.map(a => queuedBlock(a) + composeBlock(a)).join('');
-  const warns = (wt.warnings || []).map(w => `<span class="warn"><span class="ic">${icon('warn')}</span>${esc(w)}</span>`).join('');
-  const problemText = (wt.problems || []).map(problem => problem?.message).filter(Boolean).join('; ');
-  const problem = problemText
-    ? `<span class="warn repo-unknown" title="${esc(problemText)}"><span class="ic">${icon('warn')}</span>Git-Fakten unvollständig</span>`
-    : '';
+  const warns = (wt.warnings || []).map(w => `<span class="warn">${esc(w)}</span>`).join('');
   const pathHtml = wt.isMain ? '' : `<span class="wt-path" title="${esc(wt.location)}">${esc(wt.location)}</span>`;
   const last = wt.lastMsg ? `<span class="lastmsg" title="letzter Commit">„${esc(wt.lastMsg)}“</span>` : '';
   const branch = wt.checkoutKnown ? wt.branch : 'Branch unbekannt';
   return `<div class="${cls.join(' ')}">` +
-    `<span class="branch${wt.checkoutKnown ? '' : ' unknown'}">${esc(branch)}</span>${abHtml}${gitState(p, wt)}${agents}${warns}${problem}${pathHtml}${last}${worktreeActions(p, wt)}</div>` +
+    `<span class="branch${wt.checkoutKnown ? '' : ' unknown'}">${esc(branch)}</span>${pathHtml}${unreadable}${abHtml}${gitState(p, wt)}${agents}${warns}${last}${worktreeActions(p, wt)}</div>` +
     sessionPanels;
 }
 
 function projectCard(p) {
-  const rows = (p.worktrees || []).map((wt, i) => worktreeRow(p, wt, i, p.worktrees.length)).join('');
+  const notice = repoUnknownNotice(p);
+  const rows = (p.worktrees || []).map(wt => worktreeRow(p, wt, notice)).join('');
   let projectTools = '';
   if (p.path) {
     const mainCfg = editingMain === p.id
@@ -2658,7 +2699,8 @@ function projectCard(p) {
     ? `<span class="project-main-branch${p.mainBranchKnown ? '' : ' unknown'}" title="${p.mainBranchKnown ? 'Hauptbranch' : 'Hauptbranch konnte nicht ermittelt werden'}">${icon(p.mainBranchKnown ? 'gitbranch' : 'warn')} ${esc(p.mainBranchKnown ? p.mainBranch : 'unbekannt')}</span>`
     : '';
   return `<div class="card project-card"><div class="card-head"><h2>${esc(p.name)}</h2>${mainBranch}` +
-    `<span class="path">${esc(p.path || '')}</span></div><div class="rows">${rows}</div>${projectTools}</div>`;
+    `<span class="path" title="${esc(p.path || '')}">${esc(p.path || '')}</span></div>` +
+    `${notice.html}<div class="rows">${rows}</div>${projectTools}</div>`;
 }
 
 let deployStatus = null;
@@ -3825,7 +3867,7 @@ for (const ev of ['mousemove', 'keydown', 'mousedown', 'wheel', 'focus']) {
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) beat(); });
 
-setInterval(() => { if (!document.hidden) refreshBreaks(); }, 5000);
+setInterval(() => { if (!document.hidden) refreshBreaks(); }, 10000);
 
 function syncDockNav() {
   const nav = $('nav-dock');
@@ -3848,10 +3890,13 @@ new ResizeObserver(() => {
 }).observe($('layout'));
 
 refresh(true);
-setInterval(() => { if (!document.hidden) refresh(false); }, 3000);
-setInterval(() => { if (!document.hidden && view === 'inbox') loadInbox(); }, 3000);
+// Bewusst großzügige Intervalle: Jedes Poll ruft Go-Bindings auf, die
+// Subprozesse starten und State neu laden. Die Darstellung aktualisiert sich
+// ohnehin nur bei geänderten Daten (lastDataKey-Abgleich in refreshOnce).
+setInterval(() => { if (!document.hidden) refresh(false); }, 5000);
+setInterval(() => { if (!document.hidden && view === 'inbox') loadInbox(); }, 5000);
 refreshZg();
-setInterval(() => { if (!document.hidden) refreshZg(); }, 5000);
+setInterval(() => { if (!document.hidden) refreshZg(); }, 10000);
 setInterval(() => {
   if (!zg?.active || document.hidden) return;
   const t = $('zg-time'), c = $('zg-cash');

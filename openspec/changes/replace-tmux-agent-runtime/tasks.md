@@ -1,27 +1,27 @@
 ## 1. AgentRuntime as a Session property
 
-- [ ] 1.1 Add `AgentRuntime` (`RuntimeTmux`, `RuntimeManaged`) and the runtime field on `core.Session` in `core/state.go`, serialized as a stable string whose absence reads as `RuntimeTmux`; verify with a round-trip test that a `state.json` written before this change loads with every Session on the tmux runtime.
-- [ ] 1.2 Declare per vendor which runtimes it supports in `core/provider.go`, with only Claude declaring managed support; verify with a table test in `core/provider_test.go` that all four vendors declare a set and that every set contains tmux.
-- [ ] 1.3 Refuse creating a managed Session for a vendor without managed support, and for terminal Sessions, with the reason stated and no record written; verify with tests covering an unsupported vendor and a terminal Session.
-- [ ] 1.4 Derive the offered action list from the Session's runtime so attach is absent for managed Sessions and interrupt and permission answering are absent for tmux Sessions; verify with a table test over the action list per runtime rather than by executing the actions.
-- [ ] 1.5 Add Verify that the runtime cannot change after creation: no lifecycle transition writes it a second time; verify with a test that every transition leaves the recorded runtime untouched.
+- [x] 1.1 Add `AgentRuntime` (`RuntimeTmux`, `RuntimeManaged`) and the runtime field on `core.Session` in `core/state.go`, serialized as a stable string whose absence reads as `RuntimeTmux`; verify with a round-trip test that a `state.json` written before this change loads with every Session on the tmux runtime.
+- [x] 1.2 Declare per vendor which runtimes it supports in `core/provider.go`, with only Claude declaring managed support; verify with a table test in `core/provider_test.go` that all four vendors declare a set and that every set contains tmux.
+- [x] 1.3 Refuse creating a managed Session for a vendor without managed support, and for terminal Sessions, with the reason stated and no record written; verify with tests covering an unsupported vendor and a terminal Session.
+- [x] 1.4 Derive the offered action list from the Session's runtime so attach is absent for managed Sessions and interrupt and permission answering are absent for tmux Sessions; verify with a table test over the action list per runtime rather than by executing the actions.
+- [x] 1.5 Add Verify that the runtime cannot change after creation: no lifecycle transition writes it a second time; verify with a test that every transition leaves the recorded runtime untouched.
 
 ## 2. Agent host process
 
-- [ ] 2.1 Add the `agent-host` mode to the Magentic binary: it takes a Session identity and a working directory, owns one vendor process, and listens on a unix socket under the state directory with owner-only permissions; verify with a test that the socket is created with restrictive permissions and removed on clean exit.
-- [ ] 2.2 Add the host connect handshake returning the token the daemon recorded at start; verify with tests that a matching token confirms identity and a mismatched token is refused.
-- [ ] 2.3 Start the Claude process from the host with the verified argument list (`-p`, `--input-format stream-json`, `--output-format stream-json`, `--verbose`, `--include-partial-messages`, `--replay-user-messages`, `--permission-prompts host`, `--permission-prompt-tool`, `--mcp-config`, and `--session-id` or `--resume`); verify with a test asserting the exact argv built for a fresh Session and for a continued one.
-- [ ] 2.4 Check the Claude Code version at host start and refuse the managed runtime with a stated reason on an unverified version; verify with tests for a verified and an unverified version string.
-- [ ] 2.5 Keep the host alive across daemon disconnects and accept a later reconnect; verify with a test that disconnecting and reconnecting the daemon leaves the vendor process running and the Session state intact.
-- [ ] 2.6 Terminate the vendor process and its children on an explicit stop and on host shutdown, and remove the socket; verify with a test that no child survives a stop.
+- [x] 2.1 Add the `agent-host` mode to the Magentic binary: it takes a Session identity and a working directory, owns one vendor process, and listens on a unix socket under the state directory with owner-only permissions; verify with a test that the socket is created with restrictive permissions and removed on clean exit.
+- [x] 2.2 Add the host connect handshake returning the token the daemon recorded at start; verify with tests that a matching token confirms identity and a mismatched token is refused.
+- [x] 2.3 Start the Claude process from the host with the verified argument list (`-p`, `--input-format stream-json`, `--output-format stream-json`, `--verbose`, `--include-partial-messages`, `--replay-user-messages`, `--permission-prompts host`, `--permission-prompt-tool`, `--mcp-config`, and `--session-id` or `--resume`); verify with a test asserting the exact argv built for a fresh Session and for a continued one.
+- [x] 2.4 Check the Claude Code version at host start and refuse the managed runtime with a stated reason on an unverified version; verify with tests for a verified and an unverified version string.
+- [x] 2.5 Keep the host alive across daemon disconnects and accept a later reconnect; verify with a test that disconnecting and reconnecting the daemon leaves the vendor process running and the Session state intact.
+- [x] 2.6 Terminate the vendor process and its children on an explicit stop and on host shutdown, and remove the socket; verify with a test that no child survives a stop.
 
 ## 3. Daemon ownership and reclaim
 
-- [ ] 3.1 Record each managed Session's host durably: socket path, process identity and handshake token, written before the host is started per ADR 0003; verify with a test that the record exists before any process is spawned and that a failed spawn leaves a record marked as not started.
-- [ ] 3.2 Reclaim recorded hosts at daemon startup by connecting and confirming the token; verify with tests that a live host is reclaimed without a second process being started, that a dead host marks its Session as having no process, and that a socket answering with a wrong token is neither adopted nor killed.
-- [ ] 3.3 Forbid pattern-based process lookup and termination anywhere in the managed path; verify with a test that stopping a managed Session signals only the recorded identity, and with a source-level check that the managed path issues no process-table search.
-- [ ] 3.4 Report a recorded host whose Session no longer exists rather than sweeping it; verify with a test that reconciliation lists the orphan and terminates nothing.
-- [ ] 3.5 Refuse ownership when another daemon already holds the managed processes, reusing the existing single-owner socket handling; verify with a test that a second daemon refuses, states the reason, and starts no agent process.
+- [x] 3.1 Record each managed Session's host durably: socket path, process identity and handshake token, written before the host is started per ADR 0003; verify with a test that the record exists before any process is spawned and that a failed spawn leaves a record marked as not started.
+- [x] 3.2 Reclaim recorded hosts at daemon startup by connecting and confirming the token; verify with tests that a live host is reclaimed without a second process being started, that a dead host marks its Session as having no process, and that a socket answering with a wrong token is neither adopted nor killed.
+- [x] 3.3 Forbid pattern-based process lookup and termination anywhere in the managed path; verify with a test that stopping a managed Session signals only the recorded identity, and with a source-level check that the managed path issues no process-table search.
+- [x] 3.4 Report a recorded host whose Session no longer exists rather than sweeping it; verify with a test that reconciliation lists the orphan and terminates nothing.
+- [x] 3.5 Refuse ownership when another daemon already holds the managed processes, reusing the existing single-owner socket handling; verify with a test that a second daemon refuses, states the reason, and starts no agent process.
 
 ## 4. Turn control and delivery
 

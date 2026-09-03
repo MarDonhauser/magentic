@@ -31,6 +31,12 @@ type LifecycleTransitionKind string
 
 const LifecycleTransitionRename LifecycleTransitionKind = "rename"
 
+// LifecycleTransitionResume marks a resume-after-restart: desired running for
+// an existing Session in a freshly minted runtime. Reconciliation completes an
+// interrupted resume through advanceResume, never through advanceRunning, so a
+// retried resume cannot adopt a foreign runtime or resurrect a removed Session.
+const LifecycleTransitionResume LifecycleTransitionKind = "resume"
+
 type LifecyclePhase string
 
 const (
@@ -105,6 +111,7 @@ type SessionProvision struct {
 	SpecificationRef SpecificationRef
 	InitialPrompt    string
 	Vendor           AgentVendor
+	Runtime          AgentRuntime
 }
 
 type SessionLifecycleResult struct {
@@ -303,13 +310,20 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 	if purpose == "" {
 		purpose = SessionPurposeWork
 	}
+	runtime := request.Runtime
+	if runtime == "" {
+		runtime = RuntimeTmux
+	}
+	if runtime == RuntimeManaged && kind == SessionKindTerminal {
+		return SessionLifecycleResult{}, errors.New("eine Terminal-Session kann nur den tmux-Runtime nutzen")
+	}
 	now := l.now()
 	session := Session{
 		ID: SessionID(NewUUID()), Name: name, ProjectID: project.ID,
 		Project: project.Name, Dir: filepath.Clean(request.Directory),
 		Worktree: request.Worktree || request.CreateWorktree, SessionKind: kind,
 		Presentation: presentation, Purpose: purpose, SpecificationRef: request.SpecificationRef,
-		RuntimeName: SessionName(name), CreatedAt: now,
+		RuntimeName: SessionName(name), Runtime: runtime, CreatedAt: now,
 	}
 	if request.CreateWorktree {
 		session.Dir, _ = managedWorktreeTarget(project, name)
@@ -330,6 +344,9 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 		provider, known := providerForVendor(vendor)
 		if !known {
 			return SessionLifecycleResult{}, fmt.Errorf("unbekannter Agent-Vendor %q", vendor)
+		}
+		if runtime == RuntimeManaged && !SupportsRuntime(provider, RuntimeManaged) {
+			return SessionLifecycleResult{}, fmt.Errorf("Agent-Vendor %q kann nicht headless betrieben werden und unterstützt den managed Runtime nicht", vendor)
 		}
 		session.Vendor = vendor
 		if runID := provider.NewRunID(); runID != "" {
@@ -690,6 +707,191 @@ func (l *SessionLifecycle) Resume(ctx context.Context, id SessionID, name string
 	return l.planExisting(ctx, id, name, SessionDesiredRunning)
 }
 
+// ResumeAfterRestart resumes a Session whose runtime is observed absent —
+// after a reboot, a tmux server restart, or a killed runtime — in a freshly
+// minted runtime in its recorded working directory, issuing the agent kind's
+// resume command for the recorded conversation reference. The Session keeps
+// its durable identity, name, Project association and conversation reference;
+// only the runtime is new.
+//
+// The resume records its durable intent before any runtime is touched and is
+// advanced idempotently. It is always a deliberate developer action: no
+// startup or observation pass calls it. The Outbox is left untouched —
+// prompt delivery is not idempotent, so queued messages wait for the
+// developer instead of being replayed into the resumed agent.
+func (l *SessionLifecycle) ResumeAfterRestart(ctx context.Context, id SessionID, name string) (SessionLifecycleResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	snapshot, err := l.registry.Snapshot(ctx)
+	if err != nil {
+		return SessionLifecycleResult{}, err
+	}
+	state := snapshot.State()
+	idx := sessionIndex(&state, id, name)
+	if idx < 0 {
+		return SessionLifecycleResult{}, fmt.Errorf("Session %q not found", name)
+	}
+	session := state.Agents[idx]
+	if session.IsTerm() {
+		return SessionLifecycleResult{}, fmt.Errorf("Session %q ist eine Terminal-Session — sie wird als Shell neu gestartet, nicht fortgesetzt", session.Name)
+	}
+	provider, err := resolveSessionProvider(session)
+	if err != nil {
+		return SessionLifecycleResult{}, err
+	}
+	return l.resumeAfterRestartWithProvider(ctx, id, name, provider)
+}
+
+// resumeAfterRestartWithProvider runs a resume with an explicit provider so
+// tests can stub the vendor's memory of the recorded conversation.
+func (l *SessionLifecycle) resumeAfterRestartWithProvider(ctx context.Context, id SessionID, name string, provider AgentProvider) (SessionLifecycleResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if provider == nil {
+		return SessionLifecycleResult{}, fmt.Errorf("Session %q hat einen unbekannten Agent-Vendor", name)
+	}
+	snapshot, err := l.registry.Snapshot(ctx)
+	if err != nil {
+		return SessionLifecycleResult{}, err
+	}
+	state := snapshot.State()
+	idx := sessionIndex(&state, id, name)
+	if idx < 0 {
+		return SessionLifecycleResult{}, fmt.Errorf("Session %q not found", name)
+	}
+	session := state.Agents[idx]
+	if session.IsTerm() {
+		return SessionLifecycleResult{}, fmt.Errorf("Session %q ist eine Terminal-Session — sie wird als Shell neu gestartet, nicht fortgesetzt", session.Name)
+	}
+	if session.SessionRuntime() != RuntimeTmux {
+		return SessionLifecycleResult{}, fmt.Errorf("Session %q hat eine verwaltete Runtime — sie wird nicht über tmux fortgesetzt", session.Name)
+	}
+	if behavior := provider.ResumeBehavior(); behavior == ResumeUnsupported {
+		return SessionLifecycleResult{}, fmt.Errorf("%s kann keine Konversation wiederaufnehmen", provider.Tool())
+	}
+	project, err := lifecycleProjectForSession(state, session)
+	if err != nil {
+		return SessionLifecycleResult{}, err
+	}
+	if err := checkResumeDirectory(session, project); err != nil {
+		return SessionLifecycleResult{}, err
+	}
+	if provider.ResumeBehavior() == ResumeByRunRef {
+		run, ok := session.AgentRun(provider.Vendor())
+		if !ok {
+			return SessionLifecycleResult{}, fmt.Errorf("Session %q hat keine gespeicherte Konversation für %s", session.Name, provider.Tool())
+		}
+		if !provider.RunExists(run.ExternalID) {
+			return SessionLifecycleResult{}, fmt.Errorf("Konversation %q ist bei %s nicht mehr vorhanden — starte die Session frisch in %s", run.ExternalID, provider.Tool(), ShortPath(session.Dir))
+		}
+	}
+	advanced := LifecycleRecord{SessionID: session.ID, Session: session, Desired: SessionDesiredRunning}
+	run := func() error {
+		return l.withSessionTransition(ctx, session.ID, session.Name, func() error {
+			if settleErr := l.settleCrossedRename(ctx, session.ID); settleErr != nil {
+				return settleErr
+			}
+			currentSnapshot, snapshotErr := l.registry.Snapshot(ctx)
+			if snapshotErr != nil {
+				return snapshotErr
+			}
+			currentState := currentSnapshot.State()
+			currentIndex := sessionIndex(&currentState, session.ID, session.Name)
+			if currentIndex < 0 {
+				return fmt.Errorf("Session %q not found", session.Name)
+			}
+			current := currentState.Agents[currentIndex]
+			fresh, mintErr := l.mintResumeRuntimeName(ctx, currentState, current)
+			if mintErr != nil {
+				return mintErr
+			}
+			resumed := current
+			resumed.RuntimeName = fresh
+			record, recordErr := l.newResumeTransitionRecord(currentState, resumed)
+			if recordErr != nil {
+				return recordErr
+			}
+			return l.withRecordRuntimeTransition(ctx, record, func() error {
+				if _, putErr := l.putRecord(ctx, record, false); putErr != nil {
+					return putErr
+				}
+				var advanceErr error
+				advanced, advanceErr = l.advanceResume(ctx, record)
+				return advanceErr
+			})
+		})
+	}
+	err = l.withRunningWorktreeTransition(ctx, project, session, false, run)
+	return SessionLifecycleResult{Session: advanced.Session, Record: advanced}, err
+}
+
+// checkResumeDirectory verifies the recorded working directory still exists
+// and still resolves inside its Project before any resume intent is written.
+// Its absence fails the resume: a stale record pointing at a missing or
+// reused directory must never start an agent there.
+func checkResumeDirectory(session Session, project Project) error {
+	if strings.TrimSpace(session.Dir) == "" || session.Dir == "." {
+		return fmt.Errorf("Arbeitsverzeichnis von Session %q ist nicht verfügbar", session.Name)
+	}
+	if info, err := os.Stat(session.Dir); err != nil || !info.IsDir() {
+		return fmt.Errorf("Arbeitsverzeichnis %q von Session %q ist nicht verfügbar", ShortPath(session.Dir), session.Name)
+	}
+	if session.ProjectID != "" && !discoveredDirectoryBelongsToProject(project, session.Dir) {
+		return fmt.Errorf("Verzeichnis gehört nicht zu ProjectID %q", session.ProjectID)
+	}
+	return nil
+}
+
+// mintResumeRuntimeName mints a fresh mgt- RuntimeName for a resume: the first
+// candidate that is neither the recorded name nor registered nor observed.
+// The recorded name is never reused and never addressed, so a resume cannot
+// reach a runtime Magentic did not create. Probing a candidate reads the
+// runtime; the durable intent is written only afterwards, mirroring how
+// provisioning verifies its target before persisting.
+func (l *SessionLifecycle) mintResumeRuntimeName(ctx context.Context, state State, session Session) (string, error) {
+	taken := map[string]bool{session.RuntimeName: true}
+	for _, registered := range state.Agents {
+		taken[registered.RuntimeName] = true
+	}
+	base := SessionName(SanitizeName(session.Name))
+	if !validRuntimeIdentity(base) {
+		return "", fmt.Errorf("Session %q hat keinen gültigen RuntimeName", session.Name)
+	}
+	for i := 0; i < 100; i++ {
+		candidate := base
+		if i > 0 {
+			candidate = fmt.Sprintf("%s-%d", base, i+1)
+		}
+		if taken[candidate] {
+			continue
+		}
+		probe := session
+		probe.RuntimeName = candidate
+		exists, err := l.runtime.Exists(ctx, probe)
+		if err != nil {
+			return "", fmt.Errorf("RuntimeName %q availability is unavailable: %w", candidate, err)
+		}
+		if exists {
+			taken[candidate] = true
+			continue
+		}
+		return candidate, nil
+	}
+	return "", fmt.Errorf("kein freier RuntimeName für Session %q", session.Name)
+}
+
+func (l *SessionLifecycle) newResumeTransitionRecord(state State, session Session) (LifecycleRecord, error) {
+	record, err := l.newStateTransitionRecord(state, session, SessionDesiredRunning)
+	if err != nil {
+		return record, err
+	}
+	record.TransitionKind = LifecycleTransitionResume
+	record.CreateWorktree = false
+	return record, nil
+}
+
 // Rename durably coordinates the display-name change with the optional tmux
 // rename. RuntimeName is changed only after the target runtime postcondition
 // has been observed; an absent runtime keeps its existing opaque address.
@@ -911,6 +1113,9 @@ func (l *SessionLifecycle) persistAndAdvanceStateTransition(ctx context.Context,
 	if _, err := l.putRecord(ctx, record, false); err != nil {
 		return record, err
 	}
+	if record.TransitionKind == LifecycleTransitionResume {
+		return l.advanceResume(ctx, record)
+	}
 	if record.Desired == SessionDesiredRunning {
 		return l.advanceRunning(ctx, record)
 	}
@@ -1052,6 +1257,8 @@ func (l *SessionLifecycle) advanceSerialized(ctx context.Context, expected Lifec
 				var advanceErr error
 				if latest.TransitionKind == LifecycleTransitionRename {
 					advanced, advanceErr = l.advanceRename(ctx, latest)
+				} else if latest.TransitionKind == LifecycleTransitionResume {
+					advanced, advanceErr = l.advanceResume(ctx, latest)
 				} else if latest.Desired == SessionDesiredRunning {
 					advanced, advanceErr = l.advanceRunning(ctx, latest)
 				} else {
@@ -1469,6 +1676,155 @@ func (l *SessionLifecycle) advanceRunning(ctx context.Context, record LifecycleR
 	return l.putRecord(ctx, record, true)
 }
 
+// advanceResume converges a resume-after-restart intent. It mirrors
+// advanceRunning minus worktree creation: the recorded directory is used
+// as-is, no initial prompt is ever replayed, and the Outbox is never touched.
+// Two guards make it a resume rather than a reopen: a runtime Magentic did not
+// create under the fresh name is never adopted, and a Session removed while
+// the resume was in flight is never resurrected.
+func (l *SessionLifecycle) advanceResume(ctx context.Context, record LifecycleRecord) (LifecycleRecord, error) {
+	current, err := l.currentRecord(ctx, record)
+	if err != nil {
+		return record, err
+	}
+	record = current
+	record.Attempts++
+	record.LastError = ""
+	if record.TransitionKind != LifecycleTransitionResume {
+		return l.failRecord(ctx, record, errors.New("invalid Session resume intent"))
+	}
+	if record.Session.IsTerm() {
+		return l.failRecord(ctx, record, fmt.Errorf("Session %q ist eine Terminal-Session", record.Session.Name))
+	}
+	if record.Session.ProjectID != "" {
+		freshProject, resolveErr := l.resolveProject(ctx, record.Session.ProjectID)
+		if resolveErr != nil {
+			return l.failRecord(ctx, record, resolveErr)
+		}
+		oldTarget, oldManaged := runningWorktreeTarget(record.Project, record.Session, record.CreateWorktree)
+		freshTarget, freshManaged := runningWorktreeTarget(freshProject, record.Session, record.CreateWorktree)
+		if oldManaged != freshManaged || oldManaged && canonicalWorktreeTransitionPath(oldTarget) != canonicalWorktreeTransitionPath(freshTarget) {
+			return l.failRecord(ctx, record, errors.New("Project Worktree identity changed during Session transition"))
+		}
+		record.Project = freshProject
+		record.Session.ProjectID = freshProject.ID
+		record.Session.Project = freshProject.Name
+	}
+	if !record.Applied.BaselineKnown {
+		inspection, inspectErr := l.repositories.Inspect(ctx, RepositoryInspectRequest{
+			Directory: record.Session.Dir, MainBranch: record.Project.MainBranch,
+		})
+		if record.Session.Worktree && (inspectErr != nil || inspection.Presence != RepositoryKnown) {
+			if inspectErr != nil {
+				return l.failRecord(ctx, record, fmt.Errorf("verify managed Worktree before runtime start: %w", inspectErr))
+			}
+			message := "managed Worktree is unavailable before runtime start"
+			if inspection.Problem != nil && strings.TrimSpace(inspection.Problem.Message) != "" {
+				message += ": " + inspection.Problem.Message
+			}
+			return l.failRecord(ctx, record, errors.New(message))
+		}
+		if inspectErr == nil && inspection.Baseline.Known() {
+			record.Session.BaseCommit = inspection.Baseline.Value.Head
+			record.Session.BaseDirty = append([]string(nil), inspection.Baseline.Value.DirtyPaths...)
+			record.Applied.BaselineKnown = true
+			if record, err = l.putRecord(ctx, record, true); err != nil {
+				return record, err
+			}
+		}
+	}
+	if strings.TrimSpace(record.Session.Dir) == "" || record.Session.Dir == "." {
+		return l.failRecord(ctx, record, fmt.Errorf("Arbeitsverzeichnis von Session %q ist nicht verfügbar", record.Session.Name))
+	}
+	if info, err := os.Stat(record.Session.Dir); err != nil || !info.IsDir() {
+		return l.failRecord(ctx, record, fmt.Errorf("Arbeitsverzeichnis %q von Session %q ist nicht verfügbar", ShortPath(record.Session.Dir), record.Session.Name))
+	}
+	// The vendor may have dropped the recorded conversation after the resume
+	// was classified or attempted. Fail with that reason instead of silently
+	// starting fresh; the record stays intact and the fresh start remains an
+	// explicit alternative.
+	if provider, resolveErr := resolveSessionProvider(record.Session); resolveErr != nil {
+		return l.failRecord(ctx, record, resolveErr)
+	} else if provider.ResumeBehavior() == ResumeByRunRef {
+		run, ok := record.Session.AgentRun(provider.Vendor())
+		if !ok {
+			return l.failRecord(ctx, record, fmt.Errorf("Session %q hat keine gespeicherte Konversation für %s", record.Session.Name, provider.Tool()))
+		}
+		if !provider.RunExists(run.ExternalID) {
+			return l.failRecord(ctx, record, fmt.Errorf("Konversation %q ist bei %s nicht mehr vorhanden — starte die Session frisch in %s", run.ExternalID, provider.Tool(), ShortPath(record.Session.Dir)))
+		}
+	}
+	exists, err := l.runtime.Exists(ctx, record.Session)
+	if err != nil {
+		return l.failRecord(ctx, record, err)
+	}
+	if exists && !record.MayHaveApplied {
+		return l.failRecord(ctx, record, fmt.Errorf("RuntimeName %q ist bereits belegt", record.Session.RuntimeName))
+	}
+	if !exists {
+		// Persist ambiguity before crossing the runtime Seam. A crash after the
+		// start is reconciled by observing the fresh name's postcondition,
+		// never by blindly starting a second runtime.
+		record.MayHaveApplied = true
+		if record, err = l.putRecord(ctx, record, true); err != nil {
+			return record, err
+		}
+		startErr := l.runtime.Start(ctx, record.Session, record.StartMode)
+		if startErr != nil {
+			exists, err = l.runtime.Exists(ctx, record.Session)
+			if err != nil || !exists {
+				if err != nil {
+					startErr = fmt.Errorf("Start fehlgeschlagen: %v; Ergebnis unbekannt: %w", startErr, err)
+				}
+				return l.failRecord(ctx, record, startErr)
+			}
+		} else {
+			exists = true
+		}
+	}
+	record.Applied.RuntimePresent = exists
+	record.Phase = LifecycleRuntimeReady
+	if record, err = l.putRecord(ctx, record, true); err != nil {
+		return record, err
+	}
+
+	registrySnapshot, err := l.registry.Snapshot(ctx)
+	if err != nil {
+		return l.failRecord(ctx, record, err)
+	}
+	state := registrySnapshot.State()
+	idx := sessionIndex(&state, record.Session.ID, record.Session.Name)
+	if idx < 0 {
+		return l.failRecord(ctx, record, fmt.Errorf("Session %q wurde entfernt", record.Session.Name))
+	} else if state.Agents[idx].ID != record.Session.ID {
+		return l.failRecord(ctx, record, fmt.Errorf("Session name %q belongs to another SessionID", record.Session.Name))
+	}
+	// Resume carries the fresh RuntimeName into the Registry together with the
+	// reopen: one semantic change, so a retry cannot expose a partially
+	// updated Session record.
+	registryResult, err := l.registry.Change(ctx, resumeRegisteredSession(
+		record.Session.ID, record.Session.Name, record.Session.RuntimeName, record.Session.BaseCommit, record.Session.BaseDirty,
+	))
+	if err != nil {
+		return l.failRecord(ctx, record, err)
+	}
+	registeredState := registryResult.Snapshot.State()
+	registeredIndex := sessionIndex(&registeredState, record.Session.ID, record.Session.Name)
+	if registeredIndex < 0 {
+		return l.failRecord(ctx, record, fmt.Errorf("Session %q was not present after Registry update", record.Session.Name))
+	}
+	record.Session = registeredState.Agents[registeredIndex]
+	record.Applied.RegistryUpdated = true
+	record.Phase = LifecycleRegistered
+	if record, err = l.putRecord(ctx, record, true); err != nil {
+		return record, err
+	}
+
+	record.Phase = LifecycleConverged
+	record.LastError = ""
+	return l.putRecord(ctx, record, true)
+}
+
 func (l *SessionLifecycle) advanceStopped(ctx context.Context, record LifecycleRecord) (LifecycleRecord, error) {
 	current, err := l.currentRecord(ctx, record)
 	if err != nil {
@@ -1509,6 +1865,9 @@ func (l *SessionLifecycle) advanceStopped(ctx context.Context, record LifecycleR
 	}
 	if _, err = l.registry.Change(ctx, change); err != nil {
 		return l.failRecord(ctx, record, err)
+	}
+	if record.Desired == SessionDesiredRemoved {
+		forgetPromptTargetQueue(record.Session.TmuxName())
 	}
 	record.Applied.RegistryUpdated = true
 	record.Phase = LifecycleConverged

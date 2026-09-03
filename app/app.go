@@ -43,12 +43,12 @@ type App struct {
 	// conversationReader keeps the presented Session's Conversation current.
 	// The Observation pass drives it; it runs no loop of its own.
 	conversationReader *core.ConversationReader
-	surveyMu         sync.Mutex
-	surveyResult     core.RepositoriesSurvey
-	surveyErr        error
-	surveyAt         time.Time
-	surveyFP         string
-	startTerm        func(*exec.Cmd, *pty.Winsize) (*os.File, error)
+	surveyMu           sync.Mutex
+	surveyResult       core.RepositoriesSurvey
+	surveyErr          error
+	surveyAt           time.Time
+	surveyFP           string
+	startTerm          func(*exec.Cmd, *pty.Winsize) (*os.File, error)
 }
 
 type ptyTerm struct {
@@ -876,6 +876,57 @@ func (a *App) ReopenSession(sessionID string) error {
 		return err
 	}
 	return core.ReopenLater(st, session.Name)
+}
+
+// ResumeSession setzt eine fortsetzbare Session fort: neue Runtime im
+// verzeichneten Verzeichnis mit dem Resume-Befehl des Anbieters für die
+// gespeicherte Konversation. Die Beobachtung ist frisch, damit eine
+// veraltete Ansicht keine zweite Runtime neben eine lebendige stellt.
+func (a *App) ResumeSession(sessionID string) error {
+	_, session, err := loadSessionByID(sessionID)
+	if err != nil {
+		return err
+	}
+	observed, _ := sessionRuntimeObservation(a.observationFor([]core.Session{session}, true), session.ID)
+	res := core.ResumabilityForSession(session, observed)
+	if !res.Resumable || res.FreshOnly {
+		if res.Reason != "" {
+			return fmt.Errorf("Session %q ist nicht fortsetzbar: %s", session.Name, res.Reason)
+		}
+		return fmt.Errorf("Session %q ist nur frisch startbar, nicht fortsetzbar", session.Name)
+	}
+	return core.ResumeSessionByID(session.ID)
+}
+
+// FreshStartSession startet den Agenten frisch im verzeichneten Verzeichnis,
+// ohne die gespeicherte Konversation wiederaufzunehmen — für Anbieter ohne
+// Konversationsgedächtnis und für Konversationen, die der Anbieter nicht mehr
+// vorhält.
+func (a *App) FreshStartSession(sessionID string) error {
+	_, session, err := loadSessionByID(sessionID)
+	if err != nil {
+		return err
+	}
+	observed, _ := sessionRuntimeObservation(a.observationFor([]core.Session{session}, true), session.ID)
+	res := core.ResumabilityForSession(session, observed)
+	if !res.Resumable || !res.FreshOnly {
+		if res.Reason != "" {
+			return fmt.Errorf("Session %q ist nicht startbar: %s", session.Name, res.Reason)
+		}
+		return fmt.Errorf("Session %q hält ihre Konversation noch vor — fortsetzen statt frisch starten", session.Name)
+	}
+	return core.ResumeFreshSessionByID(session.ID)
+}
+
+// DiscardSession verwirft den Eintrag einer Session ohne Runtime.
+// Verzeichnis, Worktree und Anbieter-Konversation bleiben erhalten.
+func (a *App) DiscardSession(sessionID string) error {
+	_, session, err := loadSessionByID(sessionID)
+	if err != nil {
+		return err
+	}
+	observed, _ := sessionRuntimeObservation(a.observationFor([]core.Session{session}, true), session.ID)
+	return core.DiscardSessionByID(session.ID, observed)
 }
 
 func (a *App) OpenTerm(sessionID, legacyDockName string, cols, rows int) error {

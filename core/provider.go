@@ -39,7 +39,44 @@ type AgentProvider interface {
 	// records into Items. A vendor Magentic cannot read yet answers false —
 	// explicitly, so asking for its Conversation never yields an empty one.
 	Normalizer() (ConversationNormalizer, bool)
+	// ResumeBehavior declares what resuming a Session means for this vendor:
+	// whether it resumes its stored conversation by reference, only restarts
+	// fresh in the recorded directory, or cannot be resumed at all. The
+	// offered action derives from this declaration, never from whether a
+	// command line happens to be constructible.
+	ResumeBehavior() ResumeBehavior
+	// Runtimes declares which AgentRuntimes this vendor can be run under.
+	// Every vendor supports RuntimeTmux; only a vendor Magentic can drive
+	// headless also declares RuntimeManaged.
+	Runtimes() []AgentRuntime
 }
+
+// SupportsRuntime reports whether the given AgentRuntime is among those a
+// provider declares.
+func SupportsRuntime(provider AgentProvider, runtime AgentRuntime) bool {
+	for _, r := range provider.Runtimes() {
+		if r == runtime {
+			return true
+		}
+	}
+	return false
+}
+
+// ResumeBehavior is one agent kind's explicit resume capability.
+type ResumeBehavior int
+
+const (
+	// ResumeByRunRef resumes the vendor's stored conversation for the recorded
+	// AgentRunRef with the vendor's own resume command.
+	ResumeByRunRef ResumeBehavior = iota
+	// ResumeFreshOnly cannot restore a stored conversation and always starts
+	// the agent fresh in the recorded directory.
+	ResumeFreshOnly
+	// ResumeUnsupported cannot be resumed at all. No vendor declares this
+	// today; the value exists so a future vendor can, and so the UI has an
+	// honest thing to render.
+	ResumeUnsupported
+)
 
 func builtinAgentProviders() []AgentProvider {
 	return []AgentProvider{claudeProvider{}, codexProvider{}, geminiProvider{}, copilotProvider{}, antigravityProvider{}}
@@ -155,6 +192,12 @@ func (claudeProvider) Tool() string        { return AgentToolClaude }
 func (claudeProvider) Binary() string      { return "claude" }
 func (claudeProvider) NewRunID() string    { return NewUUID() }
 
+func (claudeProvider) ResumeBehavior() ResumeBehavior { return ResumeByRunRef }
+
+// Claude Code is the only vendor Magentic can drive headless today: the
+// managed runtime's stream-json protocol was verified against it.
+func (claudeProvider) Runtimes() []AgentRuntime { return []AgentRuntime{RuntimeTmux, RuntimeManaged} }
+
 func (claudeProvider) Matches(paneCommand string) bool {
 	return paneCommandMatchesKind("claude", paneCommand)
 }
@@ -196,6 +239,12 @@ func (codexProvider) Binary() string      { return "codex" }
 // discovered from its rollout files after the fact.
 func (codexProvider) NewRunID() string { return "" }
 
+func (codexProvider) ResumeBehavior() ResumeBehavior { return ResumeByRunRef }
+
+// Codex has no verified headless protocol yet, so it keeps the tmux runtime
+// only.
+func (codexProvider) Runtimes() []AgentRuntime { return []AgentRuntime{RuntimeTmux} }
+
 // Codex rollout files carry the material, but no normalizer for their
 // shape exists yet.
 func (codexProvider) Normalizer() (ConversationNormalizer, bool) { return nil, false }
@@ -232,6 +281,12 @@ func (copilotProvider) Vendor() AgentVendor { return AgentVendorCopilot }
 func (copilotProvider) Tool() string        { return AgentToolCopilot }
 func (copilotProvider) Binary() string      { return "copilot" }
 func (copilotProvider) NewRunID() string    { return NewUUID() }
+
+func (copilotProvider) ResumeBehavior() ResumeBehavior { return ResumeByRunRef }
+
+// GitHub Copilot CLI has no verified headless protocol yet, so it keeps the
+// tmux runtime only.
+func (copilotProvider) Runtimes() []AgentRuntime { return []AgentRuntime{RuntimeTmux} }
 
 // GitHub Copilot CLI records its session state in a shape no normalizer
 // covers yet.
@@ -286,6 +341,12 @@ func (geminiProvider) Matches(paneCommand string) bool {
 // exist and every start is a fresh one.
 func (geminiProvider) RunExists(string) bool { return false }
 
+func (geminiProvider) ResumeBehavior() ResumeBehavior { return ResumeFreshOnly }
+
+// Gemini CLI has no verified headless protocol yet, so it keeps the tmux
+// runtime only.
+func (geminiProvider) Runtimes() []AgentRuntime { return []AgentRuntime{RuntimeTmux} }
+
 // Gemini CLI has no verified resume form. Starting fresh is the conservative
 // contract; the run identity is discovered from ~/.gemini/tmp afterwards.
 func (geminiProvider) StartCommand(Session, *AgentRunRef, string) (string, error) {
@@ -301,6 +362,16 @@ func (antigravityProvider) Binary() string      { return "agy" }
 // agy assigns its own conversation id, so the run identity can only be
 // discovered from its brain transcripts after the fact.
 func (antigravityProvider) NewRunID() string { return "" }
+
+// agy resumes by conversation reference like Claude, Codex and Copilot do:
+// its StartCommand answers a stored reference with --conversation and a
+// missing one with --continue, and RunExists proves the reference against the
+// brain directory the history adapter reads.
+func (antigravityProvider) ResumeBehavior() ResumeBehavior { return ResumeByRunRef }
+
+// agy has no verified headless protocol yet, so it keeps the tmux runtime
+// only.
+func (antigravityProvider) Runtimes() []AgentRuntime { return []AgentRuntime{RuntimeTmux} }
 
 // agy's brain transcripts are read for statistics only; no normalizer
 // covers their conversation shape yet.

@@ -18,11 +18,15 @@ export const TERMINAL_FONT = 'ui-monospace, SFMono-Regular, "Commit Mono", Menlo
 
 // Gemeinsame Optionen beider Terminal-Oberflächen. Größe und Zeilenhöhe setzen
 // die Aufrufer, weil die Agentenansicht und das Raster unterschiedlich dicht sind.
+//
+// scrollback bewusst knapp (5000): Jede Zeile kostet JS-Heap plus WebGL-Textur,
+// und es lebt ein Terminal pro Session. Wer mehr Verlauf braucht, findet ihn im
+// Agenten-Verlauf.
 export const TERMINAL_OPTIONS = {
   fontFamily: TERMINAL_FONT,
   fontWeight: 400,
   fontWeightBold: 700,
-  scrollback: 20000,
+  scrollback: 5000,
   scrollSensitivity: 5,
   fastScrollSensitivity: 12,
   cursorBlink: true,

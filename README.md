@@ -54,7 +54,8 @@ open app/build/bin/magentic.app   # Desktop-App
 | `z` | Zeitgeist-Timer starten (fragt Projekt) bzw. stoppen (fragt optionale Notiz) |
 | `Z` | Zeitgeist-Timer pausieren / fortsetzen |
 | `r` | Agent umbenennen |
-| `x` | Agent beenden (Worktree bleibt bestehen) / Projekt entfernen |
+| `R` | Fortsetzbare Session fortsetzen (`Fortsetzen`), frisch starten oder Shell neu starten — je nach Angebot |
+| `x` | Agent beenden (Worktree bleibt bestehen) / fortsetzbare Session verwerfen (Verzeichnis bleibt) / Projekt entfernen |
 | `p` | Projekt hinzufügen |
 | `j`/`k` / `↑`/`↓` | Navigieren |
 | `g` | Sofort aktualisieren |
@@ -349,7 +350,8 @@ Gesamtstatus. Die Projektzeile zeigt weiterhin den Repo-Gesamtzustand.
 - `○` idle — bereit für den nächsten Prompt
 - `⌨` Terminal — reine Shell-Session, dort läuft kein Agent
 - `▪` beendet — der Agent wurde beendet, die Shell läuft noch
-- `✗` tot — tmux-Session existiert nicht mehr (mit `x` entfernen)
+- `↻` fortsetzbar — die tmux-Session ist weg (z. B. nach einem Rechnerneustart), aber der Satz ist intakt: Projekt, Verzeichnis, Anbieter, Konversation und letzter Stand stehen noch. Mit `R` wird die Konversation dort fortgesetzt, wo der Anbieter sie gespeichert hat; mit `x` wird der Eintrag verworfen (Verzeichnis bleibt). Es startet dabei immer eine neue Runtime — ein abgebrochener Prozess kommt nicht zurück, nur das gespeicherte Gespräch.
+- `✗` tot — tmux-Session existiert nicht mehr und der Satz reicht nicht zum Fortsetzen (der Grund steht in der Detailansicht; mit `x` entfernen)
 - `?` unbekannt — Magentic kann den Bildschirm nicht deuten
 
 Unbekannt wird nie zu idle, fertig oder tot geschönt, und in eine Session mit

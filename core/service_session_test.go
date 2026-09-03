@@ -22,7 +22,7 @@ func TestRegistrySetSessionServiceTogglesAndProjectsToOverview(t *testing.T) {
 	if saved == nil || !saved.Service {
 		t.Fatalf("service flag was not persisted: %+v", saved)
 	}
-	if got := toOvAgent(*saved, SessionObservation{}, ""); !got.Service {
+	if got := toOvAgent(*saved, SessionObservation{}, "", SessionResumability{}); !got.Service {
 		t.Fatalf("overview projection lost the service flag: %+v", got)
 	}
 

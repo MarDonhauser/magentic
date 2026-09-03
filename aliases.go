@@ -59,6 +59,9 @@ var (
 	createTermSession      = core.CreateTermSession
 	createTermSessionForID = core.CreateTermSessionForID
 	removeSession          = core.RemoveRegisteredSession
+	resumeSessionByID      = core.ResumeSessionByID
+	resumeFreshSessionByID = core.ResumeFreshSessionByID
+	discardSessionByID     = core.DiscardSessionByID
 	startSkillAgent        = core.StartSkillAgent
 	sendSkillByID          = core.SendSkillByID
 	observeSessions        = core.Observe

@@ -37,6 +37,9 @@ func main() {
 		case "serve":
 			cliServe()
 			return
+		case "agent-host":
+			cliAgentHost(os.Args[2:])
+			return
 		case "skill":
 			cliControlSkill(os.Args[2:])
 			return

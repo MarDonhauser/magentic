@@ -244,20 +244,20 @@ func TestOverviewHandoffCapabilitiesMatchModulePolicy(t *testing.T) {
 	// The runtime is gone, so the tool is unknown. A coding-agent Session may be
 	// resumed later, so the picker keeps it selectable and the message waits in
 	// the Outbox.
-	got := toOvAgent(source, stopped, "")
+	got := toOvAgent(source, stopped, "", SessionResumability{})
 	if !got.HandoffSource || !got.HandoffTarget {
 		t.Fatalf("stopped Session capabilities = source %v target %v", got.HandoffSource, got.HandoffTarget)
 	}
 
 	target := handoffTestSession("target-id", "target")
 	working := handoffObservation(target, AgentToolClaude, StatusRunning, "esc to interrupt")
-	got = toOvAgent(target, working, "")
+	got = toOvAgent(target, working, "", SessionResumability{})
 	if !got.HandoffSource || !got.HandoffTarget {
 		t.Fatalf("working Claude capabilities = source %v target %v", got.HandoffSource, got.HandoffTarget)
 	}
 
 	blocked := handoffObservation(target, AgentToolClaude, StatusBlocked, "Do you want to proceed?")
-	got = toOvAgent(target, blocked, "")
+	got = toOvAgent(target, blocked, "", SessionResumability{})
 	if !got.HandoffTarget {
 		t.Fatalf("blockierte Claude-Session muss als Ziel wählbar bleiben: %#v", got)
 	}
@@ -266,19 +266,19 @@ func TestOverviewHandoffCapabilitiesMatchModulePolicy(t *testing.T) {
 	// Bereitschaft noch einmal streng. Codex ist deshalb wählbar, sobald seine
 	// Bildschirme aufgenommen sind.
 	codex := handoffObservation(target, AgentToolCodex, StatusUnknown, "Codex ready")
-	got = toOvAgent(target, codex, "")
+	got = toOvAgent(target, codex, "", SessionResumability{})
 	if !got.HandoffSource || !got.HandoffTarget {
 		t.Fatalf("Codex-Fähigkeiten = source %v target %v", got.HandoffSource, got.HandoffTarget)
 	}
 
 	gemini := handoffObservation(target, AgentToolGemini, StatusIdle, "› Type your message")
-	got = toOvAgent(target, gemini, "")
+	got = toOvAgent(target, gemini, "", SessionResumability{})
 	if !got.HandoffSource || got.HandoffTarget {
 		t.Fatalf("Gemini-Fähigkeiten = source %v target %v", got.HandoffSource, got.HandoffTarget)
 	}
 
 	antigravity := handoffObservation(target, AgentToolAntigravity, StatusIdle, "> Type your message")
-	got = toOvAgent(target, antigravity, "")
+	got = toOvAgent(target, antigravity, "", SessionResumability{})
 	if !got.HandoffSource || got.HandoffTarget {
 		t.Fatalf("Antigravity-Fähigkeiten = source %v target %v", got.HandoffSource, got.HandoffTarget)
 	}

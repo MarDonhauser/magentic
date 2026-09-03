@@ -284,7 +284,7 @@ func TestOverviewProjectsQueuedOutboxMessages(t *testing.T) {
 		Status: StatusRunning, Tool: AgentToolClaude, Content: "arbeitet", ContentKnown: true,
 	}
 
-	queued := toOvAgent(session, observed, "").Queued
+	queued := toOvAgent(session, observed, "", SessionResumability{}).Queued
 	if len(queued) != 2 {
 		t.Fatalf("queued projection = %+v, want both Outbox messages in order", queued)
 	}
@@ -301,7 +301,7 @@ func TestOverviewProjectsQueuedOutboxMessages(t *testing.T) {
 	if want := strings.Repeat("ü", 80) + "…"; queued[1].Preview != want {
 		t.Fatalf("preview = %q, want %q", queued[1].Preview, want)
 	}
-	if len(toOvAgent(Session{ID: "session-2", Name: "leer"}, observed, "").Queued) != 0 {
+	if len(toOvAgent(Session{ID: "session-2", Name: "leer"}, observed, "", SessionResumability{}).Queued) != 0 {
 		t.Fatal("an empty Outbox produced a queued projection")
 	}
 }

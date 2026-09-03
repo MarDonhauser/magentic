@@ -74,6 +74,8 @@ func cliServe() {
 	defer server.Close()
 	fmt.Printf("Die Steuer-API hört auf %s. Beenden mit Strg-C.\n", server.Path())
 
+	reconcileManagedHosts()
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	// Without an interface, this process runs the observation pass the events
@@ -81,6 +83,31 @@ func cliServe() {
 	go serveControlObservations(ctx, service)
 	<-ctx.Done()
 	fmt.Println("Die Steuer-API wurde beendet.")
+}
+
+// reconcileManagedHosts confirms every durably recorded managed Session's
+// host at daemon startup, reusing the control socket's single-owner
+// handling: this only runs once cliServe has already won that socket, per
+// core.ReconcileManagedHostsIfOwning.
+func reconcileManagedHosts() {
+	state, err := LoadState()
+	if err != nil {
+		core.Logf("Managed-Hosts nicht abgeglichen, State nicht ladbar: %v", err)
+		return
+	}
+	results, err := core.ReconcileManagedHostsIfOwning(nil, core.ManagedHostStorePath(), state)
+	if err != nil {
+		core.Logf("Managed-Hosts nicht abgeglichen: %v", err)
+		return
+	}
+	for _, result := range results {
+		switch result.Outcome {
+		case core.ManagedHostGone:
+			core.Logf("Managed-Host für Session %q ist nicht mehr erreichbar", result.SessionID)
+		case core.ManagedHostOrphaned:
+			core.Logf("Managed-Host für Session %q verzeichnet, aber die Session existiert nicht mehr", result.SessionID)
+		}
+	}
 }
 
 // serveControlObservations is the headless mode's observation pass. It uses the

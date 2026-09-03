@@ -34,6 +34,21 @@ type OvAgent struct {
 	Queued     []OvQueuedMessage `json:"queued,omitempty"`
 	Automation *OvAutomation     `json:"automation,omitempty"`
 	StatusLine *OvStatusLine     `json:"statusLine,omitempty"`
+
+	// Resumable marks a Session whose runtime is gone but whose record still
+	// carries everything a resume needs. It renders with its own label in the
+	// Session's normal Project group, never as running and never as dead.
+	Resumable bool `json:"resumable,omitempty"`
+	// ResumeFresh rewords the offer to a fresh start: the conversation is not
+	// restored, either because the vendor cannot or because it no longer
+	// holds it.
+	ResumeFresh bool `json:"resumeFresh,omitempty"`
+	// ResumeReason states why an absent Session cannot be resumed. Empty for
+	// live Sessions.
+	ResumeReason string `json:"resumeReason,omitempty"`
+	// LastSeen renders the last known status with its relative time, for
+	// example "zuletzt: wartet · vor 2h05m". Empty when never observed.
+	LastSeen string `json:"lastSeen,omitempty"`
 }
 
 // OvStatusLine is what the vendor last reported about its run — the facts the
@@ -280,11 +295,22 @@ func buildOverviewFromSurvey(s *State, snapshot ObservationSnapshot, survey Repo
 			dock[a.ID] = true
 		}
 	}
+	// Die Fortsetzbar-Lesung steht einmal pro Session fest, bevor Zähler und
+	// Agenten-Zeilen sie lesen.
+	readings := make(map[SessionID]SessionResumability, len(s.Agents))
+	for _, a := range s.Agents {
+		readings[a.ID] = ResumabilityForSession(a, observationForSession(a, observations))
+	}
 	for _, a := range s.Agents {
 		if later[a.ID] || dock[a.ID] {
 			continue
 		}
-		ov.Counts[statusKey(observationForSession(a, observations).Status)]++
+		observed := observationForSession(a, observations)
+		if readings[a.ID].Resumable {
+			ov.Counts["resumable"]++
+			continue
+		}
+		ov.Counts[statusKey(observed.Status)]++
 	}
 	assigned := map[SessionID]bool{}
 	for id := range later {
@@ -292,7 +318,7 @@ func buildOverviewFromSurvey(s *State, snapshot ObservationSnapshot, survey Repo
 	}
 	statusLines := StatusReportsForSessions(readStatusReports(), s.Agents)
 	agentOverview := func(a Agent, observed SessionObservation, branch string) OvAgent {
-		agent := toOvAgent(a, observed, branch)
+		agent := toOvAgent(a, observed, branch, readings[a.ID])
 		if report, ok := statusLines[a.ID]; ok {
 			agent.StatusLine = ovStatusLine(report)
 		}
@@ -597,7 +623,7 @@ func ovStatusLine(report StatusReport) *OvStatusLine {
 	}
 }
 
-func toOvAgent(a Agent, observed SessionObservation, branch string) OvAgent {
+func toOvAgent(a Agent, observed SessionObservation, branch string, res SessionResumability) OvAgent {
 	st := observed.Status
 	lastActive := a.CreatedAt
 	if observed.ActivityKnown {
@@ -633,6 +659,19 @@ func toOvAgent(a Agent, observed SessionObservation, branch string) OvAgent {
 		HandoffSource: handoffSource,
 		HandoffTarget: handoffTarget,
 		Queued:        queuedMessagesOverview(a.Outbox),
+	}
+	if observed.Presence == SessionPresenceAbsent && !res.Unknown {
+		if res.Resumable {
+			agent.Status = "resumable"
+			agent.Label = ResumableStatusLabel
+			agent.Detail = ResumeLastSeen(a)
+			agent.Resumable = true
+			agent.ResumeFresh = res.FreshOnly
+			agent.LastSeen = ResumeLastSeen(a)
+		} else if res.Reason != "" {
+			agent.Detail = res.Reason
+			agent.ResumeReason = res.Reason
+		}
 	}
 	if a.Automation != nil {
 		agent.Automation = &OvAutomation{

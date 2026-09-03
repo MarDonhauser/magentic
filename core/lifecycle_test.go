@@ -445,6 +445,52 @@ func TestLifecycleParkRecordsDesiredStateBeforeStopping(t *testing.T) {
 	}
 }
 
+func TestSessionRuntimeNeverChangesAcrossLifecycleTransitions(t *testing.T) {
+	lifecycle, _, registry, _ := lifecycleHarness(t)
+	project := registerLifecycleProject(t, registry)
+	created, err := lifecycle.Provision(context.Background(), SessionProvision{
+		ProjectID: project.ID, Name: "nova", Directory: project.Path,
+		Kind: SessionKindCodingAgent, Vendor: AgentVendorClaude, Runtime: RuntimeManaged,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Session.SessionRuntime() != RuntimeManaged {
+		t.Fatalf("created Session runtime = %v, want managed", created.Session.SessionRuntime())
+	}
+
+	assertRuntimeStillManaged := func(step string) {
+		t.Helper()
+		snapshot, err := registry.Snapshot(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		state := snapshot.State()
+		session := state.SessionByID(created.Session.ID)
+		if session == nil {
+			t.Fatalf("%s: Session verschwunden", step)
+		}
+		if session.SessionRuntime() != RuntimeManaged {
+			t.Fatalf("%s: runtime = %v, want managed", step, session.SessionRuntime())
+		}
+	}
+
+	if _, err := lifecycle.Park(context.Background(), created.Session.ID, created.Session.Name); err != nil {
+		t.Fatal(err)
+	}
+	assertRuntimeStillManaged("nach Park")
+
+	if _, err := lifecycle.Resume(context.Background(), created.Session.ID, created.Session.Name); err != nil {
+		t.Fatal(err)
+	}
+	assertRuntimeStillManaged("nach Resume")
+
+	if _, err := lifecycle.Rename(context.Background(), created.Session.ID, created.Session.Name, "nova-2"); err != nil {
+		t.Fatal(err)
+	}
+	assertRuntimeStillManaged("nach Rename")
+}
+
 func TestLifecycleResumeReopensRegistryAndRemainsRunningAfterReconcile(t *testing.T) {
 	lifecycle, runtime, registry, _ := lifecycleHarness(t)
 	project := registerLifecycleProject(t, registry)
@@ -1089,5 +1135,424 @@ func TestLifecycleManagedWorktreeIsOwnedByProvisioning(t *testing.T) {
 	}
 	if result.Session.Dir == project.Path || !result.Record.Applied.WorktreeReady {
 		t.Fatalf("managed Worktree was not provisioned: %+v", result.Record)
+	}
+}
+
+// resumeHarness registers one coding Session with a real working directory
+// inside a real temp Project, so resume pre-validation passes. For Claude the
+// recorded conversation is also laid into a temp HOME, so RunExists answers
+// from files the test owns.
+func resumeHarness(t *testing.T, vendor AgentVendor, runID string) (*SessionLifecycle, *fakeLifecycleRuntime, *Registry, Project, Session) {
+	t.Helper()
+	lifecycle, runtime, registry, _ := lifecycleHarness(t)
+	projDir := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := Project{ID: ProjectID("project-1"), Name: "project", Path: projDir, MainBranch: "main"}
+	if _, err := registry.Change(context.Background(), RegisterProject(project)); err != nil {
+		t.Fatal(err)
+	}
+	session := Session{
+		ID: "session-hera", Name: "hera", RuntimeName: "custom-before",
+		ProjectID: project.ID, Project: project.Name, Dir: projDir,
+		SessionKind: SessionKindCodingAgent, Vendor: vendor,
+		AgentRuns:  []AgentRunRef{{Vendor: vendor, ExternalID: runID}},
+		BaseCommit: "old-head", BaseDirty: []string{"before.txt"},
+		CreatedAt: time.Now().Add(-time.Hour).UTC(),
+	}
+	registered := registerLifecycleSession(t, registry, runtime, session, false)
+	if vendor == AgentVendorClaude && runID != "" {
+		claudeDir := filepath.Join(home, ".claude", "projects")
+		if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(claudeDir, runID+".jsonl"), []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return lifecycle, runtime, registry, project, registered
+}
+
+func TestResumeAfterRestartPersistsIntentBeforeRuntime(t *testing.T) {
+	lifecycle, runtime, _, _, registered := resumeHarness(t, AgentVendorClaude, "run-1")
+	var observed LifecycleRecord
+	observedOK := false
+	runtime.onStart = func(session Session) {
+		snapshot, err := lifecycle.Snapshot(context.Background())
+		if err != nil {
+			t.Errorf("read planned transition: %v", err)
+			return
+		}
+		for _, record := range snapshot.Records {
+			if record.SessionID == session.ID {
+				observed = record
+				observedOK = true
+			}
+		}
+	}
+	result, err := lifecycle.ResumeAfterRestart(context.Background(), registered.ID, registered.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !observedOK {
+		t.Fatal("runtime started without a readable planned intent")
+	}
+	if observed.Desired != SessionDesiredRunning || observed.TransitionKind != LifecycleTransitionResume || observed.StartMode != "resume" {
+		t.Fatalf("intent not durable before runtime start: %+v", observed)
+	}
+	if observed.Phase == LifecycleConverged {
+		t.Fatalf("intent already converged at runtime start: %+v", observed)
+	}
+	if result.Record.Phase != LifecycleConverged || !result.Record.Applied.RuntimePresent {
+		t.Fatalf("resume did not converge: %+v", result.Record)
+	}
+	if result.Session.ID != registered.ID || result.Session.Name != registered.Name ||
+		result.Session.ProjectID != registered.ProjectID ||
+		len(result.Session.AgentRuns) != 1 || result.Session.AgentRuns[0] != registered.AgentRuns[0] {
+		t.Fatalf("resume changed durable identity: %+v", result.Session)
+	}
+	if result.Session.BaseCommit != "old-head" || len(result.Session.BaseDirty) != 1 || result.Session.BaseDirty[0] != "before.txt" {
+		t.Fatalf("resume recaptured or changed durable baseline: %+v", result.Session)
+	}
+}
+
+func TestResumeAfterRestartMintsFreshRuntimeName(t *testing.T) {
+	lifecycle, runtime, registry, _, registered := resumeHarness(t, AgentVendorClaude, "run-1")
+	var started []Session
+	runtime.onStart = func(session Session) { started = append(started, session) }
+	result, err := lifecycle.ResumeAfterRestart(context.Background(), registered.ID, registered.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range runtime.existsCalls {
+		if call == registered.RuntimeName {
+			t.Fatalf("recorded runtime name %q was addressed: %q", registered.RuntimeName, runtime.existsCalls)
+		}
+	}
+	if len(started) != 1 {
+		t.Fatalf("started runtimes = %d, want 1", len(started))
+	}
+	if started[0].RuntimeName == registered.RuntimeName {
+		t.Fatalf("recorded runtime name was reused: %q", started[0].RuntimeName)
+	}
+	fresh := result.Session.RuntimeName
+	if fresh == registered.RuntimeName || !strings.HasPrefix(fresh, SessionPrefix) {
+		t.Fatalf("fresh RuntimeName = %q, want a new mgt- name", fresh)
+	}
+	// Atomar mit der Transition persistiert: Ledger-Satz und Registry stimmen
+	// überein, die Outbox blieb unberührt.
+	ledger, err := lifecycle.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledgerOK := false
+	for _, record := range ledger.Records {
+		if record.SessionID == registered.ID && record.Session.RuntimeName == fresh {
+			ledgerOK = true
+		}
+	}
+	if !ledgerOK {
+		t.Fatalf("fresh RuntimeName not persisted with the transition: %+v", ledger.Records)
+	}
+	snapshot, err := registry.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := snapshot.State()
+	if got := state.SessionByID(registered.ID); got == nil || got.RuntimeName != fresh {
+		t.Fatalf("Registry RuntimeName = %+v, want %q", got, fresh)
+	}
+}
+
+func TestResumeAfterRestartStartsRecordedDirWithResumeCommand(t *testing.T) {
+	lifecycle, runtime, _, project, registered := resumeHarness(t, AgentVendorClaude, "run-1")
+	var started Session
+	runtime.onStart = func(session Session) { started = session }
+	result, err := lifecycle.ResumeAfterRestart(context.Background(), registered.ID, registered.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.lastStartMode != "resume" {
+		t.Fatalf("StartMode = %q, want resume", runtime.lastStartMode)
+	}
+	if started.Dir != project.Path {
+		t.Fatalf("runtime directory = %q, want recorded %q", started.Dir, project.Path)
+	}
+	if started.RuntimeName != result.Session.RuntimeName {
+		t.Fatalf("started runtime = %q, want persisted %q", started.RuntimeName, result.Session.RuntimeName)
+	}
+	command, err := startCommandForSession(result.Session, "resume")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "claude --name " + ShellQuote(result.Session.RuntimeName) + " --resume 'run-1'"
+	if command != want {
+		t.Fatalf("resume command = %q, want %q", command, want)
+	}
+}
+
+func TestResumeAfterRestartRefusesMissingDirectory(t *testing.T) {
+	lifecycle, runtime, registry, _ := lifecycleHarness(t)
+	projDir := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := Project{ID: ProjectID("project-1"), Name: "project", Path: projDir, MainBranch: "main"}
+	if _, err := registry.Change(context.Background(), RegisterProject(project)); err != nil {
+		t.Fatal(err)
+	}
+	registered := registerLifecycleSession(t, registry, runtime, Session{
+		ID: "session-hera", Name: "hera", RuntimeName: "custom-before",
+		ProjectID: project.ID, Project: project.Name, Dir: filepath.Join(projDir, "weg"),
+		SessionKind: SessionKindCodingAgent, Vendor: AgentVendorClaude,
+		AgentRuns: []AgentRunRef{{Vendor: AgentVendorClaude, ExternalID: "run-1"}},
+	}, false)
+
+	_, err := lifecycle.ResumeAfterRestart(context.Background(), registered.ID, registered.Name)
+	if err == nil || !strings.Contains(err.Error(), "nicht verfügbar") {
+		t.Fatalf("missing directory resumed: err = %v", err)
+	}
+	if runtime.startCalls != 0 {
+		t.Fatalf("missing directory created %d runtimes", runtime.startCalls)
+	}
+	snapshot, _ := registry.Snapshot(context.Background())
+	state := snapshot.State()
+	if got := state.SessionByID(registered.ID); got == nil || got.RuntimeName != registered.RuntimeName {
+		t.Fatalf("failed resume changed the record: %+v", got)
+	}
+	ledger, _ := lifecycle.Snapshot(context.Background())
+	if len(ledger.Records) != 0 {
+		t.Fatalf("failed resume left ledger records: %+v", ledger.Records)
+	}
+}
+
+func TestResumeAfterRestartRefusesDirectoryOutsideProject(t *testing.T) {
+	lifecycle, runtime, registry, _ := lifecycleHarness(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	outside := t.TempDir()
+	project := Project{ID: ProjectID("project-1"), Name: "project", Path: t.TempDir(), MainBranch: "main"}
+	if _, err := registry.Change(context.Background(), RegisterProject(project)); err != nil {
+		t.Fatal(err)
+	}
+	registered := registerLifecycleSession(t, registry, runtime, Session{
+		ID: "session-hera", Name: "hera", RuntimeName: "custom-before",
+		ProjectID: project.ID, Project: project.Name, Dir: outside,
+		SessionKind: SessionKindCodingAgent, Vendor: AgentVendorClaude,
+		AgentRuns: []AgentRunRef{{Vendor: AgentVendorClaude, ExternalID: "run-1"}},
+	}, false)
+
+	_, err := lifecycle.ResumeAfterRestart(context.Background(), registered.ID, registered.Name)
+	if err == nil || !strings.Contains(err.Error(), "gehört nicht zu") {
+		t.Fatalf("outside directory resumed: err = %v", err)
+	}
+	if runtime.startCalls != 0 {
+		t.Fatalf("outside directory created %d runtimes", runtime.startCalls)
+	}
+	snapshot, _ := registry.Snapshot(context.Background())
+	state := snapshot.State()
+	if got := state.SessionByID(registered.ID); got == nil || got.RuntimeName != registered.RuntimeName {
+		t.Fatalf("failed resume changed the record: %+v", got)
+	}
+}
+
+func TestResumeAfterRestartLeavesOutboxUntouched(t *testing.T) {
+	lifecycle, runtime, registry, _ := lifecycleHarness(t)
+	projDir := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := Project{ID: ProjectID("project-1"), Name: "project", Path: projDir, MainBranch: "main"}
+	if _, err := registry.Change(context.Background(), RegisterProject(project)); err != nil {
+		t.Fatal(err)
+	}
+	queued := []QueuedMessage{
+		{ID: "msg-1", Kind: QueuedMessageKindMessage, Text: "weiter machen", EnqueuedAt: time.Now().Add(-time.Hour).UTC()},
+		{ID: "msg-2", Kind: QueuedMessageKindSkill, Text: "/done ", EnqueuedAt: time.Now().Add(-time.Hour).UTC()},
+	}
+	registered := registerLifecycleSession(t, registry, runtime, Session{
+		ID: "session-hera", Name: "hera", RuntimeName: "custom-before",
+		ProjectID: project.ID, Project: project.Name, Dir: projDir,
+		SessionKind: SessionKindCodingAgent, Vendor: AgentVendorClaude,
+		AgentRuns: []AgentRunRef{{Vendor: AgentVendorClaude, ExternalID: "run-1"}},
+		Outbox:    queued,
+	}, false)
+	claudeDir := filepath.Join(home, ".claude", "projects")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(claudeDir, "run-1.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := lifecycle.ResumeAfterRestart(context.Background(), registered.ID, registered.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Record.Phase != LifecycleConverged {
+		t.Fatalf("resume did not converge: %+v", result.Record)
+	}
+	if len(result.Session.Outbox) != 2 || result.Session.Outbox[0].ID != "msg-1" || result.Session.Outbox[1].ID != "msg-2" {
+		t.Fatalf("resume touched the Outbox: %+v", result.Session.Outbox)
+	}
+	if runtime.deliverCalls != 0 {
+		t.Fatalf("resume delivered %d initial prompts", runtime.deliverCalls)
+	}
+}
+
+func TestResumeAfterRestartFailsWhenVendorForgetsConversation(t *testing.T) {
+	lifecycle, runtime, registry, _ := lifecycleHarness(t)
+	projDir := t.TempDir()
+	project := Project{ID: ProjectID("project-1"), Name: "project", Path: projDir, MainBranch: "main"}
+	if _, err := registry.Change(context.Background(), RegisterProject(project)); err != nil {
+		t.Fatal(err)
+	}
+	registered := registerLifecycleSession(t, registry, runtime, Session{
+		ID: "session-hera", Name: "hera", RuntimeName: "custom-before",
+		ProjectID: project.ID, Project: project.Name, Dir: projDir,
+		SessionKind: SessionKindCodingAgent, Vendor: AgentVendorClaude,
+		AgentRuns: []AgentRunRef{{Vendor: AgentVendorClaude, ExternalID: "run-9"}},
+	}, false)
+	provider := stubResumeProvider{
+		vendor: AgentVendorClaude, behavior: ResumeByRunRef,
+		exists: map[string]bool{"run-9": true},
+	}
+	absent := resumeAbsentObservation(registered.ID)
+	if res := ClassifyResumability(registered, absent, provider, nil); !res.Resumable || res.FreshOnly {
+		t.Fatalf("classification = %+v, want true resume", res)
+	}
+	provider.exists["run-9"] = false
+	_, err := lifecycle.resumeAfterRestartWithProvider(context.Background(), registered.ID, registered.Name, provider)
+	if err == nil || !strings.Contains(err.Error(), "nicht mehr vorhanden") {
+		t.Fatalf("forgotten conversation resumed: err = %v", err)
+	}
+	if runtime.startCalls != 0 {
+		t.Fatalf("failed resume created %d runtimes", runtime.startCalls)
+	}
+	snapshot, _ := registry.Snapshot(context.Background())
+	state := snapshot.State()
+	got := state.SessionByID(registered.ID)
+	if got == nil || got.RuntimeName != registered.RuntimeName || len(got.AgentRuns) != 1 || got.AgentRuns[0].ExternalID != "run-9" {
+		t.Fatalf("failed resume did not leave the record intact: %+v", got)
+	}
+	ledger, _ := lifecycle.Snapshot(context.Background())
+	if len(ledger.Records) != 0 {
+		t.Fatalf("failed resume left ledger records: %+v", ledger.Records)
+	}
+}
+
+func plantResumeIntent(t *testing.T, lifecycle *SessionLifecycle, project Project, session Session, mayHaveApplied bool) {
+	t.Helper()
+	now := time.Now().UTC()
+	record := LifecycleRecord{
+		TransitionID: NewUUID(), SessionID: session.ID,
+		TransitionKind: LifecycleTransitionResume, Desired: SessionDesiredRunning,
+		Phase: LifecyclePlanned, Session: session, Project: project,
+		StartMode: "resume", PromptDelivery: InitialPromptNotRequested,
+		Applied:        LifecycleAppliedState{WorktreeReady: true, BaselineKnown: true},
+		MayHaveApplied: mayHaveApplied,
+		CreatedAt:      now, UpdatedAt: now,
+	}
+	if _, err := lifecycle.putRecord(context.Background(), record, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func resumeReconcileHarness(t *testing.T, withConversation bool) (*SessionLifecycle, *fakeLifecycleRuntime, *Registry, Project, Session, string) {
+	t.Helper()
+	lifecycle, runtime, registry, _ := lifecycleHarness(t)
+	projDir := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := Project{ID: ProjectID("project-1"), Name: "project", Path: projDir, MainBranch: "main"}
+	if _, err := registry.Change(context.Background(), RegisterProject(project)); err != nil {
+		t.Fatal(err)
+	}
+	old := registerLifecycleSession(t, registry, runtime, Session{
+		ID: "session-hera", Name: "hera", RuntimeName: "custom-before",
+		ProjectID: project.ID, Project: project.Name, Dir: projDir,
+		SessionKind: SessionKindCodingAgent, Vendor: AgentVendorClaude,
+		AgentRuns:  []AgentRunRef{{Vendor: AgentVendorClaude, ExternalID: "run-7"}},
+		BaseCommit: "old-head", BaseDirty: []string{"before.txt"},
+	}, false)
+	if withConversation {
+		claudeDir := filepath.Join(home, ".claude", "projects")
+		if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(claudeDir, "run-7.jsonl"), []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fresh := "mgt-hera"
+	resumed := old
+	resumed.RuntimeName = fresh
+	return lifecycle, runtime, registry, project, resumed, fresh
+}
+
+func TestResumeAfterRestartReconcilesInterruptedStart(t *testing.T) {
+	lifecycle, runtime, registry, project, resumed, fresh := resumeReconcileHarness(t, true)
+	plantResumeIntent(t, lifecycle, project, resumed, true)
+	runtime.runtimeNames[fresh] = true
+
+	result, err := lifecycle.Reconcile(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.startCalls != 0 {
+		t.Fatalf("reconciliation started a second runtime: %d", runtime.startCalls)
+	}
+	snapshot, _ := registry.Snapshot(context.Background())
+	state := snapshot.State()
+	if got := state.SessionByID(resumed.ID); got == nil || got.RuntimeName != fresh {
+		t.Fatalf("interrupted resume did not converge on the created runtime: %+v", got)
+	}
+	ledger, _ := lifecycle.Snapshot(context.Background())
+	converged := false
+	for _, record := range ledger.Records {
+		if record.SessionID == resumed.ID && record.Phase == LifecycleConverged {
+			converged = true
+		}
+	}
+	if !converged || result.Converged < 1 {
+		t.Fatalf("interrupted resume not reconciled: %+v", result)
+	}
+}
+
+func TestResumeAfterRestartReconcilesBeforeStart(t *testing.T) {
+	lifecycle, runtime, _, project, resumed, fresh := resumeReconcileHarness(t, true)
+	plantResumeIntent(t, lifecycle, project, resumed, false)
+
+	result, err := lifecycle.Reconcile(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.startCalls != 1 || runtime.lastStartMode != "resume" {
+		t.Fatalf("interrupted intent not rolled forward: start=%d mode=%q", runtime.startCalls, runtime.lastStartMode)
+	}
+	if !runtime.runtimeNames[fresh] {
+		t.Fatalf("reconciled resume did not create the fresh runtime: %#v", runtime.runtimeNames)
+	}
+	if result.Converged < 1 {
+		t.Fatalf("resume intent not converged: %+v", result)
+	}
+}
+
+func TestResumeAfterRestartReconcileRejectsForgottenConversation(t *testing.T) {
+	lifecycle, runtime, registry, project, resumed, fresh := resumeReconcileHarness(t, false)
+	plantResumeIntent(t, lifecycle, project, resumed, false)
+
+	result, err := lifecycle.Reconcile(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.startCalls != 0 {
+		t.Fatalf("forgotten conversation started %d runtimes", runtime.startCalls)
+	}
+	if len(result.Problems) != 1 || !strings.Contains(result.Problems[0].Message, "nicht mehr vorhanden") {
+		t.Fatalf("reconcile problems = %+v, want vendor reason", result.Problems)
+	}
+	snapshot, _ := registry.Snapshot(context.Background())
+	state := snapshot.State()
+	if got := state.SessionByID(resumed.ID); got == nil || got.RuntimeName == fresh {
+		t.Fatalf("failed resume rewrote the record: %+v", got)
 	}
 }

@@ -31,6 +31,9 @@ var (
 	styleOK      = lipgloss.NewStyle().Foreground(colRunning)
 	styleWarn    = lipgloss.NewStyle().Foreground(colBlocked)
 	styleSection = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("111"))
+	// Fortsetzbare Sessions sind weder Alarm (rot) noch Aufforderung (gelb):
+	// ruhiges Petrol für einen Eintrag, der nur auf seinen Einsatz wartet.
+	styleResumable = lipgloss.NewStyle().Foreground(colAgents)
 )
 
 // linePainter applies a colour-only Style to one single-line string. Style.Render
@@ -227,7 +230,12 @@ func (m model) renderPanel(content string, w, h int, focused bool) string {
 
 func (m model) renderHeader() string {
 	counts := map[AgentStatus]int{}
+	resumable := 0
 	for _, session := range m.state.Agents {
+		if _, res, _ := m.resumabilityFor(session); res.Resumable {
+			resumable++
+			continue
+		}
 		counts[m.statusFor(session)]++
 	}
 	title := styleTitle.Render(" ⚡ magentic ")
@@ -235,9 +243,14 @@ func (m model) renderHeader() string {
 	if counts[StatusDone] > 0 {
 		doneSeg = fmt.Sprintf("%s %d fertig   ", styleAgents.Render("✓"), counts[StatusDone])
 	}
-	stats := fmt.Sprintf("%s %d läuft   %s%s %d wartet   %s %d idle   %s %d aus",
+	resumableSeg := ""
+	if resumable > 0 {
+		resumableSeg = fmt.Sprintf("%s %d fortsetzbar   ", styleResumable.Render("↻"), resumable)
+	}
+	stats := fmt.Sprintf("%s %d läuft   %s%s%s %d wartet   %s %d idle   %s %d aus",
 		styleOK.Render("●"), counts[StatusRunning],
 		doneSeg,
+		resumableSeg,
 		styleWarn.Render("◆"), counts[StatusBlocked],
 		styleDim.Render("○"), counts[StatusIdle],
 		styleErr.Render("✗"), counts[StatusExited]+counts[StatusDead])
@@ -298,14 +311,44 @@ func (m model) agentLine(a Agent, w int) string {
 }
 
 func (m model) agentLineWith(a Agent, w, nameW int, st AgentStatus) string {
+	if _, res, ok := m.resumabilityFor(a); ok && res.Resumable {
+		return m.resumableLine(a, w, nameW)
+	}
 	icon := statusStyle(st).Render(st.Icon())
 	name := pad(trunc(a.Name, nameW), nameW+1)
-	status := statusStyle(st).Render(pad(st.Label(), 8))
+	status := statusStyle(st).Render(pad(st.Label(), 11))
 	lastActive := a.CreatedAt
 	if observation, ok := m.observationFor(a); ok && observation.ActivityKnown {
 		lastActive = observation.Activity
 	}
 	age := pad(formatAge(lastActive), 7)
+	marks := styleDim.Render("? ")
+	switch m.sessionChangeMark(a) {
+	case sessionChangesClean:
+		marks = styleDim.Render("✓ ")
+	case sessionChangesDirty:
+		marks = styleWarn.Render("± ")
+	case sessionChangesNotRepository:
+		marks = "  "
+	}
+	wt := " "
+	if a.Worktree {
+		wt = styleDim.Render("⑂")
+	}
+	return fmt.Sprintf("  %s %s%s%s%s%s", icon, name, status, age, marks, wt)
+}
+
+// resumableLine renders a Session without a runtime whose record is intact:
+// its own icon and label, the last known status with its time in the age
+// column, and the usual Git marks. It keeps its Project group and row shape.
+func (m model) resumableLine(a Agent, w, nameW int) string {
+	icon := styleResumable.Render(core.ResumableStatusIcon)
+	name := pad(trunc(a.Name, nameW), nameW+1)
+	status := styleResumable.Render(pad(core.ResumableStatusLabel, 11))
+	age := pad("?", 7)
+	if !a.LastStatusAt.IsZero() {
+		age = pad(formatAge(a.LastStatusAt), 7)
+	}
 	marks := styleDim.Render("? ")
 	switch m.sessionChangeMark(a) {
 	case sessionChangesClean:
@@ -585,9 +628,25 @@ func (m model) detailBody(a *Agent, proj *Project, w, h int) ([]string, int) {
 		if observed && observation.ActivityKnown {
 			active = " · aktiv " + formatAgeWord(observation.Activity)
 		}
-		add(statusStyle(st).Render(st.Icon()+" "+st.Label()) + styleDim.Render(" · seit "+formatAge(a.CreatedAt)+active) + wtNote)
+		if _, res, _ := m.resumabilityFor(*a); observed && res.Resumable {
+			// Keine Runtime mehr, aber ein intakter Satz: Die Session zeigt,
+			// was sie zuletzt getan hat — nicht, dass sie noch liefe.
+			seen := ""
+			if last := core.ResumeLastSeen(*a); last != "" {
+				seen = " · " + last
+			}
+			add(styleResumable.Render(core.ResumableStatusIcon+" "+core.ResumableStatusLabel) + styleDim.Render(seen+active) + wtNote)
+			add(styleDim.Render("R fortsetzen · x verwerfen"))
+		} else {
+			add(statusStyle(st).Render(st.Icon()+" "+st.Label()) + styleDim.Render(" · seit "+formatAge(a.CreatedAt)+active) + wtNote)
+		}
 		if observed && observation.Detail != "" {
 			add(styleAgents.Render("◍ " + observation.Detail))
+		}
+		if observed && observation.Presence == core.SessionPresenceAbsent {
+			if _, res, _ := m.resumabilityFor(*a); !res.Resumable && !res.Unknown && res.Reason != "" {
+				add(styleDim.Render(res.Reason))
+			}
 		}
 		if !observed || observation.Availability != core.ObservationAvailable {
 			add(styleDim.Render("? Runtime-Status nicht vollständig verfügbar"))
@@ -612,7 +671,7 @@ func (m model) detailBody(a *Agent, proj *Project, w, h int) ([]string, int) {
 			previewStart = len(lines)
 			label := "Terminal · klick zum Öffnen "
 			add(styleSection.Render("Terminal") + styleDim.Render(" · klick zum Öffnen "+strings.Repeat("─", max(0, w-len([]rune(label))-9))))
-		appendPreviewTail(&lines, preview, remaining, w)
+			appendPreviewTail(&lines, preview, remaining, w)
 		} else if remaining > 3 && observed && observation.Presence == core.SessionPresencePresent && !previewKnown {
 			add(styleSection.Render("Terminal"))
 			add(" " + styleDim.Render("Inhalt unbekannt"))
@@ -690,7 +749,6 @@ func (m model) repositoryFactsForProject(project Project) tuiRepositoryFacts {
 	}
 	return tuiRepositoryFacts{presence: core.RepositoryUnknown, problem: m.poll.repositoryProblem}
 }
-
 
 func repositoryProblemMessage(problem *core.RepositoryProblem) string {
 	if problem == nil {
@@ -908,6 +966,9 @@ func (m model) renderFooter() string {
 		name := ""
 		if a != nil {
 			name = a.Name
+			if _, res, _ := m.resumabilityFor(*a); res.Resumable {
+				return " " + styleWarn.Render(fmt.Sprintf("Eintrag %q verwerfen (Verzeichnis bleibt)? y/n", name))
+			}
 		}
 		return " " + styleWarn.Render(fmt.Sprintf("Agent %q beenden (tmux-Session wird gekillt)? y/n", name))
 	}
@@ -927,7 +988,7 @@ func (m model) renderFooter() string {
 	if m.inboxOpen {
 		return " " + styleDim.Render(strings.Join([]string{"↑↓ wählen", "⏎ Session öffnen", "esc zurück", "g neu lesen", "q ende"}, " · "))
 	}
-	keys := []string{"n neu", "w worktree", "T terminal", "⏎ attach", "i posteingang", "d done", "D deploy", "z timer", "r name", "x kill", "p projekt", "q ende"}
+	keys := []string{"n neu", "w worktree", "T terminal", "⏎ attach", "i posteingang", "d done", "D deploy", "z timer", "r name", "R fortsetzen", "x kill", "p projekt", "q ende"}
 	return " " + styleDim.Render(strings.Join(keys, " · "))
 }
 

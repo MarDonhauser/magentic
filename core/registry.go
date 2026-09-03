@@ -63,6 +63,7 @@ const (
 	registrySetVendor
 	registrySetService
 	registryRecordStatus
+	registryResumeSession
 	registryAddDivider
 	registryRenameDivider
 	registryRemoveDivider
@@ -181,6 +182,19 @@ func SetSessionVendor(sessionID SessionID, name string, vendor AgentVendor) Regi
 // replaced, not appended to, by the next observation.
 func RecordSessionStatus(sessionID SessionID, name string, status AgentStatus, at time.Time) RegistryChange {
 	return RegistryChange{kind: registryRecordStatus, sessionID: sessionID, sessionName: name, status: status, at: at}
+}
+
+// ResumeRegisteredSessionRuntime records a resume-after-restart: the Session
+// keeps its identity, name, Project and conversation reference and continues
+// in a freshly minted runtime. The Later intent clears like a reopen, and the
+// repository baseline follows the reopen rules so retries cannot clobber a
+// concurrent change.
+func resumeRegisteredSession(sessionID SessionID, name, newRuntime, baseCommit string, baseDirty []string) RegistryChange {
+	return RegistryChange{
+		kind: registryResumeSession, sessionID: sessionID, sessionName: name,
+		newRuntime: newRuntime,
+		baseCommit: strings.TrimSpace(baseCommit), baseDirty: append([]string(nil), baseDirty...),
+	}
 }
 
 // EnqueueSessionMessage appends a message to the Session's durable Outbox. A
@@ -374,7 +388,7 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 		id := state.Agents[idx].ID
 		state.Agents = append(state.Agents[:idx], state.Agents[idx+1:]...)
 		return true, "", id, nil
-	case registryMarkSeen, registryMarkLater, registryReopenSession, registryMarkDeploy, registryRenameSession, registryRecordAgentRun, registrySetVendor, registrySetService, registryRecordStatus:
+	case registryMarkSeen, registryMarkLater, registryReopenSession, registryMarkDeploy, registryRenameSession, registryRecordAgentRun, registrySetVendor, registrySetService, registryRecordStatus, registryResumeSession:
 		idx := sessionIndex(state, change.sessionID, change.sessionName)
 		if idx < 0 {
 			return false, "", "", fmt.Errorf("Session %q nicht gefunden", change.sessionName)
@@ -451,6 +465,35 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 			}
 			session.LastStatus = change.status
 			session.LastStatusAt = at
+		case registryResumeSession:
+			if change.newRuntime == "" || !validRuntimeIdentity(change.newRuntime) {
+				return false, "", "", fmt.Errorf("Resume braucht einen gültigen RuntimeName")
+			}
+			for _, other := range state.Agents {
+				if other.ID != session.ID && other.RuntimeName == change.newRuntime {
+					return false, "", "", fmt.Errorf("RuntimeName %q gehört zu Session %q", change.newRuntime, other.Name)
+				}
+			}
+			changed := false
+			if session.RuntimeName != change.newRuntime {
+				session.RuntimeName = change.newRuntime
+				changed = true
+			}
+			if change.baseCommit != "" {
+				switch {
+				case session.BaseCommit == "":
+					session.BaseCommit = change.baseCommit
+					session.BaseDirty = append([]string(nil), change.baseDirty...)
+					changed = true
+				case session.BaseCommit != change.baseCommit || !equalStringSlice(session.BaseDirty, change.baseDirty):
+					return false, "", "", fmt.Errorf("%w: Session %q hat bereits eine andere Repository-Baseline", ErrRegistryConflict, session.Name)
+				}
+			}
+			if !session.LaterAt.IsZero() {
+				session.LaterAt = time.Time{}
+				changed = true
+			}
+			return changed, "", session.ID, nil
 		case registryRenameSession:
 			if change.newName == "" {
 				return false, "", "", fmt.Errorf("leerer Session-Name")

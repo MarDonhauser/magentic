@@ -150,6 +150,105 @@ func TestSessionLastStatusPersistsAsStableString(t *testing.T) {
 	}
 }
 
+func TestSessionRecordWithoutRuntimeReadsAsTmux(t *testing.T) {
+	// Genau das Format, das vor diesem Change geschrieben wurde: kein
+	// runtime-Feld.
+	data := []byte(`{"id":"session-1","name":"hera","runtime_name":"mgt-hera",` +
+		`"dir":"/work/hera","created_at":"2026-09-02T20:14:00Z"}`)
+	var session Session
+	if err := json.Unmarshal(data, &session); err != nil {
+		t.Fatal(err)
+	}
+	if session.SessionRuntime() != RuntimeTmux {
+		t.Fatalf("SessionRuntime() = %v, want tmux for a record with no runtime field", session.SessionRuntime())
+	}
+}
+
+func TestSessionRuntimeRoundTrips(t *testing.T) {
+	session := Session{ID: "session-1", Name: "hera", RuntimeName: "mgt-hera", Runtime: RuntimeManaged}
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw["runtime"] != "managed" {
+		t.Fatalf("runtime = %v, want \"managed\": %s", raw["runtime"], data)
+	}
+	var back Session
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.SessionRuntime() != RuntimeManaged {
+		t.Fatalf("round-trip lost runtime: %+v", back)
+	}
+}
+
+func TestLoadStateWrittenBeforeRuntimeExistedReadsEveryAgentAsTmux(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	pre := []byte(`{"projects":[],"agents":[` +
+		`{"id":"session-1","name":"hera","runtime_name":"mgt-hera","dir":"/work/hera","created_at":"2026-09-02T20:14:00Z"},` +
+		`{"id":"session-2","name":"zeta","runtime_name":"mgt-zeta","dir":"/work/zeta","created_at":"2026-09-02T20:15:00Z"}` +
+		`]}`)
+	if err := os.WriteFile(statePath, pre, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MAGENTIC_STATE", statePath)
+	state, err := LoadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Agents) != 2 {
+		t.Fatalf("got %d agents, want 2", len(state.Agents))
+	}
+	for _, agent := range state.Agents {
+		if agent.SessionRuntime() != RuntimeTmux {
+			t.Fatalf("agent %q runtime = %v, want tmux", agent.Name, agent.SessionRuntime())
+		}
+	}
+}
+
+func TestRuntimeActionsPerRuntime(t *testing.T) {
+	tests := []struct {
+		runtime AgentRuntime
+		want    []string
+	}{
+		{runtime: RuntimeTmux, want: []string{RuntimeActionAttach}},
+		{runtime: RuntimeManaged, want: []string{RuntimeActionInterrupt, RuntimeActionAnswerPermission}},
+		// An absent runtime field reads as tmux everywhere else; the action
+		// list must agree.
+		{runtime: "", want: []string{RuntimeActionAttach}},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.runtime)+"-empty-means-tmux", func(t *testing.T) {
+			got := RuntimeActionsFor(tt.runtime)
+			if len(got) != len(tt.want) {
+				t.Fatalf("RuntimeActionsFor(%q) = %v, want %v", tt.runtime, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("RuntimeActionsFor(%q) = %v, want %v", tt.runtime, got, tt.want)
+				}
+			}
+		})
+	}
+	if RuntimeOffersAction(RuntimeManaged, RuntimeActionAttach) {
+		t.Fatal("a managed Session must not offer attach")
+	}
+	if RuntimeOffersAction(RuntimeTmux, RuntimeActionInterrupt) {
+		t.Fatal("a tmux Session must not offer interrupt")
+	}
+	if RuntimeOffersAction(RuntimeTmux, RuntimeActionAnswerPermission) {
+		t.Fatal("a tmux Session must not offer answering a permission decision")
+	}
+	if !RuntimeOffersAction(RuntimeManaged, RuntimeActionInterrupt) {
+		t.Fatal("a managed Session must offer interrupt")
+	}
+}
+
 func TestSessionWithoutLastStatusReadsAsNeverObserved(t *testing.T) {
 	// Genau das Format, das vor diesem Change geschrieben wurde: kein
 	// last_status, kein last_status_at.

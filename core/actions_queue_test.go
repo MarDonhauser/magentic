@@ -48,6 +48,26 @@ func TestPromptTargetQueuePassesAbsoluteDeadlineToDelivery(t *testing.T) {
 	}
 }
 
+func TestForgetPromptTargetQueueDropsRemovedSession(t *testing.T) {
+	session := "magentic-forget-test"
+	first := queueForPromptTarget(session)
+	t.Cleanup(func() { forgetPromptTargetQueue(session) })
+
+	if _, ok := promptTargetQueues.Load(session); !ok {
+		t.Fatal("queue for session was not stored")
+	}
+
+	forgetPromptTargetQueue(session)
+	if _, ok := promptTargetQueues.Load(session); ok {
+		t.Fatal("queue for removed session is still stored")
+	}
+
+	second := queueForPromptTarget(session)
+	if second == first {
+		t.Fatal("reused runtime address inherited the removed session's queue")
+	}
+}
+
 func TestPromptDeliveryKeySeparatesHandoffValidationPolicy(t *testing.T) {
 	generic := promptDeliveryKey("same", true, AgentToolClaude, true, false, true, nil)
 	handoff := promptDeliveryKey(

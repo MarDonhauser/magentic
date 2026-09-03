@@ -51,15 +51,16 @@ const (
 )
 
 type pollResult struct {
-	observation       core.ObservationSnapshot
-	observed          map[tuiSessionKey]core.SessionObservation
+	observation        core.ObservationSnapshot
+	observed           map[tuiSessionKey]core.SessionObservation
+	resumable          map[tuiSessionKey]core.SessionResumability
 	repositoryProblem  string
 	projectInspections map[string]core.RepositoryInspection
 	inspections        map[tuiSessionKey]core.RepositoryInspection
 	inspectionProblem  map[tuiSessionKey]string
-	discovery         core.RegistryDiscovery
-	diskState         *State
-	zeitgeist         ZgInfo
+	discovery          core.RegistryDiscovery
+	diskState          *State
+	zeitgeist          ZgInfo
 }
 
 // tuiSessionKey keeps durable Session identity through display-name changes.
@@ -118,6 +119,7 @@ type previewDueMsg struct{ generation int }
 // long enough that holding a key or scrolling produces one probe, not one per
 // step.
 const previewDebounce = 120 * time.Millisecond
+
 type usageTickMsg time.Time
 type usageMsg UsageInfo
 
@@ -130,31 +132,31 @@ func fetchUsageCmd() tea.Cmd {
 }
 
 type model struct {
-	state          *State
-	cursor         int
-	collapsed      map[string]bool
-	input          textinput.Model
-	inputKind      inputKind
-	pendingProject core.ProjectID
-	renameFrom     string
-	confirmKill    bool
-	confirmRmProj  bool
-	attention      *core.AttentionPlanner
-	poll           pollResult
-	flash          string
-	flashIsErr     bool
-	flashTime      time.Time
-	width          int
-	height         int
-	pollBusy       bool
-	repoBusy       bool
-	diskBusy       bool
+	state             *State
+	cursor            int
+	collapsed         map[string]bool
+	input             textinput.Model
+	inputKind         inputKind
+	pendingProject    core.ProjectID
+	renameFrom        string
+	confirmKill       bool
+	confirmRmProj     bool
+	attention         *core.AttentionPlanner
+	poll              pollResult
+	flash             string
+	flashIsErr        bool
+	flashTime         time.Time
+	width             int
+	height            int
+	pollBusy          bool
+	repoBusy          bool
+	diskBusy          bool
 	previewPending    bool
 	previewGeneration int
 	inbox             core.AttentionInbox
 	inboxOpen         bool
 	inboxCursor       int
-	usage          UsageInfo
+	usage             UsageInfo
 }
 
 func newModel(s *State) model {
@@ -440,7 +442,12 @@ func observeCmd(state State) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), tuiPollTimeout)
 		defer cancel()
-		return observationMsg(collectObservationFacts(ctx, state, core.Observe))
+		result := collectObservationFacts(ctx, state, core.Observe)
+		// Hintergrund-Buchhaltung für den letzten bekannten Status je Session.
+		// Ein fehlgeschlagener Pass verzögert nur die Zuletzt-gesehen-Anzeige,
+		// deshalb bleibt ein Fehler hier still.
+		_, _ = core.RecordObservationStatuses(ctx, core.OpenRegistry(core.StatePath()), result.observation)
+		return observationMsg(result)
 	}
 }
 
@@ -495,9 +502,11 @@ func collectObservationFacts(ctx context.Context, state State, observe tuiObserv
 	for _, observation := range result.observation.Sessions {
 		observedByID[observation.SessionID] = observation
 	}
+	result.resumable = make(map[tuiSessionKey]core.SessionResumability, len(state.Agents))
 	for i, session := range state.Agents {
 		if observation, ok := observedByID[prepared[i].ID]; ok {
 			result.observed[sessionKey(session)] = observation
+			result.resumable[sessionKey(session)] = core.ResumabilityForSession(prepared[i], observation)
 		}
 	}
 	return result
@@ -638,8 +647,6 @@ func surveyedProject(survey core.RepositoriesSurvey, project Project) (core.Repo
 	return core.RepositoryProjectSurvey{}, false
 }
 
-
-
 func samePath(a, b string) bool {
 	if strings.TrimSpace(a) == "" || strings.TrimSpace(b) == "" {
 		return false
@@ -657,6 +664,22 @@ func (m model) statusFor(session Agent) AgentStatus {
 		return observation.Status
 	}
 	return StatusUnknown
+}
+
+// resumabilityFor reads the absent-runtime reading for one Session from the
+// last observation pass: resumable with its offered actions, dead with its
+// reason, or unknown. Live Sessions and missing observations yield the zero
+// reading.
+func (m model) resumabilityFor(session Agent) (core.SessionObservation, core.SessionResumability, bool) {
+	observation, ok := m.observationFor(session)
+	if !ok {
+		return core.SessionObservation{}, core.SessionResumability{}, false
+	}
+	res, ok := m.poll.resumable[sessionKey(session)]
+	if !ok {
+		return observation, core.SessionResumability{}, true
+	}
+	return observation, res, true
 }
 
 func (m model) Init() tea.Cmd {
@@ -772,6 +795,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pollBusy = false
 		m.poll.observation = msg.observation
 		m.poll.observed = msg.observed
+		m.poll.resumable = msg.resumable
 		// Die Steuer-API leitet ihre Ereignisse aus genau diesem Durchlauf ab.
 		publishControlObservation(m.state.Agents, msg.observation)
 		m.executeAttentionPlan()
@@ -962,6 +986,8 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.confirmRmProj = true
 		}
 		return m, nil
+	case "R":
+		return m.resumeSelected()
 	case "p":
 		return m.startInput(inputAddProject)
 	case "d":
@@ -1310,6 +1336,24 @@ func (m model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if a == nil {
 			return m, nil
 		}
+		// Eine fortsetzbare Session wird nicht gekillt, sondern verworfen: Es
+		// gibt keine Runtime mehr, nur noch den Eintrag — und der geht, ohne
+		// Verzeichnis, Worktree oder Konversation anzufassen.
+		if observation, res, _ := m.resumabilityFor(*a); res.Resumable {
+			if err := discardSessionByID(a.ID, observation); err != nil {
+				m.setFlash(err.Error(), true)
+				return m, nil
+			}
+			latest, err := LoadState()
+			if err != nil {
+				m.setFlash("Registry nach Verwerfen laden: "+err.Error(), true)
+				return m, nil
+			}
+			m.state = latest
+			m.ensureSelectable()
+			m.setFlash(fmt.Sprintf("Eintrag %q verworfen — Verzeichnis bleibt erhalten", a.Name), false)
+			return m, m.pollNow()
+		}
 		note := ""
 		if a.Worktree {
 			note = " — Worktree bleibt unter " + shortPath(a.Dir)
@@ -1347,6 +1391,46 @@ func (m model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.pollNow()
 	}
 	return m, nil
+}
+
+// resumeSelected führt die erste angebotene Aktion einer Session ohne Runtime
+// aus: Fortsetzen, frisch starten oder Shell neu starten. Alles andere meldet
+// nur, dass es nichts fortzusetzen gibt.
+func (m model) resumeSelected() (tea.Model, tea.Cmd) {
+	a := m.selectedAgent()
+	if a == nil {
+		return m, nil
+	}
+	observation, res, _ := m.resumabilityFor(*a)
+	actions := core.SessionActionsFor(*a, observation, res)
+	if len(actions) == 0 {
+		m.setFlash(fmt.Sprintf("%s ist nicht fortsetzbar", a.Name), true)
+		return m, nil
+	}
+	switch actions[0].ID {
+	case core.SessionActionResume:
+		if err := resumeSessionByID(a.ID); err != nil {
+			m.setFlash(err.Error(), true)
+			return m, nil
+		}
+		m.setFlash(fmt.Sprintf("%s wird fortgesetzt", a.Name), false)
+	case core.SessionActionResumeFresh:
+		if err := resumeFreshSessionByID(a.ID); err != nil {
+			m.setFlash(err.Error(), true)
+			return m, nil
+		}
+		m.setFlash(fmt.Sprintf("%s startet frisch", a.Name), false)
+	case core.SessionActionRestartShell:
+		if _, err := createTermSessionForID(m.state, a.ID, ""); err != nil {
+			m.setFlash(err.Error(), true)
+			return m, nil
+		}
+		m.setFlash("Shell neu gestartet", false)
+	default:
+		m.setFlash(fmt.Sprintf("%s ist nicht fortsetzbar", a.Name), true)
+		return m, nil
+	}
+	return m, m.pollNow()
 }
 
 func (m model) attach() (tea.Model, tea.Cmd) {

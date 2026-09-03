@@ -515,3 +515,100 @@ func TestObserveBoundsTmuxProbes(t *testing.T) {
 		t.Fatalf("timeout was not represented explicitly: %#v", got)
 	}
 }
+
+// Terminal-Sessions sind nie fortsetzbar: Nach einem Neustart wird ihnen nur
+// eine schlichte neue Shell angeboten, kein Fortsetzen und kein Verwerfen.
+func TestTerminalSessionIsNeverResumable(t *testing.T) {
+	session := Session{
+		ID: "term-1", Name: "term-hera", RuntimeName: "mgt-term-hera",
+		Dir: t.TempDir(), Kind: KindTerm,
+	}
+	absent := SessionObservation{
+		SessionID: session.ID, Availability: ObservationAvailable,
+		Presence: SessionPresenceAbsent, Status: StatusDead,
+	}
+	res := ClassifyResumability(session, absent, nil, nil)
+	if res.Resumable || res.Unknown {
+		t.Fatalf("Terminal-Lesung = %+v, want weder fortsetzbar noch unbekannt", res)
+	}
+	actions := SessionActionsFor(session, absent, res)
+	if len(actions) != 1 || actions[0].ID != SessionActionRestartShell {
+		t.Fatalf("Terminal-Aktionen = %+v, want genau [restart-shell]", actions)
+	}
+	for _, action := range actions {
+		if action.ID == SessionActionResume || action.ID == SessionActionResumeFresh || action.ID == SessionActionDiscard {
+			t.Fatalf("Terminal bietet Resume an: %+v", actions)
+		}
+	}
+	present := SessionObservation{
+		SessionID: session.ID, Availability: ObservationAvailable,
+		Presence: SessionPresencePresent, Status: StatusTerm,
+	}
+	if actions := SessionActionsFor(session, present, ClassifyResumability(session, present, nil, nil)); len(actions) != 0 {
+		t.Fatalf("laufendes Terminal bietet an: %+v", actions)
+	}
+}
+
+func TestRecordObservationStatusesReplacesNotAppends(t *testing.T) {
+	dir := t.TempDir()
+	registry := OpenRegistry(filepath.Join(dir, "state.json"))
+	session := Session{ID: "session-1", Name: "one", RuntimeName: "mgt-one", Dir: "/work/one"}
+	if _, err := registry.Change(context.Background(), RegisterSession(session)); err != nil {
+		t.Fatal(err)
+	}
+	observed := func(at time.Time, presence SessionPresence, status AgentStatus) ObservationSnapshot {
+		return ObservationSnapshot{
+			ObservedAt:   at,
+			Availability: ObservationAvailable,
+			Sessions: []SessionObservation{{
+				SessionID: session.ID, Availability: ObservationAvailable,
+				Presence: presence, Status: status,
+			}},
+		}
+	}
+	read := func() Session {
+		t.Helper()
+		snapshot, err := registry.Snapshot(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		state := snapshot.State()
+		stored := state.SessionByID(session.ID)
+		if stored == nil {
+			t.Fatal("Session lost its record")
+		}
+		return *stored
+	}
+
+	first := time.Date(2026, 9, 2, 20, 0, 0, 0, time.UTC)
+	second := first.Add(2 * time.Second)
+	if n, err := RecordObservationStatuses(context.Background(), registry, observed(first, SessionPresencePresent, StatusRunning)); err != nil || n != 1 {
+		t.Fatalf("first observation applied = %d, err = %v", n, err)
+	}
+	if got := read(); got.LastStatus != StatusRunning || !got.LastStatusAt.Equal(first) {
+		t.Fatalf("first observation not recorded: %+v", got)
+	}
+	if n, err := RecordObservationStatuses(context.Background(), registry, observed(second, SessionPresencePresent, StatusBlocked)); err != nil || n != 1 {
+		t.Fatalf("second observation applied = %d, err = %v", n, err)
+	}
+	if got := read(); got.LastStatus != StatusBlocked || !got.LastStatusAt.Equal(second) {
+		t.Fatalf("second observation did not replace the first: %+v", got)
+	}
+
+	// Eine verschwundene Runtime überschreibt den letzten bekannten Status
+	// nicht mit tot: Nach einem Reboot steht noch da, was die Session zuletzt
+	// getan hat.
+	after := second.Add(time.Hour)
+	if n, err := RecordObservationStatuses(context.Background(), registry, observed(after, SessionPresenceAbsent, StatusDead)); err != nil || n != 0 {
+		t.Fatalf("absent observation applied = %d, err = %v", n, err)
+	}
+	if got := read(); got.LastStatus != StatusBlocked || !got.LastStatusAt.Equal(second) {
+		t.Fatalf("absent runtime overwrote the last known status: %+v", got)
+	}
+	if n, err := RecordObservationStatuses(context.Background(), registry, observed(after, SessionPresencePresent, StatusUnknown)); err != nil || n != 0 {
+		t.Fatalf("unknown observation applied = %d, err = %v", n, err)
+	}
+	if got := read(); got.LastStatus != StatusBlocked || !got.LastStatusAt.Equal(second) {
+		t.Fatalf("unknown status overwrote the last known status: %+v", got)
+	}
+}
