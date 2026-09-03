@@ -234,6 +234,10 @@ export function SessionAutomation(arg1) {
   return window['go']['main']['App']['SessionAutomation'](arg1);
 }
 
+export function SessionConversation(arg1) {
+  return window['go']['main']['App']['SessionConversation'](arg1);
+}
+
 export function SessionLinks(arg1) {
   return window['go']['main']['App']['SessionLinks'](arg1);
 }
@@ -292,6 +296,10 @@ export function TakeBreak() {
 
 export function Timeline() {
   return window['go']['main']['App']['Timeline']();
+}
+
+export function WatchConversation(arg1) {
+  return window['go']['main']['App']['WatchConversation'](arg1);
 }
 
 export function WorktreeDiff(arg1, arg2) {

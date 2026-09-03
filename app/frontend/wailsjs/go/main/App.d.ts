@@ -119,6 +119,8 @@ export function SendSkill(arg1:string,arg2:string):Promise<void>;
 
 export function SessionAutomation(arg1:string):Promise<core.SessionAutomation>;
 
+export function SessionConversation(arg1:string):Promise<main.ConversationItemsResult>;
+
 export function SessionLinks(arg1:string):Promise<main.SessionLinksResult>;
 
 export function SessionPreview(arg1:string):Promise<main.SessionPreviewResult>;
@@ -148,6 +150,8 @@ export function SwitchSessionVendor(arg1:string,arg2:string,arg3:boolean):Promis
 export function TakeBreak():Promise<void>;
 
 export function Timeline():Promise<main.TimelineResult>;
+
+export function WatchConversation(arg1:string):Promise<void>;
 
 export function WorktreeDiff(arg1:string,arg2:string):Promise<string>;
 

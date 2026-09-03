@@ -95,6 +95,24 @@ _Avoid_: Transcript, statistics cache, quota
 A provider-neutral prompt, output, or usage fact attributed to a Project and Session when that association is known.
 _Avoid_: Raw envelope, transcript line, message blob
 
+## Agent Timeline
+
+**Item**:
+One normalized, provider-neutral unit of agent activity, carrying a stable identity, the time it occurred, the role that produced it, exactly one kind, and the title and detail its vendor's normalizer decided.
+_Avoid_: Transcript line, tool payload, rendered row
+
+**ItemKind**:
+The closed set an Item's activity is drawn from, with an explicitly unknown kind that keeps the vendor's own label rather than dropping a record.
+_Avoid_: Tool name, block type, record type
+
+**Conversation**:
+The ordered sequence of Items belonging to one coding-agent run, derived from the vendor's record and never durable state of Magentic's own.
+_Avoid_: Transcript file, WorkHistory query, terminal scrollback
+
+**ConversationRef**:
+A vendor-qualified handle of one run's Conversation, resolved from a Session's recorded vendor and run reference alone.
+_Avoid_: Session name, RuntimeName, record path
+
 ## Specifications
 
 **Specification**:

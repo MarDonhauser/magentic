@@ -874,3 +874,46 @@ func sortObservationProblems(problems []ObservationProblem) {
 		return problems[i].Message < problems[j].Message
 	})
 }
+
+// RecordObservationStatuses persists the status of every Session whose runtime
+// an Observation pass observed to exist, together with the time of the pass.
+// The persisted status is replaced, not appended to, by the next observation.
+// A Session whose runtime is gone keeps its last known status instead of being
+// overwritten with dead: after a reboot that record is what tells the
+// developer what each Session was last doing, and when.
+func RecordObservationStatuses(ctx context.Context, registry *Registry, snapshot ObservationSnapshot) (int, error) {
+	if registry == nil {
+		return 0, fmt.Errorf("Session Registry is unavailable")
+	}
+	at := snapshot.ObservedAt
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	before, err := registry.Snapshot(ctx)
+	if err != nil {
+		return 0, err
+	}
+	state := before.State()
+	applied := 0
+	for _, observed := range snapshot.Sessions {
+		if observed.Presence != SessionPresencePresent || observed.Status == StatusUnknown {
+			continue
+		}
+		session := state.SessionByID(observed.SessionID)
+		if session == nil {
+			continue
+		}
+		result, err := registry.Change(ctx, RecordSessionStatus(session.ID, session.Name, observed.Status, at))
+		if err != nil {
+			// A Session removed concurrently is gone, not broken.
+			if strings.Contains(err.Error(), "nicht gefunden") {
+				continue
+			}
+			return applied, err
+		}
+		if result.Applied {
+			applied++
+		}
+	}
+	return applied, nil
+}

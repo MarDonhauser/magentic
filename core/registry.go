@@ -62,6 +62,7 @@ const (
 	registryRecordAgentRun
 	registrySetVendor
 	registrySetService
+	registryRecordStatus
 	registryAddDivider
 	registryRenameDivider
 	registryRemoveDivider
@@ -102,6 +103,7 @@ type RegistryChange struct {
 	automation   SessionAutomation
 	automationID string
 	agentRun     AgentRunRef
+	status       AgentStatus
 	vendor       AgentVendor
 	service      bool
 	at           time.Time
@@ -172,6 +174,13 @@ func RecordAgentRun(sessionID SessionID, name string, run AgentRunRef) RegistryC
 // run reference per vendor and be switched back without losing history.
 func SetSessionVendor(sessionID SessionID, name string, vendor AgentVendor) RegistryChange {
 	return RegistryChange{kind: registrySetVendor, sessionID: sessionID, sessionName: name, vendor: vendor}
+}
+
+// RecordSessionStatus stores the status an Observation pass reported for a
+// Session together with the time it was observed. The persisted status is
+// replaced, not appended to, by the next observation.
+func RecordSessionStatus(sessionID SessionID, name string, status AgentStatus, at time.Time) RegistryChange {
+	return RegistryChange{kind: registryRecordStatus, sessionID: sessionID, sessionName: name, status: status, at: at}
 }
 
 // EnqueueSessionMessage appends a message to the Session's durable Outbox. A
@@ -365,7 +374,7 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 		id := state.Agents[idx].ID
 		state.Agents = append(state.Agents[:idx], state.Agents[idx+1:]...)
 		return true, "", id, nil
-	case registryMarkSeen, registryMarkLater, registryReopenSession, registryMarkDeploy, registryRenameSession, registryRecordAgentRun, registrySetVendor, registrySetService:
+	case registryMarkSeen, registryMarkLater, registryReopenSession, registryMarkDeploy, registryRenameSession, registryRecordAgentRun, registrySetVendor, registrySetService, registryRecordStatus:
 		idx := sessionIndex(state, change.sessionID, change.sessionName)
 		if idx < 0 {
 			return false, "", "", fmt.Errorf("Session %q nicht gefunden", change.sessionName)
@@ -426,6 +435,22 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 				return false, "", session.ID, nil
 			}
 			session.Service = change.service
+		case registryRecordStatus:
+			if change.status == StatusUnknown {
+				return false, "", session.ID, nil
+			}
+			// An older pass must not rewind a newer fact when two observation
+			// loops record against the same Registry.
+			if !session.LastStatusAt.IsZero() && !at.After(session.LastStatusAt) {
+				return false, "", session.ID, nil
+			}
+			// A steady status refreshes its timestamp at most once a minute so
+			// the two-second poll does not rewrite state.json on every pass.
+			if session.LastStatus == change.status && at.Sub(session.LastStatusAt) < time.Minute {
+				return false, "", session.ID, nil
+			}
+			session.LastStatus = change.status
+			session.LastStatusAt = at
 		case registryRenameSession:
 			if change.newName == "" {
 				return false, "", "", fmt.Errorf("leerer Session-Name")

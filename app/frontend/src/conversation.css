@@ -1,17 +1,31 @@
+#term-conversation {
+  position: absolute;
+  inset: 48px 8px 8px 10px;
+  display: none;
+  background: var(--term-bg);
+  z-index: 3;
+}
+
+#terms.showing-conversation #term-conversation { display: block; }
+#terms.showing-conversation .term-wrap { display: none; }
+
+#terms:not(.hydra) > #term-conversation {
+  top: 76px;
+  right: max(var(--term-gui-gutter), calc((100% - var(--term-gui-content-max)) / 2));
+  left: max(var(--term-gui-gutter), calc((100% - var(--term-gui-content-max)) / 2));
+}
+
 .cv-surface {
   position: absolute;
   inset: 0;
   overflow: auto;
   padding: 10px 14px 16px;
-  display: none;
+  display: flex;
   flex-direction: column;
   gap: 6px;
   font-size: 13px;
   line-height: 1.5;
 }
-
-.dk-pane.cv-showing .cv-surface { display: flex; }
-.dk-pane.cv-showing .dk-term { visibility: hidden; }
 
 .cv-row { display: flex; flex-direction: column; gap: 4px; }
 

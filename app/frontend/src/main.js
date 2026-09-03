@@ -13,6 +13,7 @@ import {
   SessionAutomation, SaveSessionAutomation, DeleteSessionAutomation,
   DeployStatus, AzLogin, ArgoLogin, AzAccounts, AzSetSubscription,
   WorktreeDiff, SessionPreview, SearchTranscripts, SessionLinks, SetActiveTerm,
+  SessionConversation, WatchConversation,
   PickFolder, AddProject, RemoveProject, SaveImage, Timeline,
   AddDivider, RenameDivider, RemoveDivider, SetDividerCollapsed, MoveSidebarItem,
   Zeitgeist, ZeitgeistStart, ZeitgeistPause, ZeitgeistResume, ZeitgeistStop,
@@ -21,6 +22,7 @@ import {
   NotificationsEnabled, SetNotificationsEnabled,
   CompleteFiles, CompleteCommands, PromptLinePattern,
 } from '../wailsjs/go/main/App';
+import { createConversationView } from './conversation.js';
 import { usagePages, clampUsagePage } from './usage-state.js';
 import { buildSidebar, flattenSidebar, canPlace, planMove } from './sidebar-layout.js';
 import { EventsOn, EventsOff, BrowserOpenURL, ClipboardSetText } from '../wailsjs/runtime/runtime';
@@ -175,6 +177,7 @@ const ICONS = {
   chevron: '<path d="m6 9 6 6 6-6"/>',
   more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   server: '<rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><path d="M6 6.5h.01"/><path d="M6 17.5h.01"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
 };
 
 function icon(name) {
@@ -641,6 +644,75 @@ function wireVendorSwitch(sessionID, sessionName) {
   }
 }
 
+// Die Conversation-Oberfläche liegt neben dem Terminal derselben Session. Sie
+// liest nur: Umschalten rührt weder die Auswahl noch die Laufzeit der Session
+// an, und sie bietet nichts an, was eine Berechtigungsfrage beantworten würde.
+let termSurface = 'terminal';
+let conversationView = null;
+let conversationSessionID = null;
+
+function ensureConversationView() {
+  if (conversationView) return conversationView;
+  const host = document.createElement('div');
+  host.id = 'term-conversation';
+  const surface = document.createElement('div');
+  host.appendChild(surface);
+  termsEl.appendChild(host);
+  conversationView = createConversationView({
+    host: surface,
+    onOpenTerminal: () => showTermSurface('terminal'),
+  });
+  return conversationView;
+}
+
+async function showTermSurface(next) {
+  const surface = next === 'conversation' ? 'conversation' : 'terminal';
+  if (termSurface === surface) return;
+  termSurface = surface;
+  termsEl.classList.toggle('showing-conversation', surface === 'conversation');
+  updateTermBar();
+
+  if (surface !== 'conversation') {
+    conversationSessionID = null;
+    WatchConversation('').catch(() => {});
+    const t = terms.get(activeTerm);
+    t?.fit?.fit();
+    t?.term?.focus();
+    return;
+  }
+
+  const sessionID = activeSessionID;
+  conversationSessionID = sessionID;
+  const surfaceView = ensureConversationView();
+  WatchConversation(String(sessionID)).catch(() => {});
+  try {
+    const reading = await SessionConversation(String(sessionID));
+    if (conversationSessionID === sessionID) surfaceView.setReading(reading);
+  } catch (err) {
+    if (conversationSessionID !== sessionID) return;
+    surfaceView.setReading({
+      availability: 'record-unreadable',
+      reason: String(err || 'unbekannter Fehler'),
+    });
+  }
+}
+
+// resetTermSurface bringt beim Sessionwechsel das Terminal zurück, damit die
+// Oberfläche nie die Conversation einer anderen Session zeigt.
+function resetTermSurface() {
+  conversationSessionID = null;
+  if (termSurface === 'terminal') return;
+  termSurface = 'terminal';
+  termsEl.classList.remove('showing-conversation');
+  WatchConversation('').catch(() => {});
+}
+
+EventsOn('conversation:items', event => {
+  if (!conversationView || !conversationSessionID) return;
+  if (String(event?.sessionId || '') !== String(conversationSessionID)) return;
+  conversationView.applyUpdate(event);
+});
+
 function updateTermBar() {
   if (view !== 'term' || !activeTerm || !activeSessionID) return;
   const sessionID = activeSessionID;
@@ -669,8 +741,13 @@ function updateTermBar() {
     `<span class="tb-st">${visHtml(v)}</span>` +
     (a?.project && a.project !== '(ohne Projekt)' ? `<span class="tb-proj">${esc(a.project)}</span>` : '') +
     `<span class="tb-actions">` + finishActions + automationActive +
+    surfaceSwitchHtml(a) +
     `<button class="btn tiny submenu-anchor" id="tb-more" title="Weitere Aktionen — einreihen, Zeitplan, Links, Service, schließen" aria-label="Weitere Aktionen">${icon('more')}</button></span>`;
   $('tb-back').onclick = showOverview;
+  const surfaceBtn = $('tb-surface');
+  if (surfaceBtn) {
+    surfaceBtn.onclick = () => showTermSurface(termSurface === 'conversation' ? 'terminal' : 'conversation');
+  }
   if (!a?.term) {
     $('tb-done').onclick = () =>
       act(DoneAgent(sessionID), `/done an „${sessionName}" gesendet — Plan in der Session bestätigen`).catch(() => {});
@@ -679,7 +756,20 @@ function updateTermBar() {
   }
   wireVendorSwitch(sessionID, sessionName);
   $('tb-more').onclick = e => openSessionActionsMenu(e.currentTarget, sessionID, sessionName, a, gone);
+  // Die Berechtigungsfrage selbst steht in keiner Conversation. Die Oberfläche
+  // sagt nur, dass gewartet wird, und weist auf das Terminal.
+  conversationView?.setWaiting(a?.status === 'blocked');
   updateTermComposer(a, v, gone);
+}
+
+// surfaceSwitchHtml bietet den Wechsel zwischen Terminal und Verlauf an.
+// Eine Terminal-Session hat keinen Verlauf, also auch keinen Umschalter.
+function surfaceSwitchHtml(a) {
+  if (a?.term) return '';
+  const showsConversation = termSurface === 'conversation';
+  const label = showsConversation ? 'Terminal zeigen' : 'Verlauf zeigen';
+  return `<button class="btn tiny" id="tb-surface" title="${esc(label)}" aria-pressed="${showsConversation}">` +
+    `${icon(showsConversation ? 'terminal' : 'chat')}<span>${showsConversation ? 'Terminal' : 'Verlauf'}</span></button>`;
 }
 
 function checkoutChipsHtml(a) {
@@ -1068,6 +1158,7 @@ async function openSession(sessionID, name) {
   const dockTab = dockTabs().find(tab => tab.id === sessionID || (!tab.id && tab.name === name));
   if (dockTab) closeDockTab(dockTab);
   if (activeSessionID && activeSessionID !== sessionID) markSeen(activeSessionID);
+  if (activeSessionID !== sessionID) resetTermSurface();
   markSeen(sessionID);
   activeTerm = name;
   activeSessionID = sessionID;
@@ -1134,6 +1225,7 @@ function showPanel(id) {
 
 function leaveTerm() {
   hydraHandoff.leave();
+  resetTermSurface();
   markSeen(activeSessionID);
   activeTerm = null;
   activeSessionID = null;

@@ -7,8 +7,9 @@ Zwei Oberflächen, eine gemeinsame Logik (`core/`):
 - **TUI** (`magentic`) — schnelle Übersicht und Verwaltung im Terminal.
 - **Desktop-App** (`app/`, Wails) — Übersicht mit Token-Limits, Aktionen
   und **echtem eingebetteten Terminal** (xterm.js): natives Markieren, klickbare
-  Links, natives Scrollen. Dazu Git-Graph, Spec-Board, Statistik und ein
-  Terminal-Dock mit Tabs.
+  Links, natives Scrollen. Daneben liegt der **Verlauf** derselben Session: eine
+  gelesene Fassung dessen, was der Agent gesagt, ausgeführt und geändert hat.
+  Dazu Git-Graph, Spec-Board, Statistik und ein Terminal-Dock mit Tabs.
 
 ```
  ⚡ magentic                                  ● 1 läuft   ◆ 1 wartet   ○ 2 idle
@@ -71,6 +72,7 @@ Aktionen:
 
 - **⌨** — Terminal zur Session öffnen (echtes PTY-Attach, natives
   Markieren/Kopieren, klickbare Links, Scrollback)
+- **Verlauf** — dieselbe Session als Gespräch statt als Terminal (siehe unten)
 - **✓ done** — schickt `/done` an die laufende Session
 - **🔀 branch → main** — Claude-Session, die den Branch merged
 - **✨ Cleanup** — Claude-Session im verwaisten Worktree: sichten, committen, mergen
@@ -79,6 +81,26 @@ Aktionen:
 - **+ Session / ⑂ Worktree** — neue Claude-Session im Projekt
 - **⌨ Terminal** — neue Session mit reiner Shell statt Claude (auch über
   ⇧-Klick auf das `+` in der Sidebar und in der Hydra-Leiste)
+
+### Verlauf statt Terminal
+
+Über dem Terminal steht ein Umschalter zwischen **Terminal** und **Verlauf**.
+Der Verlauf liest die Aufzeichnung, die der Agent ohnehin schreibt, und zeigt
+sie als Abfolge: Eingaben und Antworten in voller Länge, Befehle, Dateiänderungen
+und Werkzeugaufrufe als eine Zeile, die sich zu ihrer Ausgabe aufklappen lässt.
+Ein Fehlschlag steht schon in der eingeklappten Zeile, delegierte Arbeit steht
+unter der Aufgabe, aus der sie hervorgegangen ist.
+
+Der Verlauf ist eine reine Lesefläche. Er ändert nichts an der Session: das
+Umschalten rührt weder die Laufzeit noch die Auswahl an. Neue Einträge kommen im
+Takt der bestehenden Beobachtung dazu, nicht Zeichen für Zeichen — der Agent
+schreibt eine Nachricht erst auf, wenn sie fertig ist. Fragt der Agent nach einer
+Berechtigung, steht davon nichts in der Aufzeichnung; der Verlauf sagt dann, dass
+gewartet wird, und weist den Weg ins Terminal, wo geantwortet wird.
+
+Lesbar ist derzeit Claude Code. Für die anderen Agenten sagt die Fläche
+ausdrücklich, dass ihre Verläufe noch nicht gelesen werden können — eine leere
+Fläche wäre von einem Lauf ohne Aktivität nicht zu unterscheiden.
 
 ### Sidebar
 

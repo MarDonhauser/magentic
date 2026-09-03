@@ -71,6 +71,61 @@ func (s AgentStatus) Icon() string {
 	return "?"
 }
 
+// PersistedLabel is the stable storage form of an AgentStatus for facts that
+// must survive a restart, such as Session.LastStatus. It is a fixed,
+// explicitly listed mapping, independent of the German display strings in
+// Label(), so renaming a display label never orphans old records. The unknown
+// status persists as the empty label and reads back as StatusUnknown.
+func (s AgentStatus) PersistedLabel() string {
+	switch s {
+	case StatusRunning:
+		return "running"
+	case StatusAgents:
+		return "agents"
+	case StatusShell:
+		return "shell"
+	case StatusBlocked:
+		return "blocked"
+	case StatusDone:
+		return "done"
+	case StatusIdle:
+		return "idle"
+	case StatusExited:
+		return "exited"
+	case StatusDead:
+		return "dead"
+	case StatusTerm:
+		return "term"
+	}
+	return ""
+}
+
+// AgentStatusFromPersistedLabel reads back a PersistedLabel. An absent or
+// unrecognized label reads as StatusUnknown, never as any particular status.
+func AgentStatusFromPersistedLabel(label string) AgentStatus {
+	switch label {
+	case "running":
+		return StatusRunning
+	case "agents":
+		return StatusAgents
+	case "shell":
+		return StatusShell
+	case "blocked":
+		return StatusBlocked
+	case "done":
+		return StatusDone
+	case "idle":
+		return StatusIdle
+	case "exited":
+		return StatusExited
+	case "dead":
+		return StatusDead
+	case "term":
+		return StatusTerm
+	}
+	return StatusUnknown
+}
+
 var shellCommands = map[string]bool{
 	"zsh": true, "bash": true, "fish": true, "sh": true,
 	"-zsh": true, "-bash": true, "login": true,

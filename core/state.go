@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"time"
@@ -117,6 +118,15 @@ type Session struct {
 	DeployAt         time.Time           `json:"deploy_at,omitzero"`
 	LaterAt          time.Time           `json:"later_at,omitzero"`
 	SeenAt           time.Time           `json:"seen_at,omitzero"`
+	// LastStatus is the last status an Observation pass reported while the
+	// Session's runtime still existed, with the time it was observed. It
+	// answers "what was it doing, and when" after a reboot, before the first
+	// Observation pass of the fresh process runs. It is persisted as a stable
+	// string label (see AgentStatus.PersistedLabel), never as the iota
+	// ordinal, so inserting a status constant later cannot rewrite history.
+	// The zero value reads as never observed, never as a status.
+	LastStatus   AgentStatus `json:"-"`
+	LastStatusAt time.Time   `json:"last_status_at,omitzero"`
 	Service          bool                `json:"service,omitempty"`
 	Outbox           []QueuedMessage     `json:"outbox,omitempty"`
 	Automation       *SessionAutomation  `json:"automation,omitempty"`
@@ -124,6 +134,36 @@ type Session struct {
 
 // Agent remains as a source-compatible name while callers migrate to Session.
 type Agent = Session
+
+// MarshalJSON persists LastStatus under its stable string label. Every other
+// field keeps the shape it always had, so older records read unchanged.
+func (s Session) MarshalJSON() ([]byte, error) {
+	type sessionJSON Session
+	return json.Marshal(struct {
+		sessionJSON
+		LastStatus string `json:"last_status,omitempty"`
+	}{
+		sessionJSON: sessionJSON(s),
+		LastStatus:  s.LastStatus.PersistedLabel(),
+	})
+}
+
+// UnmarshalJSON reads LastStatus back from its stable string label. An absent
+// or unrecognized label reads as StatusUnknown, which is also what every
+// state.json written before this change yields.
+func (s *Session) UnmarshalJSON(data []byte) error {
+	type sessionJSON Session
+	var decoded struct {
+		sessionJSON
+		LastStatus string `json:"last_status"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*s = Session(decoded.sessionJSON)
+	s.LastStatus = AgentStatusFromPersistedLabel(decoded.LastStatus)
+	return nil
+}
 
 // SidebarSlotKind names what a SidebarSlot places. Dividers are the only
 // slots the user creates outright; project and session slots merely record a

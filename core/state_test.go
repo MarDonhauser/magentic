@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func useTempState(t *testing.T) string {
@@ -93,5 +94,78 @@ func TestSessionRuntimeNameIsNeverReconstructedFromDisplayName(t *testing.T) {
 	session := Session{Name: "display-only"}
 	if got := session.TmuxName(); got != "" {
 		t.Fatalf("TmuxName() reconstructed mutable display identity: %q", got)
+	}
+}
+
+func TestAgentStatusPersistedLabelsRoundTrip(t *testing.T) {
+	statuses := []AgentStatus{
+		StatusUnknown, StatusRunning, StatusAgents, StatusShell, StatusBlocked,
+		StatusDone, StatusIdle, StatusExited, StatusDead, StatusTerm,
+	}
+	seen := map[string]AgentStatus{}
+	for _, status := range statuses {
+		label := status.PersistedLabel()
+		if other, dup := seen[label]; dup && status != StatusUnknown {
+			t.Fatalf("PersistedLabel %q is shared by %v and %v", label, other, status)
+		}
+		seen[label] = status
+		if back := AgentStatusFromPersistedLabel(label); back != status {
+			t.Fatalf("PersistedLabel(%v) = %q round-trips to %v", status, label, back)
+		}
+	}
+	if StatusUnknown.PersistedLabel() != "" {
+		t.Fatalf("unknown status must persist as absent, got %q", StatusUnknown.PersistedLabel())
+	}
+	for _, label := range []string{"", "gelaufen", "RUNNING", "dead ", "  "} {
+		if got := AgentStatusFromPersistedLabel(label); got != StatusUnknown {
+			t.Fatalf("AgentStatusFromPersistedLabel(%q) = %v, want unknown", label, got)
+		}
+	}
+}
+
+func TestSessionLastStatusPersistsAsStableString(t *testing.T) {
+	at := time.Date(2026, 9, 2, 20, 14, 0, 0, time.UTC)
+	session := Session{
+		ID: "session-1", Name: "hera", RuntimeName: "mgt-hera",
+		Dir: "/work/hera", CreatedAt: at,
+		LastStatus: StatusBlocked, LastStatusAt: at,
+	}
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw["last_status"] != "blocked" {
+		t.Fatalf("last_status = %v, want stable string \"blocked\": %s", raw["last_status"], data)
+	}
+	var back Session
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.LastStatus != StatusBlocked || !back.LastStatusAt.Equal(at) {
+		t.Fatalf("round-trip lost last status: %+v", back)
+	}
+}
+
+func TestSessionWithoutLastStatusReadsAsNeverObserved(t *testing.T) {
+	// Genau das Format, das vor diesem Change geschrieben wurde: kein
+	// last_status, kein last_status_at.
+	data := []byte(`{"id":"session-1","name":"hera","runtime_name":"mgt-hera",` +
+		`"dir":"/work/hera","created_at":"2026-09-02T20:14:00Z"}`)
+	var session Session
+	if err := json.Unmarshal(data, &session); err != nil {
+		t.Fatal(err)
+	}
+	if session.LastStatus != StatusUnknown {
+		t.Fatalf("LastStatus = %v, want unknown", session.LastStatus)
+	}
+	if !session.LastStatusAt.IsZero() {
+		t.Fatalf("LastStatusAt = %v, want zero", session.LastStatusAt)
+	}
+	if session.LastStatus == StatusIdle || session.LastStatus == StatusDead || session.LastStatus == StatusRunning {
+		t.Fatal("a never-observed Session must not read as idle, running, or dead")
 	}
 }

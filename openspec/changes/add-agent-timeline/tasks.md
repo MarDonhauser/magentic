@@ -34,17 +34,17 @@
 
 - [x] 5.1 Add the Conversation DTO and an incremental fetch to `app/tools.go` beside `SessionPreview`, carrying either the available Items or the unavailable reading with its reason; verify with a Go test that each unavailable reading maps to its own transport value and that none of them serialize as an empty Item list.
 - [x] 5.2 Publish newly normalized Items to the frontend over the existing Wails event channel; verify with a test that a pass producing new Items emits exactly one event carrying only those Items.
-- [ ] 5.3 Add `marked` to `app/frontend/package.json` with raw HTML disabled and a render helper; verify with a `node --test` unit test that a message containing raw HTML renders as visible text and not as markup, and that code fences, lists and links render.
-- [ ] 5.4 Add the conversation renderer module beside the terminal dock, following the existing vanilla-JS module and test conventions; verify with unit tests over the render model that Items appear in order and that a superseded Item replaces its predecessor in place rather than appending.
-- [ ] 5.5 Render tool activity collapsed to its title with an expandable detail, and show a failure in the collapsed line; verify with unit tests over the render model for a successful call, a failed call, and a call without a detail.
-- [ ] 5.6 Render agent messages and developer prompts in full, without a toggle; verify with a unit test over the render model.
-- [ ] 5.7 Group delegated Items under their parent task, and present parentless delegated Items as delegated work of unknown origin; verify with unit tests for both.
-- [ ] 5.8 Add the surface switch between terminal and Conversation for the selected Session, leaving selection and runtime untouched; verify with a test that switching issues no lifecycle or tmux call.
-- [ ] 5.9 Keep the scroll position when new Items arrive after the developer has scrolled back; verify with a unit test over the scroll decision, mirroring the existing dock-state test style.
-- [ ] 5.10 Render each unavailable reading with its own wording naming the reason and the vendor where applicable, keeping the terminal reachable; verify with unit tests that the empty-but-available wording differs from the record-not-found wording.
-- [ ] 5.11 State that the agent is waiting and offer the way to its terminal when the Session is observed waiting, and offer no control that claims to answer a permission prompt; verify with a unit test over the render model and a test asserting no approval action exists in the surface.
+- [x] 5.3 Add `marked` to `app/frontend/package.json` with raw HTML disabled and a render helper; verify with a `node --test` unit test that a message containing raw HTML renders as visible text and not as markup, and that code fences, lists and links render.
+- [x] 5.4 Add the conversation renderer module beside the terminal dock, following the existing vanilla-JS module and test conventions; verify with unit tests over the render model that Items appear in order and that a superseded Item replaces its predecessor in place rather than appending.
+- [x] 5.5 Render tool activity collapsed to its title with an expandable detail, and show a failure in the collapsed line; verify with unit tests over the render model for a successful call, a failed call, and a call without a detail.
+- [x] 5.6 Render agent messages and developer prompts in full, without a toggle; verify with a unit test over the render model.
+- [x] 5.7 Group delegated Items under their parent task, and present parentless delegated Items as delegated work of unknown origin; verify with unit tests for both.
+- [x] 5.8 Add the surface switch between terminal and Conversation for the selected Session, leaving selection and runtime untouched; verify with a test that switching issues no lifecycle or tmux call.
+- [x] 5.9 Keep the scroll position when new Items arrive after the developer has scrolled back; verify with a unit test over the scroll decision, mirroring the existing dock-state test style.
+- [x] 5.10 Render each unavailable reading with its own wording naming the reason and the vendor where applicable, keeping the terminal reachable; verify with unit tests that the empty-but-available wording differs from the record-not-found wording.
+- [x] 5.11 State that the agent is waiting and offer the way to its terminal when the Session is observed waiting, and offer no control that claims to answer a permission prompt; verify with a unit test over the render model and a test asserting no approval action exists in the surface.
 
 ## 6. Vocabulary and documentation
 
-- [ ] 6.1 Add Item, ItemKind, Conversation and ConversationRef to `CONTEXT.md` with their `_Avoid_` lines, following the existing entries' shape; verify by reading the section back against the item-model spec for agreement.
-- [ ] 6.2 Update the desktop app's description in `README.md` to name the conversation surface beside the embedded terminal; verify the described behavior matches what ships, with no claim about approvals or streaming.
+- [x] 6.1 Add Item, ItemKind, Conversation and ConversationRef to `CONTEXT.md` with their `_Avoid_` lines, following the existing entries' shape; verify by reading the section back against the item-model spec for agreement.
+- [x] 6.2 Update the desktop app's description in `README.md` to name the conversation surface beside the embedded terminal; verify the described behavior matches what ships, with no claim about approvals or streaming.
