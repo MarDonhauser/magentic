@@ -419,13 +419,13 @@ nichts: jede Session wird weiter über ihr Manifest gedeutet.
 Derselbe Lauf trägt auch die **Statuszeile** ein: `statusLine` in
 `~/.claude/settings.json` zeigt auf `magentic hook-report --event Status`.
 Claude Code ruft das bei jeder Änderung mit Modell, Effort, Kontext-Auslastung
-und Kosten auf; der Befehl gibt nichts aus, deshalb zeichnet Claude Code keine
-eigene Statuszeile mehr. Magentic legt den letzten Stand pro Session unter
-`~/.config/magentic/status-reports/` ab und zeigt ihn in der Desktop-App als
-Leiste unter dem Terminal — zusammen mit dem Git-Zustand des Checkouts
-(uncommitted / clear / committed, ahead/behind). Eine bereits vorhandene,
-eigene `statusLine` bleibt unangetastet; dann fehlen in der Leiste nur Modell
-und Kontext.
+und Kosten auf und zeichnet die Ausgabe unter seiner Eingabezeile: Kontext-
+Balken, Modell, Effort, Kosten. Magentic legt denselben Stand pro Session unter
+`~/.config/magentic/status-reports/` ab und zeigt ihn in der Übersicht. Den
+Git-Zustand des Checkouts (uncommitted / clear / committed, ahead/behind)
+zeigt die Desktop-App in der Kopfzeile über dem Terminal neben dem Branch.
+Eine bereits vorhandene, eigene `statusLine` bleibt unangetastet; dann fehlen
+in der Übersicht nur Modell und Kontext.
 
 Rechts daneben: `✓` Arbeitsverzeichnis sauber, `±` uncommitted Änderungen, `⑂` läuft im Worktree.
 

@@ -192,8 +192,9 @@ func cliHookReport() {
 	_ = core.AppendHookReport(core.HookReportPath(), report)
 }
 
-// cliStatusReport is what the installed statusLine calls. It writes nothing to
-// stdout on purpose: an empty status line is how Claude Code stops drawing one.
+// cliStatusReport is what the installed statusLine calls. What it prints is
+// the line Claude Code draws under its prompt; the report file is what the app
+// reads for the overview. A payload it cannot read leaves the line empty.
 func cliStatusReport(payload []byte) {
 	report, err := core.StatusReportFromClaudePayload(payload, time.Now())
 	if err != nil {
@@ -202,5 +203,6 @@ func cliStatusReport(payload []byte) {
 	if report.RuntimeName == "" {
 		report.RuntimeName = core.HookRuntimeName()
 	}
+	fmt.Print(core.StatusLineText(report))
 	_ = core.WriteStatusReport(core.StatusReportDir(), report)
 }

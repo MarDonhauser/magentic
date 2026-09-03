@@ -3,6 +3,7 @@ package core
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -115,5 +116,40 @@ func TestStatusReportsResolveToSessionsByRuntimeAndVendor(t *testing.T) {
 	}
 	if _, leaked := resolved["s3"]; leaked {
 		t.Fatalf("der Claude-Report landete bei der Copilot-Session: %+v", resolved["s3"])
+	}
+}
+
+func TestStatusLineTextShowsMeterModelEffortAndCost(t *testing.T) {
+	report, err := StatusReportFromClaudePayload([]byte(claudeStatusPayload), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := StatusLineText(report)
+	for _, want := range []string{"\x1b[32m🧠 ▰▱▱▱▱▱▱▱▱▱ 10%", "🤖 Fable 5.1", "⚡⚡⚡⚡ xhigh", "$2.38"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Statuszeile %q enthält %q nicht", got, want)
+		}
+	}
+	if strings.Contains(got, "\n") {
+		t.Errorf("Statuszeile %q ist mehrzeilig", got)
+	}
+}
+
+func TestStatusLineTextColorsByContextAndSkipsUnknownFacts(t *testing.T) {
+	warn := StatusLineText(StatusReport{ContextPercent: 64.6, Model: "Opus 5", FastMode: true, Effort: "turbo"})
+	if !strings.HasPrefix(warn, "\x1b[33m🧠 ▰▰▰▰▰▰▰▱▱▱ 65%") {
+		t.Errorf("Statuszeile bei 65%% beginnt mit %q", warn)
+	}
+	for _, want := range []string{"🤖 Opus 5 · fast", "⚡ turbo"} {
+		if !strings.Contains(warn, want) {
+			t.Errorf("Statuszeile %q enthält %q nicht", warn, want)
+		}
+	}
+	if strings.Contains(warn, "$") {
+		t.Errorf("Statuszeile %q nennt Kosten ohne Kosten", warn)
+	}
+	full := StatusLineText(StatusReport{ContextPercent: 140})
+	if full != "\x1b[31m🧠 ▰▰▰▰▰▰▰▰▰▰ 100%\x1b[0m" {
+		t.Errorf("Statuszeile ohne Modell = %q", full)
 	}
 }

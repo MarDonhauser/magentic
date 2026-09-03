@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -100,6 +101,67 @@ func StatusReportFromClaudePayload(payload []byte, now time.Time) (StatusReport,
 		FastMode:       body.FastMode,
 		Dir:            body.Cwd,
 	}, nil
+}
+
+// ContextPercent100 is the context usage rounded and clamped to 0..100.
+func (r StatusReport) ContextPercent100() int {
+	percent := int(r.ContextPercent + 0.5)
+	if percent < 0 {
+		return 0
+	}
+	if percent > 100 {
+		return 100
+	}
+	return percent
+}
+
+var statusEffortBolts = map[string]int{"low": 1, "medium": 2, "high": 3, "xhigh": 4, "max": 5}
+
+const (
+	ansiReset  = "\x1b[0m"
+	ansiDim    = "\x1b[2m"
+	ansiGreen  = "\x1b[32m"
+	ansiYellow = "\x1b[33m"
+	ansiRed    = "\x1b[31m"
+)
+
+func statusContextColor(percent int) string {
+	switch {
+	case percent >= 85:
+		return ansiRed
+	case percent >= 60:
+		return ansiYellow
+	default:
+		return ansiGreen
+	}
+}
+
+// StatusLineText is the one line Claude Code draws under its prompt. Claude
+// Code keeps that row for its own pills whenever Remote Control is on, so the
+// facts go there instead of into a second bar under the terminal.
+func StatusLineText(report StatusReport) string {
+	percent := report.ContextPercent100()
+	filled := int(float64(percent)/10 + 0.5)
+	meter := strings.Repeat("▰", filled) + strings.Repeat("▱", 10-filled)
+	parts := []string{statusContextColor(percent) + "🧠 " + meter + " " + strconv.Itoa(percent) + "%" + ansiReset}
+	if report.Model != "" {
+		model := "🤖 " + report.Model
+		if report.FastMode {
+			model += " · fast"
+		}
+		parts = append(parts, model)
+	}
+	if report.Effort != "" {
+		bolts := statusEffortBolts[report.Effort]
+		if bolts == 0 {
+			bolts = 1
+		}
+		parts = append(parts, strings.Repeat("⚡", bolts)+" "+report.Effort)
+	}
+	if report.CostUSD > 0 {
+		parts = append(parts, fmt.Sprintf("$%.2f", report.CostUSD))
+	}
+	return strings.Join(parts, ansiDim+" · "+ansiReset)
 }
 
 // StatusReportDir holds one file per runtime. A file per runtime instead of an

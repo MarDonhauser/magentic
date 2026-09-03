@@ -36,9 +36,8 @@ func ClaudeHookDefinitions() []ClaudeHookDefinition {
 }
 
 // ClaudeStatusLineDefinition is the statusLine entry. Claude Code runs it on
-// every change with model, effort and context facts on stdin. It prints
-// nothing, so Claude Code draws no status line of its own — Magentic shows the
-// facts under the terminal instead.
+// every change with model, effort and context facts on stdin, draws what it
+// prints under its prompt, and Magentic keeps a copy for the overview.
 func ClaudeStatusLineDefinition() ClaudeHookDefinition {
 	return ClaudeHookDefinition{Event: ClaudeStatusEvent, Command: claudeHookMarker + " --event " + ClaudeStatusEvent}
 }

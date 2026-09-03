@@ -36,7 +36,7 @@ import {
 import { renderGitGraph } from './gitgraph.js';
 import { completionTrigger, applyCompletion } from './features/composer/completion-state.js';
 import { promptCoverRows } from './features/composer/prompt-cover.js';
-import { statusLineItems } from './features/statusline/statusline-state.js';
+import { checkoutChips } from './features/checkout/checkout-chips.js';
 import { renderBoard } from './board.js';
 import { renderStats } from './stats.js';
 import { mountDock, toggleDock, isDockOpen, closeDockTab, dockTabs, refitDock } from './dock.js';
@@ -477,7 +477,6 @@ function updatePromptCover(t, status) {
 }
 
 const termBarEl = $('term-bar');
-const termStatusLineEl = $('term-statusline');
 const termStateEl = $('term-session-state');
 const termStateIconEl = $('term-state-icon');
 const termStateTitleEl = $('term-state-title');
@@ -665,6 +664,7 @@ function updateTermBar() {
     `<span class="tb-name">${esc(activeTerm)}</span>` +
     vendorSwitchHtml(a) +
     (a?.branch ? `<span class="tb-branch${a.worktree ? ' wt' : ''}" title="Branch ${esc(a.branch)}${a.worktree ? ' · eigener Worktree' : ''}">${icon('gitbranch')}${esc(a.branch)}</span>` : '') +
+    checkoutChipsHtml(a) +
     (a?.service ? `<span class="tb-service" title="Service-Session — hält nur einen Dienst am Laufen und bleibt im Hydra-Modus ausgeblendet">${icon('server')}Service</span>` : '') +
     `<span class="tb-st">${visHtml(v)}</span>` +
     (a?.project && a.project !== '(ohne Projekt)' ? `<span class="tb-proj">${esc(a.project)}</span>` : '') +
@@ -679,17 +679,12 @@ function updateTermBar() {
   }
   wireVendorSwitch(sessionID, sessionName);
   $('tb-more').onclick = e => openSessionActionsMenu(e.currentTarget, sessionID, sessionName, a, gone);
-  updateTermStatusLine(a, gone);
   updateTermComposer(a, v, gone);
 }
 
-function updateTermStatusLine(a, gone) {
-  const items = statusLineItems(a, { gone });
-  termStatusLineEl.hidden = items.length === 0;
-  termStatusLineEl.innerHTML = items.map(item =>
-    `<span class="tsl-item${item.tone ? ' ' + item.tone : ''}" title="${esc(item.title || '')}">` +
-      (item.meter == null ? '' : `<span class="tsl-meter" aria-hidden="true"><i style="width:${item.meter}%"></i></span>`) +
-      `<span>${esc(item.text)}</span></span>`).join('');
+function checkoutChipsHtml(a) {
+  return checkoutChips(a).map(chip =>
+    `<span class="tb-git ${chip.tone}" title="${esc(chip.title)}">${esc(chip.text)}</span>`).join('');
 }
 
 function updateComposerControls(gone) {

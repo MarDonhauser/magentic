@@ -568,16 +568,9 @@ func overviewSessionsForProject(state *State, project Project) []Session {
 var readStatusReports = func() []StatusReport { return ReadStatusReports(StatusReportDir()) }
 
 func ovStatusLine(report StatusReport) *OvStatusLine {
-	percent := int(report.ContextPercent + 0.5)
-	if percent < 0 {
-		percent = 0
-	}
-	if percent > 100 {
-		percent = 100
-	}
 	return &OvStatusLine{
 		Model: report.Model, Effort: report.Effort,
-		ContextPercent: percent, ContextWindow: report.ContextWindow, ContextTokens: report.ContextTokens,
+		ContextPercent: report.ContextPercent100(), ContextWindow: report.ContextWindow, ContextTokens: report.ContextTokens,
 		CostUSD: report.CostUSD, Version: report.Version, OutputStyle: report.OutputStyle,
 		FastMode: report.FastMode, Age: FormatAge(report.At),
 	}
