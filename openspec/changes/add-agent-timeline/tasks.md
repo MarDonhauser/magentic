@@ -24,16 +24,16 @@
 
 ## 4. Incremental reading
 
-- [ ] 4.1 Add the per-Conversation read position (byte offset plus a fixed-size prefix fingerprint) and the decision to continue or to re-read in full; verify with tests that a grown file with a matching prefix continues from the offset, that a shortened file re-reads in full, and that a same-length file with a changed prefix re-reads in full.
-- [ ] 4.2 Replace, rather than extend, the held Conversation when a full re-reading occurs; verify with a test that Items from the discarded reading are gone afterwards.
-- [ ] 4.3 Read Conversations only for Sessions an interface declares it is watching, and add the watch declaration to the core surface; verify with a test that a pass over several Sessions with one watched reads exactly one Conversation record.
-- [ ] 4.4 Drive the incremental read from the existing Observation pass without adding a second loop; verify with a test that no additional goroutine or ticker is started and that a pass with no appended records publishes nothing.
-- [ ] 4.5 Confirm reading never writes, moves, truncates, locks, or sends anything; verify with a test that the record file's content, size and modification time are unchanged after a read and that no runtime command is issued.
+- [x] 4.1 Add the per-Conversation read position (byte offset plus a fixed-size prefix fingerprint) and the decision to continue or to re-read in full; verify with tests that a grown file with a matching prefix continues from the offset, that a shortened file re-reads in full, and that a same-length file with a changed prefix re-reads in full.
+- [x] 4.2 Replace, rather than extend, the held Conversation when a full re-reading occurs; verify with a test that Items from the discarded reading are gone afterwards.
+- [x] 4.3 Read Conversations only for Sessions an interface declares it is watching, and add the watch declaration to the core surface; verify with a test that a pass over several Sessions with one watched reads exactly one Conversation record.
+- [x] 4.4 Drive the incremental read from the existing Observation pass without adding a second loop; verify with a test that no additional goroutine or ticker is started and that a pass with no appended records publishes nothing.
+- [x] 4.5 Confirm reading never writes, moves, truncates, locks, or sends anything; verify with a test that the record file's content, size and modification time are unchanged after a read and that no runtime command is issued.
 
 ## 5. Desktop app surface
 
-- [ ] 5.1 Add the Conversation DTO and an incremental fetch to `app/tools.go` beside `SessionPreview`, carrying either the available Items or the unavailable reading with its reason; verify with a Go test that each unavailable reading maps to its own transport value and that none of them serialize as an empty Item list.
-- [ ] 5.2 Publish newly normalized Items to the frontend over the existing Wails event channel; verify with a test that a pass producing new Items emits exactly one event carrying only those Items.
+- [x] 5.1 Add the Conversation DTO and an incremental fetch to `app/tools.go` beside `SessionPreview`, carrying either the available Items or the unavailable reading with its reason; verify with a Go test that each unavailable reading maps to its own transport value and that none of them serialize as an empty Item list.
+- [x] 5.2 Publish newly normalized Items to the frontend over the existing Wails event channel; verify with a test that a pass producing new Items emits exactly one event carrying only those Items.
 - [ ] 5.3 Add `marked` to `app/frontend/package.json` with raw HTML disabled and a render helper; verify with a `node --test` unit test that a message containing raw HTML renders as visible text and not as markup, and that code fences, lists and links render.
 - [ ] 5.4 Add the conversation renderer module beside the terminal dock, following the existing vanilla-JS module and test conventions; verify with unit tests over the render model that Items appear in order and that a superseded Item replaces its predecessor in place rather than appending.
 - [ ] 5.5 Render tool activity collapsed to its title with an expandable detail, and show a failure in the collapsed line; verify with unit tests over the render model for a successful call, a failed call, and a call without a detail.

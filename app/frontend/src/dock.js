@@ -12,6 +12,7 @@ import {
   setActiveTab, resizeSplit, moveTabToEdge, serializeTree, dockRefKey, normalizeDockRef,
 } from './dock-tree.js';
 import { normalizeDockState, resolveLegacyDockRefs } from './dock-state.js';
+import { createConversationView } from './conversation.js';
 
 const STORE_KEY = 'magentic.dock';
 const DEFAULT_HEIGHT = 280;
@@ -21,6 +22,8 @@ const DOCK_ICONS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   down: '<path d="m6 9 6 6 6-6"/>',
   close: '<path d="M18 6 6 18M6 6l12 12"/>',
+  terminal: '<path d="m4 17 6-5-6-5M12 19h8"/>',
+  conversation: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
 };
 
 function dockIcon(name) {
@@ -261,6 +264,14 @@ function buildTabEl(t) {
   tool.setAttribute('aria-hidden', 'true');
   tool.innerHTML = developerIcon('bash');
 
+  const surface = document.createElement('button');
+  surface.className = 'dk-surface';
+  surface.type = 'button';
+  surface.addEventListener('click', e => {
+    e.stopPropagation();
+    showSurface(t, t.surface === 'conversation' ? 'terminal' : 'conversation');
+  });
+
   const x = document.createElement('button');
   x.className = 'dk-x';
   x.type = 'button';
@@ -268,9 +279,11 @@ function buildTabEl(t) {
   x.setAttribute('aria-label', `Tab ${t.name} schließen`);
   x.title = 'Tab schließen';
 
-  el.append(dot, tool, label, x);
+  el.append(dot, tool, label, surface, x);
   t.el = el;
   t.dot = dot;
+  t.surfaceBtn = surface;
+  syncSurfaceButton(t);
 }
 
 function addTab(ref) {
@@ -283,9 +296,10 @@ function addTab(ref) {
   pane.className = 'dk-pane';
   const host = document.createElement('div');
   host.className = 'dk-term';
-  pane.appendChild(host);
+  const convHost = document.createElement('div');
+  pane.append(host, convHost);
 
-  const t = { ref, key, name, el: null, dot: null, pane, host, term: null, fit: null, offData: null, offClosed: null, live: false, closed: false, leafId: null };
+  const t = { ref, key, name, el: null, dot: null, pane, host, convHost, conv: null, surface: 'terminal', term: null, fit: null, offData: null, offClosed: null, live: false, closed: false, leafId: null };
   buildTabEl(t);
   tabs.set(key, t);
   syncDot(t);
@@ -329,6 +343,63 @@ function ensureLive(t) {
   try { fit.fit(); } catch { /* Pane noch ohne Maße */ }
   Promise.resolve(cb.attach?.(t.ref, term.cols, term.rows))
     .catch(err => term.write('\x1b[31m' + err + '\x1b[0m\r\n'));
+}
+
+// showSurface switches one tab between its terminal and its Conversation. It
+// changes nothing about the Session: no lifecycle call, no runtime command,
+// and the selected tab stays the selected tab.
+function showSurface(t, surface) {
+  if (!t || t.surface === surface) return;
+  t.surface = surface;
+  t.pane.classList.toggle('cv-showing', surface === 'conversation');
+  syncSurfaceButton(t);
+  if (surface !== 'conversation') {
+    cb.watchConversation?.(null);
+    fitNow(t);
+    t.term?.focus();
+    return;
+  }
+  ensureConversation(t);
+  cb.watchConversation?.(t.ref);
+  Promise.resolve(cb.readConversation?.(t.ref))
+    .then(reading => { if (t.surface === 'conversation') t.conv.setReading(reading); })
+    .catch(() => { /* Die Lesung selbst nennt ihren Grund. */ });
+}
+
+function ensureConversation(t) {
+  if (t.conv) return t.conv;
+  t.conv = createConversationView({
+    host: t.convHost,
+    onOpenTerminal: () => showSurface(t, 'terminal'),
+  });
+  return t.conv;
+}
+
+function syncSurfaceButton(t) {
+  if (!t?.surfaceBtn) return;
+  const showsConversation = t.surface === 'conversation';
+  t.surfaceBtn.innerHTML = dockIcon(showsConversation ? 'terminal' : 'conversation');
+  t.surfaceBtn.title = showsConversation ? 'Terminal zeigen' : 'Verlauf zeigen';
+  t.surfaceBtn.setAttribute('aria-label', t.surfaceBtn.title);
+}
+
+// applyConversationUpdate hands the Items an Observation pass produced to the
+// tab that is currently showing that Session's Conversation.
+export function applyConversationUpdate(event) {
+  for (const t of tabs.values()) {
+    if (t.surface !== 'conversation' || !t.conv) continue;
+    if (String(t.ref?.id || '') !== String(event?.sessionId || '')) continue;
+    t.conv.applyUpdate(event);
+  }
+}
+
+// setConversationWaiting states in the surface that the agent is waiting. The
+// surface only points at the terminal; it never offers to answer a prompt.
+export function setConversationWaiting(sessionID, waiting) {
+  for (const t of tabs.values()) {
+    if (!t.conv || String(t.ref?.id || '') !== String(sessionID || '')) continue;
+    t.conv.setWaiting(waiting);
+  }
 }
 
 function activate(key) {

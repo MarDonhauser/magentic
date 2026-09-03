@@ -1,8 +1,6 @@
 package main
 
 import (
-	"sync"
-
 	"magentic/core"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -33,14 +31,12 @@ type ConversationUpdateEvent struct {
 	Items     []core.Item `json:"items"`
 }
 
-var conversationReaderOnce sync.Once
-
 func (a *App) conversations() *core.ConversationReader {
-	conversationReaderOnce.Do(func() {
-		if a.conversationReader == nil {
-			a.conversationReader = core.NewConversationReader()
-		}
-	})
+	a.conversationMu.Lock()
+	defer a.conversationMu.Unlock()
+	if a.conversationReader == nil {
+		a.conversationReader = core.NewConversationReader()
+	}
 	return a.conversationReader
 }
 

@@ -1,0 +1,104 @@
+.cv-surface {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 10px 14px 16px;
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.dk-pane.cv-showing .cv-surface { display: flex; }
+.dk-pane.cv-showing .dk-term { visibility: hidden; }
+
+.cv-row { display: flex; flex-direction: column; gap: 4px; }
+
+.cv-kind {
+  font-size: 11px;
+  letter-spacing: .02em;
+  opacity: .6;
+}
+
+.cv-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cv-line:disabled { cursor: default; }
+.cv-line:hover:not(:disabled) { background: rgba(127, 140, 160, .14); }
+
+.cv-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.cv-state { font-size: 11px; opacity: .8; }
+.cv-failed .cv-state,
+.cv-failed .cv-title { color: #e06c75; }
+.cv-awaiting .cv-title { opacity: .75; }
+
+.cv-detail {
+  margin: 0 0 4px 6px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(127, 140, 160, .12);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+.cv-prose { padding: 0 6px; }
+.cv-prose pre { overflow-x: auto; }
+.cv-developer-prompt .cv-prose {
+  border-left: 2px solid currentColor;
+  padding-left: 10px;
+  opacity: .9;
+}
+
+.cv-children {
+  margin-left: 14px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(127, 140, 160, .3);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cv-notice,
+.cv-waiting {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: rgba(127, 140, 160, .12);
+}
+
+.cv-actions { margin-top: 10px; }
+
+.cv-action {
+  padding: 5px 10px;
+  border: 1px solid rgba(127, 140, 160, .35);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}

@@ -39,6 +39,7 @@ type App struct {
 	observationAt    time.Time
 	observationInput map[core.SessionID]string
 	observeSessions  func(context.Context, []core.Session) core.ObservationSnapshot
+	conversationMu   sync.Mutex
 	// conversationReader keeps the presented Session's Conversation current.
 	// The Observation pass drives it; it runs no loop of its own.
 	conversationReader *core.ConversationReader
