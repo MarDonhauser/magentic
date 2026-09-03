@@ -92,6 +92,9 @@ type tmuxRegistryDiscoveryRuntime struct{}
 
 func (tmuxRegistryDiscoveryRuntime) ListSessions(ctx context.Context) ([]string, error) {
 	out, err := runRegistryDiscoveryTmux(ctx, "list-sessions", "-F", "#{session_name}")
+	if errors.Is(err, errTmuxServerAbsent) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -165,6 +168,9 @@ func runRegistryDiscoveryTmux(ctx context.Context, args ...string) (string, erro
 	out, err := exec.CommandContext(ctx, "tmux", args...).CombinedOutput()
 	if err != nil {
 		message := strings.TrimSpace(string(out))
+		if tmuxServerKnownAbsent(string(out)) {
+			return "", fmt.Errorf("%w: %s", errTmuxServerAbsent, message)
+		}
 		if message != "" {
 			return "", fmt.Errorf("%w: %s", err, message)
 		}
@@ -172,6 +178,8 @@ func runRegistryDiscoveryTmux(ctx context.Context, args ...string) (string, erro
 	}
 	return string(out), nil
 }
+
+var errTmuxServerAbsent = errors.New("tmux server is not running")
 
 // DiscoverNew observes externally-created tmux runtimes without mutating the
 // Registry. Failed or malformed probes remain explicitly unknown and never

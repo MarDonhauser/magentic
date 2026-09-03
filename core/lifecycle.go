@@ -1717,20 +1717,37 @@ func (r tmuxLifecycleRuntime) Exists(ctx context.Context, session Session) (bool
 }
 
 func tmuxTargetKnownAbsent(output []byte) bool {
-	message := string(output)
-	if strings.HasSuffix(message, "\n") {
-		message = strings.TrimSuffix(message, "\n")
-	}
-	if message == "" || strings.ContainsAny(message, "\r\n") || strings.TrimSpace(message) != message {
+	message := strings.TrimSuffix(string(output), "\n")
+	if !singleLineTmuxDiagnostic(message) {
 		return false
 	}
-	for _, prefix := range []string{"can't find session: ", "no server running on "} {
-		if strings.HasPrefix(message, prefix) {
-			detail := strings.TrimPrefix(message, prefix)
-			return detail != "" && strings.TrimSpace(detail) == detail
-		}
+	if tmuxServerKnownAbsent(message) {
+		return true
+	}
+	detail, found := strings.CutPrefix(message, "can't find session: ")
+	return found && detail != "" && strings.TrimSpace(detail) == detail
+}
+
+// tmux meldet einen fehlenden Server je nach errno verschieden: bei ECONNREFUSED
+// (Socket-Datei ohne Server) "no server running on …", bei ENOENT (Socket-Datei
+// weg, etwa nach einem Reboot) "error connecting to … (No such file or directory)".
+func tmuxServerKnownAbsent(output string) bool {
+	message := strings.TrimSuffix(output, "\n")
+	if !singleLineTmuxDiagnostic(message) {
+		return false
+	}
+	if socket, found := strings.CutPrefix(message, "no server running on "); found {
+		return socket != "" && strings.TrimSpace(socket) == socket
+	}
+	if detail, found := strings.CutPrefix(message, "error connecting to "); found {
+		socket, found := strings.CutSuffix(detail, " (No such file or directory)")
+		return found && socket != "" && strings.TrimSpace(socket) == socket
 	}
 	return false
+}
+
+func singleLineTmuxDiagnostic(message string) bool {
+	return message != "" && !strings.ContainsAny(message, "\r\n") && strings.TrimSpace(message) == message
 }
 
 func (tmuxLifecycleRuntime) Start(ctx context.Context, session Session, mode string) error {

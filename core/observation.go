@@ -340,7 +340,17 @@ func observeWithRunner(ctx context.Context, sessions []Session, runner observati
 		"#{session_name}\t#{pane_id}\t#{pane_current_command}\t#{window_activity}\t#{window_active}\t#{pane_active}",
 	}
 	listed, err, timedOut := runObservationCommand(cycleCtx, runner, config.probeTimeout, listArgs...)
-	if err != nil {
+	var (
+		panes            map[string]observedPane
+		parseProblems    []ObservationProblem
+		presenceComplete bool
+	)
+	switch {
+	case err == nil:
+		panes, parseProblems, presenceComplete = parseObservedPanes(listed)
+	case !timedOut && tmuxServerKnownAbsent(observationStderr(err)):
+		panes, presenceComplete = map[string]observedPane{}, true
+	default:
 		snapshot.Availability = ObservationUnavailable
 		snapshot.Problems = append(snapshot.Problems, ObservationProblem{
 			Operation: "list-panes", Message: observationErrorMessage(err), TimedOut: timedOut,
@@ -349,8 +359,6 @@ func observeWithRunner(ctx context.Context, sessions []Session, runner observati
 		sortObservationProblems(snapshot.Problems)
 		return snapshot
 	}
-
-	panes, parseProblems, presenceComplete := parseObservedPanes(listed)
 	snapshot.Problems = append(snapshot.Problems, parseProblems...)
 	jobs := make([]struct {
 		index int
@@ -838,7 +846,18 @@ func observationErrorMessage(err error) string {
 	if errors.Is(err, context.Canceled) {
 		return "canceled"
 	}
+	if stderr := strings.TrimSpace(observationStderr(err)); stderr != "" {
+		return err.Error() + ": " + stderr
+	}
 	return err.Error()
+}
+
+func observationStderr(err error) string {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return string(exitErr.Stderr)
+	}
+	return ""
 }
 
 func sortObservationProblems(problems []ObservationProblem) {
