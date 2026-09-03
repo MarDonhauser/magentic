@@ -332,3 +332,95 @@ func TestStartCommandForSession(t *testing.T) {
 		t.Fatalf("startCommandForSession = %q", got)
 	}
 }
+
+func TestEveryBuiltinVendorDeclaresANormalizerAnswer(t *testing.T) {
+	want := map[AgentVendor]bool{
+		AgentVendorClaude:      true,
+		AgentVendorCodex:       false,
+		AgentVendorGemini:      false,
+		AgentVendorCopilot:     false,
+		AgentVendorAntigravity: false,
+	}
+	providers := builtinAgentProviders()
+	if len(providers) != len(want) {
+		t.Fatalf("%d Builtin-Provider, der Test deckt %d ab", len(providers), len(want))
+	}
+	for _, provider := range providers {
+		vendor := provider.Vendor()
+		supported, covered := want[vendor]
+		if !covered {
+			t.Fatalf("Vendor %q ist im Test nicht abgedeckt", vendor)
+		}
+		normalizer, ok := provider.Normalizer()
+		if ok != supported {
+			t.Errorf("%q erklärt Normalizer = %v, want %v", vendor, ok, supported)
+		}
+		switch {
+		case supported && normalizer == nil:
+			t.Errorf("%q erklärt einen Normalizer, liefert aber keinen", vendor)
+		case supported && normalizer.Vendor() != vendor:
+			t.Errorf("%q liefert einen Normalizer für %q", vendor, normalizer.Vendor())
+		case !supported && normalizer != nil:
+			t.Errorf("%q erklärt keinen Normalizer, liefert aber einen", vendor)
+		}
+	}
+}
+
+func TestClaudeNormalizerSatisfiesTheContract(t *testing.T) {
+	var normalizer ConversationNormalizer = claudeConversationNormalizer{root: t.TempDir()}
+	var scan ConversationScan = normalizer.NewScan()
+	if scan == nil {
+		t.Fatal("NewScan liefert keinen Scan")
+	}
+	if _, ok := normalizer.Locate(ConversationRef{Vendor: AgentVendorCodex, RunID: "run-1"}); ok {
+		t.Error("der Claude-Normalizer darf keine Conversation eines fremden Vendors lokalisieren")
+	}
+}
+
+func TestConversationRefResolvesFromVendorAndRunOnly(t *testing.T) {
+	session := Session{
+		ID: "s1", Name: "navi", RuntimeName: "magentic-navi",
+		SessionKind: SessionKindCodingAgent, Vendor: AgentVendorClaude,
+		AgentRuns: []AgentRunRef{{Vendor: AgentVendorClaude, ExternalID: "run-1"}},
+	}
+	ref, _, ok := ConversationRefForSession(session)
+	if !ok {
+		t.Fatal("eine Coding-Session mit Run-Referenz muss ihre Conversation auflösen")
+	}
+	want := ConversationRef{Vendor: AgentVendorClaude, RunID: "run-1"}
+	if ref != want {
+		t.Fatalf("ConversationRef = %+v, want %+v", ref, want)
+	}
+
+	renamed := session
+	renamed.Name = "navi-neu"
+	renamed.RuntimeName = "magentic-navi-neu"
+	renamedRef, _, ok := ConversationRefForSession(renamed)
+	if !ok || renamedRef != want {
+		t.Fatalf("umbenannte Session löst %+v auf, want %+v", renamedRef, want)
+	}
+}
+
+func TestConversationRefWithoutRunReferenceIsNotApplicable(t *testing.T) {
+	session := Session{ID: "s1", Name: "navi", SessionKind: SessionKindCodingAgent, Vendor: AgentVendorCodex}
+	_, reading, ok := ConversationRefForSession(session)
+	if ok {
+		t.Fatal("ohne Run-Referenz darf keine ConversationRef entstehen")
+	}
+	if reading.Availability != ConversationNotApplicable || reading.Reason == "" {
+		t.Fatalf("Lesung = %+v, want nicht anwendbar mit Grund", reading)
+	}
+}
+
+func TestTerminalSessionHasNoConversation(t *testing.T) {
+	_, reading, ok := ConversationRefForSession(Session{ID: "t1", Name: "term-navi", Kind: KindTerm})
+	if ok {
+		t.Fatal("eine Terminal-Session hat keine Conversation")
+	}
+	if reading.Availability != ConversationNotApplicable {
+		t.Fatalf("Lesung = %q, want %q", reading.Availability, ConversationNotApplicable)
+	}
+	if reading.Availability == ConversationRecordNotFound {
+		t.Fatal("nicht anwendbar darf nicht als fehlend gelesen werden")
+	}
+}

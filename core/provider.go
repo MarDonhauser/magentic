@@ -35,6 +35,10 @@ type AgentProvider interface {
 	// it when it provisions a Session, while the vendor creates the
 	// conversation only once work happens there.
 	RunExists(externalID string) bool
+	// Normalizer returns the Adapter that turns this vendor's own conversation
+	// records into Items. A vendor Magentic cannot read yet answers false —
+	// explicitly, so asking for its Conversation never yields an empty one.
+	Normalizer() (ConversationNormalizer, bool)
 }
 
 func builtinAgentProviders() []AgentProvider {
@@ -161,6 +165,12 @@ func (claudeProvider) RunExists(externalID string) bool {
 	})) > 0
 }
 
+// Claude Code records every conversation as JSON Lines under
+// ~/.claude/projects, which is the record the normalizer reads.
+func (claudeProvider) Normalizer() (ConversationNormalizer, bool) {
+	return claudeConversationNormalizer{root: filepath.Join(userHomeDir(), ".claude", "projects")}, true
+}
+
 func (claudeProvider) StartCommand(session Session, run *AgentRunRef, mode string) (string, error) {
 	command := "claude --name " + ShellQuote(session.TmuxName())
 	if run != nil && run.ExternalID != "" {
@@ -185,6 +195,10 @@ func (codexProvider) Binary() string      { return "codex" }
 // Codex assigns its own session id, so the run identity can only be
 // discovered from its rollout files after the fact.
 func (codexProvider) NewRunID() string { return "" }
+
+// Codex rollout files carry the material, but no normalizer for their
+// shape exists yet.
+func (codexProvider) Normalizer() (ConversationNormalizer, bool) { return nil, false }
 
 func (codexProvider) Matches(paneCommand string) bool {
 	return paneCommandMatchesKind("codex", paneCommand)
@@ -218,6 +232,10 @@ func (copilotProvider) Vendor() AgentVendor { return AgentVendorCopilot }
 func (copilotProvider) Tool() string        { return AgentToolCopilot }
 func (copilotProvider) Binary() string      { return "copilot" }
 func (copilotProvider) NewRunID() string    { return NewUUID() }
+
+// GitHub Copilot CLI records its session state in a shape no normalizer
+// covers yet.
+func (copilotProvider) Normalizer() (ConversationNormalizer, bool) { return nil, false }
 
 func (copilotProvider) Matches(paneCommand string) bool {
 	return paneCommandMatchesKind("copilot", paneCommand)
@@ -256,6 +274,10 @@ func (geminiProvider) Tool() string        { return AgentToolGemini }
 func (geminiProvider) Binary() string      { return "gemini" }
 func (geminiProvider) NewRunID() string    { return "" }
 
+// Gemini CLI's storage layout was never verified, so nothing can be
+// normalized from it.
+func (geminiProvider) Normalizer() (ConversationNormalizer, bool) { return nil, false }
+
 func (geminiProvider) Matches(paneCommand string) bool {
 	return paneCommandMatchesKind("gemini", paneCommand)
 }
@@ -279,6 +301,10 @@ func (antigravityProvider) Binary() string      { return "agy" }
 // agy assigns its own conversation id, so the run identity can only be
 // discovered from its brain transcripts after the fact.
 func (antigravityProvider) NewRunID() string { return "" }
+
+// agy's brain transcripts are read for statistics only; no normalizer
+// covers their conversation shape yet.
+func (antigravityProvider) Normalizer() (ConversationNormalizer, bool) { return nil, false }
 
 func (antigravityProvider) Matches(paneCommand string) bool {
 	return paneCommandMatchesKind("antigravity", paneCommand)
