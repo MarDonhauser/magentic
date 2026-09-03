@@ -20,7 +20,7 @@
 - [x] 3.5 Mark records with `isSidechain` as delegated and carry the parent task identity when the record names one, leaving the parent explicitly unknown otherwise; verify with tests covering both cases.
 - [x] 3.6 Fill title and detail per kind (command line, changed path, query, tool name for the unrecognized case); verify with a test asserting the title of one Item per kind and that no title is empty.
 - [x] 3.7 Skip a partially written trailing record and report the byte offset up to the last complete record; verify with a test that a truncated final line produces no Item and that normalizing again after the line completes produces it exactly once.
-- [ ] 3.8 Add golden tests over real Claude transcript files placed in `core/testdata`, asserting the full normalized Item sequence; verify the golden output covers at least prompts, prose, reasoning, a Bash call with result, a file change, a delegated task with its subagent activity, and one metadata record that yields no Item.
+- [x] 3.8 Add golden tests over real Claude transcript files placed in `core/testdata`, asserting the full normalized Item sequence; verify the golden output covers at least prompts, prose, reasoning, a Bash call with result, a file change, a delegated task with its subagent activity, and one metadata record that yields no Item.
 
 ## 4. Incremental reading
 
