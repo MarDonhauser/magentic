@@ -372,6 +372,15 @@ func (a *App) MarkSeen(sessionID string) error {
 	return err
 }
 
+func (a *App) SetSessionService(sessionID string, service bool) error {
+	_, session, err := loadSessionByID(sessionID)
+	if err != nil {
+		return err
+	}
+	_, err = core.OpenRegistry(core.StatePath()).Change(a.ctx, core.SetSessionService(session.ID, session.Name, service))
+	return err
+}
+
 func (a *App) GitGraph(projectID string, limit int) (core.GitGraph, error) {
 	st, project, err := loadProjectByID(projectID)
 	if err != nil {
@@ -463,6 +472,14 @@ func (a *App) SnoozeBreak() error {
 	}
 	a.executeAttentionEvents(core.AttentionEvent{Kind: core.AttentionEventBreakReset})
 	return nil
+}
+
+func (a *App) NotificationsEnabled() bool {
+	return core.NotificationsEnabled()
+}
+
+func (a *App) SetNotificationsEnabled(on bool) error {
+	return core.SetNotificationsEnabled(on)
 }
 
 func (a *App) BreakConfig() core.BreakConfig {

@@ -8,7 +8,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import {
   Overview, Inbox,
   NewSession, NewSessionWithVendor, AgentVendors, SwitchSessionVendor, NewTermSession, NewTermSessionFor, DoneAgent, Cleanup, Merge, Deploy, RemoveWorktree, SetMainBranch,
-  OpenTerm, WriteTerm, ResizeTerm, CloseTerm, KillSession, LaterSession, ReopenSession, SendSkill, HandoffSession,
+  OpenTerm, WriteTerm, ResizeTerm, CloseTerm, KillSession, LaterSession, ReopenSession, SendSkill, HandoffSession, SetSessionService,
   SendMessage, DiscardQueuedMessage, RetryQueuedMessage,
   SessionAutomation, SaveSessionAutomation, DeleteSessionAutomation,
   DeployStatus, AzLogin, ArgoLogin, AzAccounts, AzSetSubscription,
@@ -18,6 +18,7 @@ import {
   Zeitgeist, ZeitgeistStart, ZeitgeistPause, ZeitgeistResume, ZeitgeistStop,
   MarkSeen, GitGraph, Board, BoardArchive, Stats, StartBoardItem, NewDockSession, MigrateDockSessions, BuildInfo,
   Breaks, BreakHeartbeat, TakeBreak, EndBreak, SnoozeBreak, BreakConfig, SetBreakConfig, BreakOver,
+  NotificationsEnabled, SetNotificationsEnabled,
   CompleteFiles, CompleteCommands, PromptLinePattern,
 } from '../wailsjs/go/main/App';
 import { usagePages, clampUsagePage } from './usage-state.js';
@@ -35,6 +36,7 @@ import {
 import { renderGitGraph } from './gitgraph.js';
 import { completionTrigger, applyCompletion } from './features/composer/completion-state.js';
 import { promptCoverRows } from './features/composer/prompt-cover.js';
+import { checkoutChips } from './features/checkout/checkout-chips.js';
 import { renderBoard } from './board.js';
 import { renderStats } from './stats.js';
 import { mountDock, toggleDock, isDockOpen, closeDockTab, dockTabs, refitDock } from './dock.js';
@@ -171,6 +173,8 @@ const ICONS = {
   warn: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
   magnet: '<path d="M6 8v4a6 6 0 0 0 12 0V8"/><path d="M4 3h4v5H4z"/><path d="M16 3h4v5h-4z"/>',
   chevron: '<path d="m6 9 6 6 6-6"/>',
+  more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+  server: '<rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><path d="M6 6.5h.01"/><path d="M6 17.5h.01"/>',
 };
 
 function icon(name) {
@@ -360,12 +364,100 @@ function makeTerm(sessionID, name) {
 // Blende wissen, in welchen Zustand sie zurückfällt.
 const lastStatus = new Map();
 
+const INPUT_MODE_KEY = 'magentic-input-mode';
+let inputMode = 'composer';
+try {
+  if (localStorage.getItem(INPUT_MODE_KEY) === 'terminal') inputMode = 'terminal';
+} catch { /* Speicher gesperrt — dann bleibt der Composer */ }
+termsEl.classList.toggle('terminal-input', inputMode === 'terminal');
+
+const TERM_FONT_SIZE_KEY = 'magentic-term-font-size';
+const TERM_FONT_KEY = 'magentic-term-font';
+const TERM_FONTS = {
+  system: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+  commit: '"Commit Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
+};
+let termFontSize = 14;
+let termFontFamily = 'system';
+try {
+  const size = Number(localStorage.getItem(TERM_FONT_SIZE_KEY));
+  if (size >= 11 && size <= 18) termFontSize = size;
+  if (TERM_FONTS[localStorage.getItem(TERM_FONT_KEY)]) termFontFamily = localStorage.getItem(TERM_FONT_KEY);
+} catch { /* Speicher gesperrt — dann gelten die Standardwerte */ }
+
+const DEFAULT_VENDOR_KEY = 'magentic-default-vendor';
+let defaultVendor = '';
+try { defaultVendor = localStorage.getItem(DEFAULT_VENDOR_KEY) || ''; } catch { /* Speicher gesperrt — dann fragt der Plus-Knopf */ }
+
+function setDefaultVendor(vendor) {
+  defaultVendor = vendor || '';
+  try {
+    if (defaultVendor) localStorage.setItem(DEFAULT_VENDOR_KEY, defaultVendor);
+    else localStorage.removeItem(DEFAULT_VENDOR_KEY);
+  } catch { /* gilt dann nur für diese Sitzung */ }
+}
+
+function resolvedDefaultVendor() {
+  const option = vendorCatalog.find(o => o.vendor === defaultVendor);
+  return option?.available ? option.vendor : '';
+}
+
+function startSession(projectID, worktree) {
+  const vendor = resolvedDefaultVendor();
+  return vendor ? NewSessionWithVendor(projectID, worktree, '', vendor) : NewSession(projectID, worktree, '');
+}
+
+function applyTermFont() {
+  for (const t of terms.values()) {
+    t.term.options.fontFamily = TERM_FONTS[termFontFamily];
+    if (t.wrap.parentElement === termsEl) t.term.options.fontSize = termFontSize;
+    t.term.clearTextureAtlas?.();
+  }
+  const refit = [];
+  if (view === 'hydra') {
+    for (const t of terms.values()) {
+      if (t.wrap.parentElement === hydraGridEl) refit.push(t);
+    }
+  } else if (activeTerm && terms.get(activeTerm)?.wrap.classList.contains('active')) {
+    refit.push(terms.get(activeTerm));
+  }
+  for (const t of refit) {
+    t.fit.fit();
+    ResizeTerm(t.connectionKey, t.term.cols, t.term.rows);
+    t.term.refresh(0, t.term.rows - 1);
+  }
+}
+
+function setTermFont(family, size) {
+  termFontFamily = TERM_FONTS[family] ? family : termFontFamily;
+  termFontSize = size >= 11 && size <= 18 ? size : termFontSize;
+  try {
+    localStorage.setItem(TERM_FONT_KEY, termFontFamily);
+    localStorage.setItem(TERM_FONT_SIZE_KEY, String(termFontSize));
+  } catch { /* gilt dann nur für diese Sitzung */ }
+  applyTermFont();
+}
+
+function setInputMode(mode) {
+  inputMode = mode;
+  try { localStorage.setItem(INPUT_MODE_KEY, mode); } catch { /* gilt dann nur für diese Sitzung */ }
+  termsEl.classList.toggle('terminal-input', inputMode === 'terminal');
+  for (const [name, t] of terms) updatePromptCover(t, lastStatus.get(name));
+  const t = activeTerm && terms.get(activeTerm);
+  if (t && t.wrap.parentElement === termsEl) {
+    t.fit.fit();
+    ResizeTerm(t.connectionKey, t.term.cols, t.term.rows);
+    if (inputMode === 'terminal') t.term.focus();
+  }
+  updateTermBar();
+}
+
 // updatePromptCover legt die Eingabezeile des Agenten unter eine Blende,
 // solange sie nicht gebraucht wird. Wartet die Session auf eine Entscheidung
 // oder hat das Terminal den Fokus, bleibt alles sichtbar.
 function updatePromptCover(t, status) {
   if (!t?.cover) return;
-  const reveal = status === 'blocked' || t.userFocused;
+  const reveal = status === 'blocked' || t.userFocused || inputMode === 'terminal';
   const screen = t.term.element?.querySelector('.xterm-screen');
   if (reveal || !t.promptPattern || !screen) { t.cover.style.height = '0px'; return; }
   const buffer = t.term.buffer.active;
@@ -506,7 +598,8 @@ function agentInfo(name, sessionID = '') {
     for (const wt of p.worktrees || []) {
       for (const a of wt.agents || []) {
         if ((sessionID && a.id === sessionID) || (!sessionID && a.name === name)) {
-          return { ...a, project: p.name, projectID: p.id };
+          const { agents, ...checkout } = wt;
+          return { ...a, project: p.name, projectID: p.id, mainBranch: p.mainBranch, checkout };
         }
       }
     }
@@ -555,20 +648,15 @@ function updateTermBar() {
   const a = agentInfo(sessionName, sessionID);
   const v = agentVisual(a, a?.project);
   const gone = !a || ['exited', 'dead'].includes(a.status);
-  const claudeActions = a?.term ? '' :
-    `<button class="btn tiny" id="tb-queue"${gone ? ' disabled' : ''} title="Nachricht einreihen — wird erst zugestellt, wenn die Session ihre aktuelle Arbeit beendet hat">${icon('clock')} einreihen</button>` +
-    `<button class="btn tiny" id="tb-done"${gone ? ' disabled' : ''} title="/done in diese Session senden — committen und auf dev bringen">${icon('check')} done</button>` +
-    `<button class="btn tiny" id="tb-deploy"${gone ? ' disabled' : ''} title="/deploy in diese Session senden">${icon('rocket')} deploy</button>` +
-    `<button class="btn tiny" id="tb-dd"${gone ? ' disabled' : ''} title="/done senden und danach automatisch /deploy">${icon('check')}+${icon('rocket')} beides</button>`;
+  const disabled = gone ? ' disabled' : '';
+  const finishActions = a?.term ? '' :
+    `<span class="tb-split">` +
+    `<button class="btn tiny" id="tb-done"${disabled} title="/done in diese Session senden — committen und auf dev bringen">${icon('check')} done</button>` +
+    `<button class="btn tiny tb-split-more submenu-anchor" id="tb-done-more"${disabled} title="deploy oder done + deploy" aria-label="Weitere Abschluss-Aktionen">${icon('chevron')}</button></span>`;
   const automation = a?.automation;
-  const automationTitle = automation?.enabled
-    ? `Automatisierung aktiv · nächster Lauf ${formatAutomationDate(automation.nextRunAt)}`
-    : automation
-      ? 'Automatisierung pausiert'
-      : 'Regelmäßige Automatisierung für diese Session einrichten';
-  const automationAction = a?.term ? '' :
-    `<button class="btn tiny tb-automation${automation?.enabled ? ' is-active' : ''}" id="tb-automation"${gone ? ' disabled' : ''} title="${esc(automationTitle)}">` +
-      `${icon('clock')}<span>${automation?.enabled ? 'Geplant' : 'Zeitplan'}</span></button>`;
+  const automationActive = !a?.term && automation?.enabled
+    ? `<button class="btn tiny tb-automation is-active" id="tb-automation"${disabled} title="Automatisierung aktiv · nächster Lauf ${esc(formatAutomationDate(automation.nextRunAt))}">${icon('clock')}<span>Geplant</span></button>`
+    : '';
   termBarEl.innerHTML =
     `<button class="btn tiny" id="tb-back" title="Übersicht (⌘0)">‹ Übersicht</button>` +
     `<span class="tb-avatar">${agentPortrait(activeTerm, 24, a)}</span>` +
@@ -576,39 +664,27 @@ function updateTermBar() {
     `<span class="tb-name">${esc(activeTerm)}</span>` +
     vendorSwitchHtml(a) +
     (a?.branch ? `<span class="tb-branch${a.worktree ? ' wt' : ''}" title="Branch ${esc(a.branch)}${a.worktree ? ' · eigener Worktree' : ''}">${icon('gitbranch')}${esc(a.branch)}</span>` : '') +
+    checkoutChipsHtml(a) +
+    (a?.service ? `<span class="tb-service" title="Service-Session — hält nur einen Dienst am Laufen und bleibt im Hydra-Modus ausgeblendet">${icon('server')}Service</span>` : '') +
     `<span class="tb-st">${visHtml(v)}</span>` +
     (a?.project && a.project !== '(ohne Projekt)' ? `<span class="tb-proj">${esc(a.project)}</span>` : '') +
-    `<span class="tb-actions">` + claudeActions + automationAction +
-    `<button class="btn tiny" id="tb-links" title="Links aus dieser Session anzeigen — Klick öffnet im Browser, ⌥-Klick kopiert">${icon('link')} links</button>` +
-    `<button class="btn tiny" id="tb-later" title="Für später schließen (⌘⇧W) — bleibt in der Seitenleiste und lässt sich wieder öffnen">${icon('clock')}</button>` +
-    `<button class="btn tiny danger" id="tb-kill" title="Session endgültig beenden">${icon('x')}</button></span>`;
+    `<span class="tb-actions">` + finishActions + automationActive +
+    `<button class="btn tiny submenu-anchor" id="tb-more" title="Weitere Aktionen — einreihen, Zeitplan, Links, Service, schließen" aria-label="Weitere Aktionen">${icon('more')}</button></span>`;
   $('tb-back').onclick = showOverview;
   if (!a?.term) {
-    $('tb-queue').onclick = () => toggleQueueForm();
     $('tb-done').onclick = () =>
       act(DoneAgent(sessionID), `/done an „${sessionName}" gesendet — Plan in der Session bestätigen`).catch(() => {});
-    $('tb-deploy').onclick = () =>
-      act(SendSkill(sessionID, '/deploy '), `/deploy an „${sessionName}" gesendet — Plan in der Session bestätigen`)
-        .then(startDeployWatch).catch(() => {});
-    $('tb-dd').onclick = () =>
-      act(SendSkill(sessionID, '/done und sobald done komplett abgeschlossen ist, führe direkt /deploy aus '),
-        `/done + /deploy an „${sessionName}" gesendet — Plan in der Session bestätigen`)
-        .then(startDeployWatch).catch(() => {});
-    $('tb-automation').onclick = () => openAutomationDialog(sessionID, sessionName);
+    $('tb-done-more').onclick = e => openFinishMenu(e.currentTarget, sessionID, sessionName);
+    if (automationActive) $('tb-automation').onclick = () => openAutomationDialog(sessionID, sessionName);
   }
   wireVendorSwitch(sessionID, sessionName);
-  $('tb-links').onclick = e => openLinksMenu(e.currentTarget);
-  $('tb-later').onclick = () => parkSession(sessionID, sessionName);
-  $('tb-kill').onclick = e => {
-    const b = e.currentTarget;
-    if (b.dataset.confirm) { killSession(sessionID, sessionName); return; }
-    b.dataset.confirm = '1';
-    b.innerHTML = icon('x') + ' wirklich?';
-    setTimeout(() => {
-      if (b.isConnected) { delete b.dataset.confirm; b.innerHTML = icon('x'); }
-    }, 3000);
-  };
+  $('tb-more').onclick = e => openSessionActionsMenu(e.currentTarget, sessionID, sessionName, a, gone);
   updateTermComposer(a, v, gone);
+}
+
+function checkoutChipsHtml(a) {
+  return checkoutChips(a).map(chip =>
+    `<span class="tb-git ${chip.tone}" title="${esc(chip.title)}">${esc(chip.text)}</span>`).join('');
 }
 
 function updateComposerControls(gone) {
@@ -758,6 +834,43 @@ termImageEl.onchange = () => {
 // (Übersicht) und answerInboxEntry() (Posteingang): dieselbe durable Outbox,
 // aber ohne die Terminalansicht zu verlassen, wenn eine Session gerade
 // beschäftigt ist und die Nachricht erst warten soll.
+function openFinishMenu(anchor, sessionID, sessionName) {
+  showSubMenu(anchor, `<div class="mi-head">${icon('check')} Abschließen</div>`, [
+    { icon: 'rocket', label: 'deploy', hint: '/deploy senden', run: () =>
+      act(SendSkill(sessionID, '/deploy '), `/deploy an „${sessionName}" gesendet — Plan in der Session bestätigen`)
+        .then(startDeployWatch).catch(() => {}) },
+    { icon: 'check', label: 'done + deploy', hint: 'erst /done, dann /deploy', run: () =>
+      act(SendSkill(sessionID, '/done und sobald done komplett abgeschlossen ist, führe direkt /deploy aus '),
+        `/done + /deploy an „${sessionName}" gesendet — Plan in der Session bestätigen`)
+        .then(startDeployWatch).catch(() => {}) },
+  ]);
+}
+
+function openSessionActionsMenu(anchor, sessionID, sessionName, a, gone) {
+  const items = [];
+  if (!a?.term && !gone) {
+    items.push({ icon: 'clock', label: 'Nachricht einreihen', hint: 'wird zugestellt, sobald die Session frei ist', run: () => toggleQueueForm(true) });
+    items.push({ icon: 'clock', label: a?.automation ? (a.automation.enabled ? 'Zeitplan bearbeiten' : 'Zeitplan (pausiert)') : 'Zeitplan einrichten',
+      hint: 'regelmäßige Automatisierung', run: () => openAutomationDialog(sessionID, sessionName) });
+  }
+  items.push({ icon: 'link', label: 'Links', hint: 'aus dieser Session', run: () => { openLinksMenu(anchor); return false; } });
+  items.push({ sep: true });
+  items.push({ icon: 'server', label: a?.service ? 'Service-Markierung entfernen' : 'Als Service markieren',
+    hint: a?.service ? 'wieder im Hydra-Modus zeigen' : 'nur ein Dienst läuft hier — im Hydra-Modus ausblenden',
+    run: () => setServiceFlag(sessionID, sessionName, !a?.service) });
+  items.push({ icon: 'clock', label: 'Für später schließen', kbd: '⌘⇧W', run: () => parkSession(sessionID, sessionName) });
+  items.push({ icon: 'x', label: 'Session beenden', danger: true, confirm: 'wirklich beenden?', run: () => killSession(sessionID, sessionName) });
+  showSubMenu(anchor, `<div class="mi-head">${sessionToolMark(a)}${esc(sessionName)}</div>`, items);
+}
+
+async function setServiceFlag(sessionID, sessionName, service) {
+  try {
+    await act(SetSessionService(sessionID, service), service
+      ? `„${sessionName}" als Service markiert — bleibt im Hydra-Modus ausgeblendet`
+      : `Service-Markierung von „${sessionName}" entfernt`);
+  } catch { /* toast zeigt den Fehler */ }
+}
+
 function toggleQueueForm(show = termQueueEl.classList.contains('is-hidden')) {
   termQueueEl.classList.toggle('is-hidden', !show);
   if (show) {
@@ -974,8 +1087,9 @@ async function openSession(sessionID, name) {
   const fresh = !t;
   if (!t) t = makeTerm(sessionID, name);
   else t.sessionID = sessionID;
-  t.term.options.fontSize = 14;
-  t.term.options.lineHeight = 1.25;
+  t.term.options.fontFamily = TERM_FONTS[termFontFamily];
+  t.term.options.fontSize = termFontSize;
+  t.term.options.lineHeight = 1.35;
   if (t.wrap.parentElement !== termsEl) termsEl.appendChild(t.wrap);
   for (const [n, o] of terms) o.wrap.classList.toggle('active', n === name);
   t.fit.fit();
@@ -988,12 +1102,20 @@ async function openSession(sessionID, name) {
     ResizeTerm(t.connectionKey, t.term.cols, t.term.rows);
   }
   t.term.focus();
+  // Beim Wechsel zwischen Sessions verliert der WebGL-Renderer Glyphen aus dem
+  // Textur-Atlas — dann fehlen ganze Textstücke, bis tmux zufällig neu zeichnet.
+  const shown = t;
+  requestAnimationFrame(() => {
+    if (!shown.wrap.classList.contains('active')) return;
+    shown.term.clearTextureAtlas?.();
+    shown.term.refresh(0, shown.term.rows - 1);
+  });
   renderSidebar();
   updateTermBar();
 }
 
-const PANELS = ['overview', 'search-view', 'terms', 'inbox-view', 'graph-view', 'board-view', 'stats-view'];
-const NAV_FOR = { overview: 'nav-overview', 'search-view': 'nav-search', 'inbox-view': 'nav-inbox', 'graph-view': 'nav-graph', 'board-view': 'nav-board', 'stats-view': 'nav-stats' };
+const PANELS = ['overview', 'search-view', 'terms', 'inbox-view', 'graph-view', 'board-view', 'stats-view', 'settings-view'];
+const NAV_FOR = { overview: 'nav-overview', 'search-view': 'nav-search', 'inbox-view': 'nav-inbox', 'graph-view': 'nav-graph', 'board-view': 'nav-board', 'stats-view': 'nav-stats', 'settings-view': 'nav-settings' };
 
 function showPanel(id) {
   for (const p of PANELS) {
@@ -1032,6 +1154,64 @@ function showSearch() {
   leaveTerm();
   showPanel('search-view');
   $('search-input').focus();
+  renderSidebar();
+}
+
+async function renderSettings() {
+  let notifyOn = true;
+  try { notifyOn = await NotificationsEnabled(); } catch { /* Backend nicht erreichbar — Standard anzeigen */ }
+  const currentVendor = resolvedDefaultVendor();
+  $('settings-view').innerHTML =
+    `<div class="view-head"><h2>Einstellungen</h2></div>` +
+    `<div class="card"><div class="card-head"><h2>Neue Session über „+“</h2></div>` +
+    `<label class="settings-option"><input type="radio" name="set-default-vendor" value=""${currentVendor === '' ? ' checked' : ''}>` +
+    `<span><strong>Immer fragen</strong><br>Der Plus-Knopf öffnet das Menü mit allen Harnesses.</span></label>` +
+    vendorCatalog.map(option =>
+      `<label class="settings-option${option.available ? '' : ' disabled'}">` +
+      `<input type="radio" name="set-default-vendor" value="${esc(option.vendor)}"${currentVendor === option.vendor ? ' checked' : ''}${option.available ? '' : ' disabled'}>` +
+      `<span><strong>${esc(option.label)}</strong>${option.available ? '' : ' — nicht installiert'}</span></label>`).join('') +
+    `<p class="settings-hint">Mit gesetztem Standard startet „+“ sofort damit. Rechtsklick auf „+“ zeigt weiterhin das Menü.</p>` +
+    `</div>` +
+    `<div class="card"><div class="card-head"><h2>Eingabefeld in Sessions</h2></div>` +
+    `<label class="settings-option"><input type="radio" name="set-input-mode" value="composer"${inputMode === 'composer' ? ' checked' : ''}>` +
+    `<span><strong>magentic-Composer</strong><br>Eingabefeld unten mit @-/Slash-Menü und Bild-Anhang. Die Eingabezeile der Session wird im Terminal verdeckt.</span></label>` +
+    `<label class="settings-option"><input type="radio" name="set-input-mode" value="terminal"${inputMode === 'terminal' ? ' checked' : ''}>` +
+    `<span><strong>Eingabezeile der Session</strong><br>Du tippst direkt im Terminal in das Eingabefeld des Agenten. Composer und Blende sind aus, das Terminal nutzt die volle Höhe.</span></label>` +
+    `</div>` +
+    `<div class="card"><div class="card-head"><h2>Terminal-Schrift</h2></div>` +
+    `<label class="settings-option"><input type="radio" name="set-term-font" value="system"${termFontFamily === 'system' ? ' checked' : ''}>` +
+    `<span><strong>SF Mono</strong> — System-Schrift von macOS</span></label>` +
+    `<label class="settings-option"><input type="radio" name="set-term-font" value="commit"${termFontFamily === 'commit' ? ' checked' : ''}>` +
+    `<span><strong>Commit Mono</strong> — mitgelieferte schmalere Schrift</span></label>` +
+    `<label class="settings-option settings-size"><span><strong>Größe</strong></span>` +
+    `<select id="set-term-size">${[12, 13, 14, 15, 16].map(size =>
+      `<option value="${size}"${size === termFontSize ? ' selected' : ''}>${size} px</option>`).join('')}</select>` +
+    `</label>` +
+    `</div>` +
+    `<div class="card"><div class="card-head"><h2>Benachrichtigungen</h2></div>` +
+    `<label class="settings-option"><input type="checkbox" id="set-notify"${notifyOn ? ' checked' : ''}>` +
+    `<span><strong>Benachrichtigungen an</strong><br>Desktop-Meldungen (z. B. „bereit zum Review"), Dock-Hüpfen und In-den-Vordergrund-Holen. ` +
+    `Ausgeschaltet bleibt nur die Zahl am Dock-Icon.</span></label>` +
+    `</div>`;
+  for (const radio of document.querySelectorAll('input[name="set-default-vendor"]')) {
+    radio.onchange = () => setDefaultVendor(radio.value);
+  }
+  for (const radio of document.querySelectorAll('input[name="set-input-mode"]')) {
+    radio.onchange = () => setInputMode(radio.value);
+  }
+  for (const radio of document.querySelectorAll('input[name="set-term-font"]')) {
+    radio.onchange = () => setTermFont(radio.value, termFontSize);
+  }
+  $('set-term-size').onchange = e => setTermFont(termFontFamily, Number(e.target.value));
+  $('set-notify').onchange = e =>
+    SetNotificationsEnabled(e.target.checked).catch(err => toast('Speichern fehlgeschlagen: ' + err, true));
+}
+
+function showSettings() {
+  view = 'settings';
+  leaveTerm();
+  showPanel('settings-view');
+  renderSettings();
   renderSidebar();
 }
 
@@ -1306,6 +1486,7 @@ AgentVendors()
 $('nav-overview').onclick = showOverview;
 $('sidebar-head').onclick = showOverview;
 $('nav-search').onclick = showSearch;
+$('nav-settings').onclick = showSettings;
 $('nav-inbox').onclick = () => showInbox();
 $('nav-graph').onclick = () => showGraph();
 $('nav-board').onclick = () => showBoard();
@@ -1506,7 +1687,7 @@ function hydraAgents() {
   const out = [];
   for (const wt of p.worktrees || []) {
     for (const a of wt.agents || []) {
-      if (a.status !== 'dead' && !a.dock) out.push(a);
+      if (a.status !== 'dead' && !a.dock && !a.service) out.push(a);
     }
   }
   return out.slice(0, 6);
@@ -1536,14 +1717,14 @@ function updateHydraBar() {
     `<span class="tb-name">${developerIcon('claude')} Hydra · ${esc(hydraProject)}</span>` +
     `<span class="tb-st">${agents.length} ${agents.length === 1 ? 'Session' : 'Sessions'} parallel</span>` +
     `<span class="tb-actions">` +
-    `<button class="btn tiny" id="tb-add" title="Neue Session in ${esc(hydraProject)} — erscheint direkt im Raster">${developerIcon('claude')} Session</button>` +
+    `<button class="btn tiny" id="tb-add" title="Neue Session in ${esc(hydraProject)} — erscheint direkt im Raster">${developerIcon(resolvedDefaultVendor() || 'claude')} Session</button>` +
     `<button class="btn tiny" id="tb-term" title="Reines Terminal in ${esc(hydraProject)} — Shell statt Claude">${developerIcon('bash')} Terminal</button></span>`;
   $('tb-back').onclick = showOverview;
   $('tb-add').onclick = async () => {
     try {
       const project = projectInfo(hydraProject);
       if (!project?.id) throw new Error(`Projekt „${hydraProject}" ist nicht mehr registriert`);
-      const n2 = await act(NewSession(project.id, false, ''), x => `Session „${x}" gestartet`);
+      const n2 = await act(startSession(project.id, false), x => `Session „${x}" gestartet`);
       if (n2) await focusHydraSession(n2);
     } catch { /* toast zeigt den Fehler */ }
   };
@@ -1780,6 +1961,11 @@ function branchChip(a) {
     icon('gitbranch') + esc(a.branch) + '</span>';
 }
 
+function serviceChip(a) {
+  if (!a.service) return '';
+  return `<span class="sservice" title="Service-Session — im Hydra-Modus ausgeblendet">${icon('server')}Service</span>`;
+}
+
 function liveSessions() {
   const sessions = [];
   for (const p of ov?.projects || []) {
@@ -1898,7 +2084,7 @@ function projectRow(row) {
   const plus = document.createElement('button');
   plus.className = 'proj-add';
   plus.textContent = '+';
-  plus.title = 'Neue Session in ' + p.name + ' (⌥-Klick: in frischem Worktree · ⇧-Klick: reines Terminal)';
+  plus.title = 'Neue Session in ' + p.name + ' (⌥-Klick: in frischem Worktree · ⇧-Klick: reines Terminal · Rechtsklick: Harness wählen)';
   plus.onclick = async e => {
     e.stopPropagation();
     if (e.shiftKey) {
@@ -1910,6 +2096,24 @@ function projectRow(row) {
       } catch { /* toast zeigt den Fehler */ }
       return;
     }
+    const vendor = resolvedDefaultVendor();
+    if (!vendor) {
+      showVendorMenu(e.clientX, e.clientY, p, e.altKey);
+      return;
+    }
+    try {
+      const name = await act(
+        NewSessionWithVendor(p.id, e.altKey, '', vendor),
+        n => (e.altKey ? `Worktree-Session „${n}“ gestartet` : `Session „${n}“ gestartet`),
+      );
+      if (!name) return;
+      if (view === 'hydra' && hydraProject === p.name) await focusHydraSession(name);
+      else openSessionByName(name);
+    } catch { /* toast zeigt den Fehler */ }
+  };
+  plus.oncontextmenu = e => {
+    e.preventDefault();
+    e.stopPropagation();
     showVendorMenu(e.clientX, e.clientY, p, e.altKey);
   };
   head.appendChild(plus);
@@ -1938,7 +2142,7 @@ function sessionRow(row) {
     `<span class="sbody">` +
       `<span class="srow">` +
         `<span class="sname">${esc(a.name)}</span>` +
-        branchChip(a) +
+        branchChip(a) + serviceChip(a) +
       `</span>` +
       `<span class="srow sub">` +
         `<span class="dot" style="background:${v.color}"></span>` +
@@ -2174,6 +2378,7 @@ function agentPill(a, project) {
     `<span class="pill-avatar">${agentPortrait(a.name, 18, a)}</span>` +
     `<span class="dot" style="background:${v.color}"></span>` +
     `<span class="name">${esc(a.name)}</span>` +
+    (a.service ? `<span class="pill-service" title="Service-Session — im Hydra-Modus ausgeblendet">${icon('server')}Service</span>` : '') +
     `<span class="st">${visHtml(v)}</span>` +
     `<span class="age">${esc(a.age)}</span>${compose}${open}${done}</span>`;
 }
@@ -2700,8 +2905,8 @@ overviewEl.addEventListener('click', async e => {
         await act(Deploy(d.project), n => `Deploy-Agent „${n}" gestartet (/deploy)`);
         startDeployWatch();
         break;
-      case 'newsession': await act(NewSession(d.project, false, ''), n => `Session „${n}" gestartet`); break;
-      case 'newworktree': await act(NewSession(d.project, true, ''), n => `Worktree-Session „${n}" gestartet`); break;
+      case 'newsession': await act(startSession(d.project, false), n => `Session „${n}" gestartet`); break;
+      case 'newworktree': await act(startSession(d.project, true), n => `Worktree-Session „${n}" gestartet`); break;
       case 'newterm': {
         const n = await act(NewTermSession(d.project, false, ''), x => `Terminal „${x}" geöffnet`);
         if (n) openSessionByName(n);
@@ -3077,8 +3282,8 @@ function placeMenu(x, y, width) {
 }
 
 function showMenu(x, y, sessionID, name, status) {
-  menuFor = { id: sessionID, name };
   const session = agentInfo(name, sessionID) || (ov?.later || []).find(item => item.id === sessionID);
+  menuFor = { id: sessionID, name, service: !!session?.service };
   if (status === 'later') {
     menuEl.innerHTML =
       `<div class="mi-head">${sessionToolMark(session)}${esc(name)}</div>` +
@@ -3097,6 +3302,7 @@ function showMenu(x, y, sessionID, name, status) {
       `<div class="mi-head">${sessionToolMark(session)}${esc(name)}</div>` +
       `<div class="mi" data-mi="open">${developerIcon('bash')} Terminal öffnen</div>` + done +
       switchable +
+      `<div class="mi" data-mi="service">${icon('server')} ${session?.service ? 'Service-Markierung entfernen' : 'Als Service markieren'}</div>` +
       `<div class="mi" data-mi="later">${icon('clock')} Für später schließen</div>` +
       `<div class="mi danger" data-mi="kill">${icon('x')} Session beenden</div>`;
   }
@@ -3172,7 +3378,7 @@ async function reopenLater(sessionID, name) {
 menuEl.addEventListener('click', async e => {
   const mi = e.target.closest('.mi');
   if (!mi || !menuFor) return;
-  const { id, name, project, worktree, divider } = menuFor;
+  const { id, name, project, worktree, divider, service } = menuFor;
   if (mi.dataset.mi === 'newdivider') {
     hideMenu();
     try {
@@ -3226,6 +3432,7 @@ menuEl.addEventListener('click', async e => {
       await requestVendorSwitch(id, name, mi.dataset.vendor);
       break;
     case 'later': hideMenu(); parkSession(id, name); break;
+    case 'service': hideMenu(); setServiceFlag(id, name, !service); break;
     case 'reopen': hideMenu(); reopenLater(id, name); break;
     case 'done':
       hideMenu();
@@ -3248,7 +3455,39 @@ window.addEventListener('blur', hideMenu);
 const subMenuEl = document.createElement('div');
 subMenuEl.id = 'submenu';
 document.body.appendChild(subMenuEl);
-function hideSubMenu() { subMenuEl.style.display = 'none'; }
+let subMenuAnchor = null;
+function hideSubMenu() { subMenuEl.style.display = 'none'; subMenuAnchor = null; }
+
+const subMenuActions = new Map();
+function showSubMenu(anchor, head, items) {
+  if (subMenuEl.style.display === 'block' && subMenuAnchor === anchor) { hideSubMenu(); return; }
+  subMenuAnchor = anchor;
+  const r = anchor.getBoundingClientRect();
+  subMenuActions.clear();
+  subMenuEl.innerHTML = head + items.map((item, i) => {
+    if (item.sep) return '<div class="mi-sep"></div>';
+    subMenuActions.set(String(i), item);
+    return `<div class="mi${item.danger ? ' danger' : ''}" data-run="${i}">${icon(item.icon)}` +
+      `<span class="mi-body"><span class="mi-label">${esc(item.label)}</span>` +
+      (item.hint ? `<span class="mi-hint">${esc(item.hint)}</span>` : '') + `</span>` +
+      (item.kbd ? `<span class="mi-kbd">${esc(item.kbd)}</span>` : '') + `</div>`;
+  }).join('');
+  subMenuEl.style.display = 'block';
+  subMenuEl.style.left = Math.max(8, Math.min(r.right - subMenuEl.offsetWidth, window.innerWidth - subMenuEl.offsetWidth - 8)) + 'px';
+  subMenuEl.style.top = (r.bottom + 6) + 'px';
+}
+subMenuEl.addEventListener('click', e => {
+  const mi = e.target.closest('.mi[data-run]');
+  if (!mi) return;
+  const item = subMenuActions.get(mi.dataset.run);
+  if (!item) return;
+  if (item.confirm && !mi.dataset.confirm) {
+    mi.dataset.confirm = '1';
+    mi.querySelector('.mi-label').textContent = item.confirm;
+    return;
+  }
+  if (item.run() !== false) hideSubMenu();
+});
 
 function shortUrl(u) {
   u = u.replace(/^https?:\/\//, '');
@@ -3334,7 +3573,7 @@ subMenuEl.addEventListener('click', async e => {
   } catch { /* toast zeigt den Fehler */ }
 });
 document.addEventListener('mousedown', e => {
-  if (!subMenuEl.contains(e.target) && !e.target.closest('[data-act="azsub"]') && !e.target.closest('#tb-links')) hideSubMenu();
+  if (!subMenuEl.contains(e.target) && !e.target.closest('[data-act="azsub"]') && !e.target.closest('.submenu-anchor')) hideSubMenu();
 });
 window.addEventListener('blur', hideSubMenu);
 

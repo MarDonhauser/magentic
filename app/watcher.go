@@ -204,6 +204,7 @@ func (a *App) watchLoop() {
 			Quiet:         quiet,
 			Now:           time.Now(),
 		})
+		plan = mutedAttentionPlan(plan)
 		a.storeInbox(core.BuildInbox(st, plan.Inbox))
 		a.syncNotch(plan, snapshot)
 		executeAttentionPlan(plan)
@@ -258,8 +259,24 @@ var platformAttentionExecutor = attentionPlanExecutor{
 	request: requestAttention, cancel: cancelAttention, front: bringToFront,
 }
 
+// mutedAttentionPlan schaltet nur das Aufdringliche stumm: Popups, Notch-
+// Hinweise, Dock-Hüpfen und In-den-Vordergrund-Holen. Badge, Inbox und Cancel
+// räumen weiter auf. Muss VOR syncNotch angewendet werden — das Notch liest
+// dieselben Notifications.
+func mutedAttentionPlan(plan core.AttentionPlan) core.AttentionPlan {
+	if core.NotificationsEnabled() {
+		return plan
+	}
+	plan.Notifications = nil
+	plan.BringToFront = false
+	if plan.NativeAttention == core.NativeAttentionInformational || plan.NativeAttention == core.NativeAttentionCritical {
+		plan.NativeAttention = core.NativeAttentionUnchanged
+	}
+	return plan
+}
+
 func executeAttentionPlan(plan core.AttentionPlan) {
-	platformAttentionExecutor.execute(plan)
+	platformAttentionExecutor.execute(mutedAttentionPlan(plan))
 }
 
 func (executor attentionPlanExecutor) execute(plan core.AttentionPlan) {

@@ -79,8 +79,8 @@ func TestClaudeHookInstallIsIdempotentAndPreservesForeignHooks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Installation: %v", err)
 	}
-	if len(written) != len(ClaudeHookDefinitions()) {
-		t.Fatalf("%d Definitionen geschrieben, want %d", len(written), len(ClaudeHookDefinitions()))
+	if len(written) != len(ClaudeHookDefinitions())+1 {
+		t.Fatalf("%d Definitionen geschrieben, want %d Hooks plus die Statuszeile", len(written), len(ClaudeHookDefinitions()))
 	}
 	settings := readSettings(t, path)
 	if settings["model"] != "opus" {
@@ -93,6 +93,9 @@ func TestClaudeHookInstallIsIdempotentAndPreservesForeignHooks(t *testing.T) {
 	}
 	if claudeHookGroupCommands(stop[0])[0] != "mein-eigener-hook" {
 		t.Fatalf("der eigene Hook wurde verschoben: %#v", stop[0])
+	}
+	if command, ours, _ := ClaudeStatusLineCommand(path); !ours || command != ClaudeStatusLineDefinition().Command {
+		t.Fatalf("Statuszeile %q, want unsere", command)
 	}
 
 	// Ein zweiter Lauf ändert nichts.
@@ -113,8 +116,8 @@ func TestClaudeHookInstallIsIdempotentAndPreservesForeignHooks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Entfernen: %v", err)
 	}
-	if len(removed) != len(ClaudeHookDefinitions()) {
-		t.Fatalf("%d Definitionen entfernt, want %d", len(removed), len(ClaudeHookDefinitions()))
+	if len(removed) != len(ClaudeHookDefinitions())+1 {
+		t.Fatalf("%d Definitionen entfernt, want %d Hooks plus die Statuszeile", len(removed), len(ClaudeHookDefinitions()))
 	}
 	var original map[string]any
 	if err := json.Unmarshal([]byte(existingClaudeSettings), &original); err != nil {
@@ -143,4 +146,29 @@ func jsonEqual(a, b map[string]any) bool {
 	left, errLeft := json.Marshal(a)
 	right, errRight := json.Marshal(b)
 	return errLeft == nil && errRight == nil && string(left) == string(right)
+}
+
+func TestClaudeHookInstallLeavesForeignStatusLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	foreign := `{"statusLine": {"type": "command", "command": "sh ~/meine-statuszeile.sh"}}`
+	if err := os.WriteFile(path, []byte(foreign), 0o600); err != nil {
+		t.Fatalf("Einstellungen schreiben: %v", err)
+	}
+	written, err := InstallClaudeHooks(path)
+	if err != nil {
+		t.Fatalf("Installation: %v", err)
+	}
+	if len(written) != len(ClaudeHookDefinitions()) {
+		t.Fatalf("%d Definitionen geschrieben, want nur die Hooks", len(written))
+	}
+	command, ours, err := ClaudeStatusLineCommand(path)
+	if err != nil || ours || command != "sh ~/meine-statuszeile.sh" {
+		t.Fatalf("fremde Statuszeile wurde angefasst: %q ours=%v err=%v", command, ours, err)
+	}
+	if _, err := UninstallClaudeHooks(path); err != nil {
+		t.Fatalf("Entfernen: %v", err)
+	}
+	if command, _, _ := ClaudeStatusLineCommand(path); command != "sh ~/meine-statuszeile.sh" {
+		t.Fatalf("das Entfernen nahm die fremde Statuszeile mit: %q", command)
+	}
 }

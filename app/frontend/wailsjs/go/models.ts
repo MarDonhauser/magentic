@@ -460,6 +460,36 @@ export namespace core {
 		    return a;
 		}
 	}
+	export class OvStatusLine {
+	    model?: string;
+	    effort?: string;
+	    contextPercent: number;
+	    contextWindow?: number;
+	    contextTokens?: number;
+	    costUsd: number;
+	    version?: string;
+	    outputStyle?: string;
+	    fastMode: boolean;
+	    age: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OvStatusLine(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.model = source["model"];
+	        this.effort = source["effort"];
+	        this.contextPercent = source["contextPercent"];
+	        this.contextWindow = source["contextWindow"];
+	        this.contextTokens = source["contextTokens"];
+	        this.costUsd = source["costUsd"];
+	        this.version = source["version"];
+	        this.outputStyle = source["outputStyle"];
+	        this.fastMode = source["fastMode"];
+	        this.age = source["age"];
+	    }
+	}
 	export class OvAutomation {
 	    id: string;
 	    name: string;
@@ -542,10 +572,12 @@ export namespace core {
 	    branch?: string;
 	    unread: boolean;
 	    dock: boolean;
+	    service: boolean;
 	    handoffSource: boolean;
 	    handoffTarget: boolean;
 	    queued?: OvQueuedMessage[];
 	    automation?: OvAutomation;
+	    statusLine?: OvStatusLine;
 	
 	    static createFrom(source: any = {}) {
 	        return new OvAgent(source);
@@ -572,10 +604,12 @@ export namespace core {
 	        this.branch = source["branch"];
 	        this.unread = source["unread"];
 	        this.dock = source["dock"];
+	        this.service = source["service"];
 	        this.handoffSource = source["handoffSource"];
 	        this.handoffTarget = source["handoffTarget"];
 	        this.queued = this.convertValues(source["queued"], OvQueuedMessage);
 	        this.automation = this.convertValues(source["automation"], OvAutomation);
+	        this.statusLine = this.convertValues(source["statusLine"], OvStatusLine);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -819,6 +853,7 @@ export namespace core {
 		    return a;
 		}
 	}
+	
 	
 	export class OvUsageWindow {
 	    label: string;

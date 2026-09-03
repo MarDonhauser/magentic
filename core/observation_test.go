@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"reflect"
 	"strconv"
 	"strings"
@@ -216,6 +217,40 @@ func TestObserveSelectsPaneFromActiveWindow(t *testing.T) {
 		if len(call) > 3 && call[0] == "capture-pane" && call[3] == "%1" {
 			t.Fatalf("Observe captured inactive-window pane: %#v", call)
 		}
+	}
+}
+
+func TestObserveTreatsMissingTmuxServerAsAbsence(t *testing.T) {
+	now := time.Date(2026, 9, 3, 8, 5, 0, 0, time.UTC)
+	session := Session{ID: "session-1", Name: "one", RuntimeName: "mgt-one", Dir: "/work/one"}
+	for _, stderr := range []string{
+		"error connecting to /private/tmp/tmux-503/default (No such file or directory)\n",
+		"no server running on /private/tmp/tmux-503/default\n",
+	} {
+		runner := &recordingObservationRunner{run: func(_ context.Context, args ...string) (string, error) {
+			if args[0] == "list-panes" {
+				return "", &exec.ExitError{Stderr: []byte(stderr)}
+			}
+			return "", errors.New("capture-pane must not run without a server")
+		}}
+		got := observeWithRunner(context.Background(), []Session{session}, runner, testObservationConfig(now))
+		observed := got.Sessions[0]
+		if got.Availability != ObservationAvailable || len(got.Problems) != 0 ||
+			observed.Availability != ObservationAvailable || observed.Presence != SessionPresenceAbsent ||
+			observed.Status != StatusDead || observed.Occupancy != OccupancyVacant {
+			t.Fatalf("missing tmux server (%q) was not reported as absence: %#v", stderr, got)
+		}
+	}
+
+	runner := &recordingObservationRunner{run: func(_ context.Context, _ ...string) (string, error) {
+		return "", &exec.ExitError{Stderr: []byte("error connecting to /private/tmp/tmux-503/default (Permission denied)\n")}
+	}}
+	got := observeWithRunner(context.Background(), []Session{session}, runner, testObservationConfig(now))
+	if got.Availability != ObservationUnavailable || got.Sessions[0].Presence != SessionPresenceUnknown {
+		t.Fatalf("unreachable tmux socket fabricated absence: %#v", got)
+	}
+	if len(got.Problems) != 1 || !strings.Contains(got.Problems[0].Message, "Permission denied") {
+		t.Fatalf("list-panes problem lost the tmux diagnostic: %#v", got.Problems)
 	}
 }
 

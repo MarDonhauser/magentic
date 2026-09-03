@@ -158,6 +158,10 @@ export function NewTermSessionFor(arg1) {
   return window['go']['main']['App']['NewTermSessionFor'](arg1);
 }
 
+export function NotificationsEnabled() {
+  return window['go']['main']['App']['NotificationsEnabled']();
+}
+
 export function OpenTerm(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['OpenTerm'](arg1, arg2, arg3, arg4);
 }
@@ -252,6 +256,14 @@ export function SetDividerCollapsed(arg1, arg2) {
 
 export function SetMainBranch(arg1, arg2) {
   return window['go']['main']['App']['SetMainBranch'](arg1, arg2);
+}
+
+export function SetNotificationsEnabled(arg1) {
+  return window['go']['main']['App']['SetNotificationsEnabled'](arg1);
+}
+
+export function SetSessionService(arg1, arg2) {
+  return window['go']['main']['App']['SetSessionService'](arg1, arg2);
 }
 
 export function ShowNotchEvent(arg1) {

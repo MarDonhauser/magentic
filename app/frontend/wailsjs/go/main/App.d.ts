@@ -81,6 +81,8 @@ export function NewTermSession(arg1:string,arg2:boolean,arg3:string):Promise<str
 
 export function NewTermSessionFor(arg1:string):Promise<string>;
 
+export function NotificationsEnabled():Promise<boolean>;
+
 export function OpenTerm(arg1:string,arg2:string,arg3:number,arg4:number):Promise<void>;
 
 export function Overview(arg1:boolean):Promise<core.Overview>;
@@ -128,6 +130,10 @@ export function SetBreakConfig(arg1:core.BreakConfig):Promise<void>;
 export function SetDividerCollapsed(arg1:string,arg2:boolean):Promise<void>;
 
 export function SetMainBranch(arg1:string,arg2:string):Promise<void>;
+
+export function SetNotificationsEnabled(arg1:boolean):Promise<void>;
+
+export function SetSessionService(arg1:string,arg2:boolean):Promise<void>;
 
 export function ShowNotchEvent(arg1:main.NotchEvent):Promise<void>;
 

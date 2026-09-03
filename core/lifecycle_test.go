@@ -1027,6 +1027,9 @@ func TestTmuxLifecycleRuntimeDistinguishesAbsenceFromUnavailable(t *testing.T) {
 	}{
 		{name: "missing target", output: "can't find session: mgt-iris\n", wantAbsent: true},
 		{name: "no server", output: "no server running on /tmp/tmux-501/default\n", wantAbsent: true},
+		{name: "missing socket", output: "error connecting to /private/tmp/tmux-503/default (No such file or directory)\n", wantAbsent: true},
+		{name: "missing socket mixed with another diagnostic", output: "error connecting to /tmp/tmux-501/default (No such file or directory)\nserver exited unexpectedly\n"},
+		{name: "missing socket without path", output: "error connecting to  (No such file or directory)\n"},
 		{name: "permission denied", output: "error connecting to /tmp/tmux-501/default (Permission denied)\n"},
 		{name: "server failure", output: "server exited unexpectedly\n"},
 		{name: "absence phrase embedded in failure", output: "permission denied; can't find session: mgt-iris\n"},
