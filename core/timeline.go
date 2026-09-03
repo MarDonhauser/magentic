@@ -192,26 +192,38 @@ func UnavailableConversation(availability ConversationAvailability, ref Conversa
 // starts, drives or writes to the agent.
 type ConversationNormalizer interface {
 	Vendor() AgentVendor
-	// Locate resolves the file holding this Conversation's records. A vendor
-	// that cannot locate the record reports false rather than an empty path.
-	Locate(ref ConversationRef) (string, bool)
-	// NewScan starts one normalization over one Conversation record. The scan
-	// carries the state a later byte range depends on — the tool calls still
-	// waiting for their result — so appended bytes normalize correctly.
+	// Locate resolves the record files this Conversation is normalized from,
+	// the run's own record first. A vendor that cannot locate the record
+	// reports false rather than an empty list.
+	Locate(ref ConversationRef) ([]ConversationSource, bool)
+	// NewScan starts one normalization over one Conversation. The scan carries
+	// the state a later byte range depends on — the tool calls still waiting
+	// for their result, and the delegated tasks a subagent record can belong
+	// to — so appended bytes normalize correctly.
 	NewScan() ConversationScan
 }
 
-// ConversationScan normalizes one Conversation record, one appended byte range
-// at a time.
+// ConversationSource is one record file a Conversation is normalized from. A
+// vendor that records delegated work beside the run's own record contributes
+// one source per delegated task.
+type ConversationSource struct {
+	Path string `json:"path"`
+	// DelegatedFrom is the vendor's own identifier of the tool call that
+	// spawned the work in this file, and is empty for the run's own record.
+	DelegatedFrom string `json:"delegatedFrom,omitempty"`
+}
+
+// ConversationScan normalizes a Conversation's record files, one appended byte
+// range at a time.
 type ConversationScan interface {
-	// Normalize turns an appended byte range into Items. consumed reports how
-	// many of the given bytes were covered by complete records; a partially
-	// written trailing record is left unconsumed and normalized again once the
-	// vendor has finished writing it.
+	// Normalize turns an appended byte range of one source into Items.
+	// consumed reports how many of the given bytes were covered by complete
+	// records; a partially written trailing record is left unconsumed and
+	// normalized again once the vendor has finished writing it.
 	//
 	// Returned Items may supersede Items an earlier call already produced,
 	// which is how a tool result completes the tool call it names.
-	Normalize(data []byte) (items []Item, consumed int)
+	Normalize(source ConversationSource, data []byte) (items []Item, consumed int)
 }
 
 // ConversationRefForSession resolves a Session's ConversationRef from its

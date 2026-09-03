@@ -3,7 +3,9 @@ package core
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -16,25 +18,61 @@ type claudeConversationNormalizer struct{ root string }
 
 func (claudeConversationNormalizer) Vendor() AgentVendor { return AgentVendorClaude }
 
-func (n claudeConversationNormalizer) Locate(ref ConversationRef) (string, bool) {
+// Locate resolves the run's own record and, beside it, the record Claude
+// writes per delegated task under <run-id>/subagents. Without those files a
+// delegated task would show as a single row whose work is invisible.
+func (n claudeConversationNormalizer) Locate(ref ConversationRef) ([]ConversationSource, bool) {
 	if ref.Vendor != AgentVendorClaude || strings.TrimSpace(ref.RunID) == "" {
-		return "", false
+		return nil, false
 	}
 	matches := vendorRunMatches(n.root, ref.RunID, func(name, id string) bool {
 		return name == id+".jsonl"
 	})
 	if len(matches) == 0 {
-		return "", false
+		return nil, false
 	}
 	// A run identity is unique across projects; sorting keeps a duplicated
 	// record deterministic rather than dependent on walk order.
-	best := matches[0]
-	for _, match := range matches[1:] {
-		if filepath.ToSlash(match) < filepath.ToSlash(best) {
-			best = match
+	sort.Strings(matches)
+	record := matches[0]
+	sources := []ConversationSource{{Path: record}}
+	subagents := filepath.Join(strings.TrimSuffix(record, filepath.Ext(record)), "subagents")
+	entries, err := os.ReadDir(subagents)
+	if err != nil {
+		return sources, true
+	}
+	var names []string
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".jsonl") {
+			names = append(names, entry.Name())
 		}
 	}
-	return best, true
+	sort.Strings(names)
+	for _, name := range names {
+		path := filepath.Join(subagents, name)
+		sources = append(sources, ConversationSource{
+			Path:          path,
+			DelegatedFrom: claudeSubagentToolUseID(path),
+		})
+	}
+	return sources, true
+}
+
+// claudeSubagentToolUseID reads the tool call a subagent record belongs to
+// from the sibling meta file Claude writes. An unreadable meta file leaves the
+// parent explicitly unknown rather than guessed.
+func claudeSubagentToolUseID(path string) string {
+	data, err := os.ReadFile(strings.TrimSuffix(path, ".jsonl") + ".meta.json")
+	if err != nil {
+		return ""
+	}
+	var meta struct {
+		ToolUseID string `json:"toolUseId"`
+	}
+	if json.Unmarshal(data, &meta) != nil {
+		return ""
+	}
+	return meta.ToolUseID
 }
 
 func (claudeConversationNormalizer) NewScan() ConversationScan {
@@ -100,7 +138,7 @@ type claudeConversationScan struct {
 	tasks map[string]string
 }
 
-func (s *claudeConversationScan) Normalize(data []byte) ([]Item, int) {
+func (s *claudeConversationScan) Normalize(source ConversationSource, data []byte) ([]Item, int) {
 	var items []Item
 	consumed := 0
 	for consumed < len(data) {
@@ -115,12 +153,12 @@ func (s *claudeConversationScan) Normalize(data []byte) ([]Item, int) {
 		if len(line) == 0 {
 			continue
 		}
-		items = append(items, s.normalizeRecord(line)...)
+		items = append(items, s.normalizeRecord(source, line)...)
 	}
 	return items, consumed
 }
 
-func (s *claudeConversationScan) normalizeRecord(line []byte) []Item {
+func (s *claudeConversationScan) normalizeRecord(source ConversationSource, line []byte) []Item {
 	var record claudeConversationRecord
 	if json.Unmarshal(line, &record) != nil {
 		// A line that is not JSON carries no record identity, so no stable
@@ -140,13 +178,13 @@ func (s *claudeConversationScan) normalizeRecord(line []byte) []Item {
 	case claudeMetadataRecordTypes[record.Type]:
 		return nil
 	case !claudeActivityRecordTypes[record.Type]:
-		return []Item{s.unknownItem(record, recordID, record.Type, record.Type)}
+		return []Item{s.unknownItem(source, record, recordID, record.Type, record.Type)}
 	}
 
 	switch record.Type {
 	case "system":
 		if record.Subtype == "compact_boundary" {
-			item := s.baseItem(record, recordID, 0)
+			item := s.baseItem(source, record, recordID, 0)
 			item.Role = ItemRoleSystem
 			item.Kind = ItemKindContextCompaction
 			item.Title = "Kontext verdichtet"
@@ -156,15 +194,15 @@ func (s *claudeConversationScan) normalizeRecord(line []byte) []Item {
 		if record.Subtype != "" {
 			label += ":" + record.Subtype
 		}
-		return []Item{s.unknownItem(record, recordID, label, label)}
+		return []Item{s.unknownItem(source, record, recordID, label, label)}
 	case "user":
-		return s.normalizeUserRecord(record, recordID)
+		return s.normalizeUserRecord(source, record, recordID)
 	default:
-		return s.normalizeAssistantRecord(record, recordID)
+		return s.normalizeAssistantRecord(source, record, recordID)
 	}
 }
 
-func (s *claudeConversationScan) normalizeUserRecord(record claudeConversationRecord, recordID string) []Item {
+func (s *claudeConversationScan) normalizeUserRecord(source ConversationSource, record claudeConversationRecord, recordID string) []Item {
 	blocks, plain := claudeContentBlocks(record.Message.Content)
 	if blocks == nil {
 		// A user record whose content is plain text is a developer prompt,
@@ -172,7 +210,7 @@ func (s *claudeConversationScan) normalizeUserRecord(record claudeConversationRe
 		if record.IsMeta || strings.TrimSpace(plain) == "" {
 			return nil
 		}
-		return []Item{s.promptItem(record, recordID, 0, plain)}
+		return []Item{s.promptItem(source, record, recordID, 0, plain)}
 	}
 	var items []Item
 	for index, block := range blocks {
@@ -185,14 +223,14 @@ func (s *claudeConversationScan) normalizeUserRecord(record claudeConversationRe
 			if record.IsMeta || strings.TrimSpace(block.Text) == "" {
 				continue
 			}
-			items = append(items, s.promptItem(record, recordID, index, block.Text))
+			items = append(items, s.promptItem(source, record, recordID, index, block.Text))
 		}
 	}
 	return items
 }
 
-func (s *claudeConversationScan) promptItem(record claudeConversationRecord, recordID string, index int, text string) Item {
-	item := s.baseItem(record, recordID, index)
+func (s *claudeConversationScan) promptItem(source ConversationSource, record claudeConversationRecord, recordID string, index int, text string) Item {
+	item := s.baseItem(source, record, recordID, index)
 	item.Role = ItemRoleDeveloper
 	item.Kind = ItemKindDeveloperPrompt
 	item.Title = claudeTitleLine(text, "Eingabe")
@@ -200,13 +238,13 @@ func (s *claudeConversationScan) promptItem(record claudeConversationRecord, rec
 	return item
 }
 
-func (s *claudeConversationScan) normalizeAssistantRecord(record claudeConversationRecord, recordID string) []Item {
+func (s *claudeConversationScan) normalizeAssistantRecord(source ConversationSource, record claudeConversationRecord, recordID string) []Item {
 	blocks, plain := claudeContentBlocks(record.Message.Content)
 	if blocks == nil {
 		if strings.TrimSpace(plain) == "" {
 			return nil
 		}
-		item := s.baseItem(record, recordID, 0)
+		item := s.baseItem(source, record, recordID, 0)
 		item.Role = ItemRoleAgent
 		item.Kind = ItemKindAgentMessage
 		item.Title = claudeTitleLine(plain, "Antwort")
@@ -215,7 +253,7 @@ func (s *claudeConversationScan) normalizeAssistantRecord(record claudeConversat
 	}
 	var items []Item
 	for index, block := range blocks {
-		item := s.baseItem(record, recordID, index)
+		item := s.baseItem(source, record, recordID, index)
 		item.Role = ItemRoleAgent
 		switch block.Type {
 		case "text":
@@ -275,23 +313,28 @@ func (s *claudeConversationScan) completeToolCall(block claudeContentBlock) (Ite
 	return item, true
 }
 
-func (s *claudeConversationScan) baseItem(record claudeConversationRecord, recordID string, index int) Item {
+func (s *claudeConversationScan) baseItem(source ConversationSource, record claudeConversationRecord, recordID string, index int) Item {
 	item := Item{
 		ID:         claudeItemID(recordID, index),
 		OccurredAt: claudeRecordTime(record.Timestamp),
 		Role:       ItemRoleAgent,
 	}
-	if record.IsSidechain {
+	// Delegated work is recognized from the record itself and, for a vendor
+	// that files subagent work separately, from the source it came from. An
+	// unnamed parent stays explicitly unknown rather than being guessed.
+	if record.IsSidechain || source.DelegatedFrom != "" {
 		item.Delegated = true
-		// An unnamed parent stays explicitly unknown rather than being
-		// guessed from position.
-		item.ParentTaskID = s.tasks[record.ParentToolUseID]
+		parent := record.ParentToolUseID
+		if parent == "" {
+			parent = source.DelegatedFrom
+		}
+		item.ParentTaskID = s.tasks[parent]
 	}
 	return item
 }
 
-func (s *claudeConversationScan) unknownItem(record claudeConversationRecord, recordID, label, title string) Item {
-	item := s.baseItem(record, recordID, 0)
+func (s *claudeConversationScan) unknownItem(source ConversationSource, record claudeConversationRecord, recordID, label, title string) Item {
+	item := s.baseItem(source, record, recordID, 0)
 	item.Role = ItemRoleSystem
 	item.Kind = ItemKindUnknown
 	item.VendorLabel = label

@@ -2,6 +2,8 @@ package core
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -18,7 +20,7 @@ func claudeRecords(lines ...string) []byte {
 
 func normalizeClaude(t *testing.T, lines ...string) []Item {
 	t.Helper()
-	items, consumed := claudeScanFor(t).Normalize(claudeRecords(lines...))
+	items, consumed := claudeScanFor(t).Normalize(ConversationSource{Path: "record.jsonl"}, claudeRecords(lines...))
 	if want := len(claudeRecords(lines...)); consumed != want {
 		t.Fatalf("consumed = %d, want %d", consumed, want)
 	}
@@ -126,13 +128,13 @@ func TestToolResultAttachesToItsToolUse(t *testing.T) {
 
 func TestToolResultInALaterReadingSupersedesInPlace(t *testing.T) {
 	scan := claudeScanFor(t)
-	first, _ := scan.Normalize(claudeRecords(
+	first, _ := scan.Normalize(ConversationSource{Path: "record.jsonl"}, claudeRecords(
 		`{"type":"assistant","uuid":"a1","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls core"}}]}}`))
 	conversation := Conversation{}
 	conversation.Apply(first...)
 	conversation.Apply(Item{ID: "spaeter", Kind: ItemKindAgentMessage, Title: "danach"})
 
-	second, _ := scan.Normalize(claudeRecords(
+	second, _ := scan.Normalize(ConversationSource{Path: "record.jsonl"}, claudeRecords(
 		`{"type":"user","uuid":"u1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"kein Verzeichnis"}]}}`))
 	if len(second) != 1 {
 		t.Fatalf("%d Items in der zweiten Lesung, want 1", len(second))
@@ -263,7 +265,7 @@ func TestAPartiallyWrittenTrailingRecordIsDeferred(t *testing.T) {
 	partial := `{"type":"user","uuid":"u2","message":{"role":"user","con`
 
 	scan := claudeScanFor(t)
-	items, consumed := scan.Normalize([]byte(complete + partial))
+	items, consumed := scan.Normalize(ConversationSource{Path: "record.jsonl"}, []byte(complete+partial))
 	if len(items) != 1 {
 		t.Fatalf("%d Items, want 1", len(items))
 	}
@@ -272,7 +274,7 @@ func TestAPartiallyWrittenTrailingRecordIsDeferred(t *testing.T) {
 	}
 
 	rest := `{"type":"user","uuid":"u2","message":{"role":"user","content":"jetzt vollständig"}}` + "\n"
-	later, laterConsumed := scan.Normalize([]byte(rest))
+	later, laterConsumed := scan.Normalize(ConversationSource{Path: "record.jsonl"}, []byte(rest))
 	if len(later) != 1 || later[0].ID != "u2#0" {
 		t.Fatalf("die zweite Lesung ergibt %+v, want genau das nachgetragene Item", later)
 	}
@@ -305,5 +307,58 @@ func TestItemsSerializeForTransport(t *testing.T) {
 	}
 	if !strings.Contains(string(encoded), `"awaitingResult":true`) {
 		t.Errorf("der unabgeschlossene Aufruf überträgt seinen Zustand nicht: %s", encoded)
+	}
+}
+
+func TestLocateFindsTheRunRecordAndItsSubagentRecords(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "-Users-dev-navi")
+	subagents := filepath.Join(project, "run-1", "subagents")
+	if err := os.MkdirAll(subagents, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	record := filepath.Join(project, "run-1.jsonl")
+	writeFixture(t, record, "")
+	writeFixture(t, filepath.Join(subagents, "agent-abc.jsonl"), "")
+	writeFixture(t, filepath.Join(subagents, "agent-abc.meta.json"), `{"agentType":"general-purpose","toolUseId":"toolu_1"}`)
+	writeFixture(t, filepath.Join(subagents, "agent-def.jsonl"), "")
+
+	sources, ok := claudeConversationNormalizer{root: root}.Locate(ConversationRef{Vendor: AgentVendorClaude, RunID: "run-1"})
+	if !ok {
+		t.Fatal("das Record der Session muss gefunden werden")
+	}
+	if len(sources) != 3 {
+		t.Fatalf("%d Quellen, want 3: %+v", len(sources), sources)
+	}
+	if sources[0].Path != record || sources[0].DelegatedFrom != "" {
+		t.Errorf("die erste Quelle ist nicht das Record des Runs: %+v", sources[0])
+	}
+	if sources[1].DelegatedFrom != "toolu_1" {
+		t.Errorf("DelegatedFrom = %q, want %q", sources[1].DelegatedFrom, "toolu_1")
+	}
+	if sources[2].DelegatedFrom != "" {
+		t.Errorf("eine Subagent-Datei ohne Meta-Datei muss ihren Parent offen lassen: %+v", sources[2])
+	}
+}
+
+func TestSubagentRecordsAreDelegatedToTheirTask(t *testing.T) {
+	scan := claudeScanFor(t)
+	task, _ := scan.Normalize(ConversationSource{Path: "run-1.jsonl"}, claudeRecords(
+		`{"type":"assistant","uuid":"a1","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Agent","input":{"description":"Repo prüfen"}}]}}`))
+	delegated, _ := scan.Normalize(ConversationSource{Path: "agent-abc.jsonl", DelegatedFrom: "toolu_1"}, claudeRecords(
+		`{"type":"assistant","uuid":"b1","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"gefunden"}]}}`))
+
+	if len(delegated) != 1 || !delegated[0].Delegated {
+		t.Fatalf("Items = %+v, want ein delegiertes Item", delegated)
+	}
+	if delegated[0].ParentTaskID != task[0].ID {
+		t.Errorf("ParentTaskID = %q, want %q", delegated[0].ParentTaskID, task[0].ID)
+	}
+}
+
+func writeFixture(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
