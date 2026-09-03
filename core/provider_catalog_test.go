@@ -7,14 +7,15 @@ import (
 
 func TestAgentVendorCatalog(t *testing.T) {
 	catalog := AgentVendorCatalog()
-	if len(catalog) != 4 {
-		t.Fatalf("Katalog hat %d Einträge, want 4", len(catalog))
+	if len(catalog) != 5 {
+		t.Fatalf("Katalog hat %d Einträge, want 5", len(catalog))
 	}
 	want := map[string]string{
-		string(AgentVendorClaude):  "Claude Code",
-		string(AgentVendorCodex):   "Codex",
-		string(AgentVendorGemini):  "Gemini CLI",
-		string(AgentVendorCopilot): "GitHub Copilot",
+		string(AgentVendorClaude):      "Claude Code",
+		string(AgentVendorCodex):       "Codex",
+		string(AgentVendorGemini):      "Gemini CLI",
+		string(AgentVendorCopilot):     "GitHub Copilot",
+		string(AgentVendorAntigravity): "Antigravity",
 	}
 	for _, option := range catalog {
 		label, known := want[option.Vendor]

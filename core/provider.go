@@ -38,7 +38,7 @@ type AgentProvider interface {
 }
 
 func builtinAgentProviders() []AgentProvider {
-	return []AgentProvider{claudeProvider{}, codexProvider{}, geminiProvider{}, copilotProvider{}}
+	return []AgentProvider{claudeProvider{}, codexProvider{}, geminiProvider{}, copilotProvider{}, antigravityProvider{}}
 }
 
 func providerForVendor(vendor AgentVendor) (AgentProvider, bool) {
@@ -268,4 +268,41 @@ func (geminiProvider) RunExists(string) bool { return false }
 // contract; the run identity is discovered from ~/.gemini/tmp afterwards.
 func (geminiProvider) StartCommand(Session, *AgentRunRef, string) (string, error) {
 	return "gemini", nil
+}
+
+type antigravityProvider struct{}
+
+func (antigravityProvider) Vendor() AgentVendor { return AgentVendorAntigravity }
+func (antigravityProvider) Tool() string        { return AgentToolAntigravity }
+func (antigravityProvider) Binary() string      { return "agy" }
+
+// agy assigns its own conversation id, so the run identity can only be
+// discovered from its brain transcripts after the fact.
+func (antigravityProvider) NewRunID() string { return "" }
+
+func (antigravityProvider) Matches(paneCommand string) bool {
+	return paneCommandMatchesKind("antigravity", paneCommand)
+}
+
+// A stored run exists once agy holds its conversation directory under
+// ~/.gemini/antigravity-cli/brain. That directory carries the transcript the
+// history adapter reads, so existence and indexability stay one fact.
+func (antigravityProvider) RunExists(externalID string) bool {
+	if strings.TrimSpace(externalID) == "" {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(userHomeDir(), ".gemini", "antigravity-cli", "brain", externalID))
+	return err == nil && info.IsDir()
+}
+
+// agy documents two resume forms: --conversation resumes one conversation by
+// id, --continue takes up the most recent one when no identity is stored.
+func (antigravityProvider) StartCommand(_ Session, run *AgentRunRef, mode string) (string, error) {
+	if mode == "new" {
+		return "agy", nil
+	}
+	if run != nil && run.ExternalID != "" {
+		return "agy --conversation " + ShellQuote(run.ExternalID), nil
+	}
+	return "agy --continue", nil
 }

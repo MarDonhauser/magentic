@@ -192,10 +192,23 @@ func BuildOverviewFromObservation(s *State, snapshot ObservationSnapshot) Overvi
 	return buildOverviewFromObservationUsing(s, snapshot, NewRepositories())
 }
 
-func buildOverviewFromObservationUsing(s *State, snapshot ObservationSnapshot, repositories overviewRepositories) Overview {
+// BuildOverviewWithSurvey projects an Overview onto a caller-provided Survey
+// instead of taking a fresh one. Callers that poll (the desktop Overview every
+// few seconds) reuse a recent Survey and only refresh it on its own slower
+// cadence; a full Survey spawns one Git process per Project plus one per
+// Worktree, so taking it on every poll is what makes the app feel heavy.
+func BuildOverviewWithSurvey(s *State, snapshot ObservationSnapshot, survey RepositoriesSurvey, surveyErr error) Overview {
 	if s == nil {
 		s = &State{}
 	}
+	preparedState, preparedSnapshot := prepareOverviewInput(s, snapshot)
+	return buildOverviewFromSurvey(preparedState, preparedSnapshot, survey, surveyErr)
+}
+
+// prepareOverviewInput applies the same copy-only normalization every Overview
+// build needs, no matter who took the Survey: ephemeral IDs for legacy
+// Sessions without one, so snapshot joins stay stable.
+func prepareOverviewInput(s *State, snapshot ObservationSnapshot) (*State, ObservationSnapshot) {
 	copyOfState := *s
 	copyOfState.Agents = observationSessions(s.Agents)
 	copyOfSnapshot := snapshot
@@ -205,8 +218,16 @@ func buildOverviewFromObservationUsing(s *State, snapshot ObservationSnapshot, r
 			copyOfSnapshot.Sessions[i].SessionID = copyOfState.Agents[i].ID
 		}
 	}
-	survey, surveyErr := repositories.Survey(context.Background(), append([]Project(nil), copyOfState.Projects...))
-	return buildOverviewFromSurvey(&copyOfState, copyOfSnapshot, survey, surveyErr)
+	return &copyOfState, copyOfSnapshot
+}
+
+func buildOverviewFromObservationUsing(s *State, snapshot ObservationSnapshot, repositories overviewRepositories) Overview {
+	if s == nil {
+		s = &State{}
+	}
+	preparedState, preparedSnapshot := prepareOverviewInput(s, snapshot)
+	survey, surveyErr := repositories.Survey(context.Background(), append([]Project(nil), preparedState.Projects...))
+	return buildOverviewFromSurvey(preparedState, preparedSnapshot, survey, surveyErr)
 }
 
 func buildOverviewFromSurvey(s *State, snapshot ObservationSnapshot, survey RepositoriesSurvey, surveyErr error) Overview {

@@ -11,6 +11,7 @@ var handoffVendors = []AgentVendor{
 	AgentVendorCodex,
 	AgentVendorGemini,
 	AgentVendorCopilot,
+	AgentVendorAntigravity,
 }
 
 // resolvedHandoffSource is the internal source identity used by the Handoff
@@ -24,6 +25,9 @@ type resolvedHandoffSource struct {
 }
 
 func handoffVendorForTool(tool string) (AgentVendor, bool) {
+	if provider, known := providerForVendor(AgentVendor(tool)); known {
+		return provider.Vendor(), true
+	}
 	provider, known := providerForPaneCommand(tool)
 	if !known {
 		return "", false
@@ -118,6 +122,8 @@ func handoffProviderSource(source resolvedHandoffSource) string {
 		sourceHint = `Gemini CLI: "~/.gemini/tmp/**/session-*.json", "session-*.jsonl" oder "logs.json"; relevante Identitätsfelder sind "sessionId" und der Projektpfad.`
 	case AgentVendorCopilot:
 		sourceHint = `GitHub Copilot CLI: "~/.copilot/session-state/*/events.jsonl" und das benachbarte "workspace.yaml"; relevante Identitätsfelder sind die Run-Verzeichnis-ID und "cwd".`
+	case AgentVendorAntigravity:
+		sourceHint = `Antigravity CLI (agy): "~/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl"; relevante Identitätsfelder sind die Brain-Verzeichnis-ID (conversation id) und "created_at". Das Arbeitsverzeichnis steht in "~/.gemini/antigravity-cli/history.jsonl" je "conversationId" als "workspace".`
 	}
 	return referenceHint + "\n" + sourceHint
 }
@@ -232,7 +238,7 @@ func handoffObservationForSession(snapshot ObservationSnapshot, session Session)
 // composer can prove input readiness; for the others the live-TUI delivery
 // Interface has no truthful signal and would have to guess.
 func handoffTargetToolSupported(name, tool string) error {
-	kind, known := agentKindForPaneCommand(tool)
+	kind, known := agentKindForTool(tool)
 	if !known {
 		return fmt.Errorf("in Ziel-Session %q läuft kein unterstütztes KI-Tool", name)
 	}

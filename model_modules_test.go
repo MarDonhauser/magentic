@@ -291,6 +291,49 @@ func TestSeparatePollPassesKeepEachOthersFacts(t *testing.T) {
 	}
 }
 
+// The slow disk pass (Registry file, Zeitgeist file, external runtimes) and
+// the fast runtime pass run on separate cadences. Each message must leave the
+// other pass's facts in place, otherwise the 2s tick would blank the header
+// facts the 10s pass owns and vice versa.
+func TestDiskAndRuntimePassesKeepEachOthersFacts(t *testing.T) {
+	session := Agent{ID: "session-1", Name: "one", RuntimeName: "mgt-one", Dir: "/repo"}
+	state := State{Agents: []Agent{session}}
+	key := sessionKey(session)
+	observation := pollResult{
+		observation: core.ObservationSnapshot{Availability: core.ObservationAvailable},
+		observed: map[tuiSessionKey]core.SessionObservation{
+			key: {SessionID: session.ID, Availability: core.ObservationAvailable,
+				Presence: core.SessionPresencePresent, Status: StatusRunning},
+		},
+	}
+	m := model{state: &state, collapsed: map[string]bool{},
+		attention: core.NewAttentionPlanner(core.AttentionPlannerConfig{})}
+
+	updated, _ := m.Update(observationMsg(observation))
+	updated, _ = updated.(model).Update(diskMsg(pollResult{
+		zeitgeist: ZgInfo{Exists: true},
+	}))
+	disk := updated.(model)
+	if got := disk.statusFor(session); got != StatusRunning {
+		t.Fatalf("disk pass discarded the Observation: status = %v", got)
+	}
+	if !disk.poll.zeitgeist.Exists {
+		t.Fatal("disk pass lost its own Zeitgeist fact")
+	}
+	if disk.diskBusy {
+		t.Fatal("disk pass did not clear its busy flag")
+	}
+
+	updated, _ = disk.Update(observationMsg(observation))
+	after := updated.(model)
+	if got := after.statusFor(session); got != StatusRunning {
+		t.Fatalf("runtime pass discarded the Observation: status = %v", got)
+	}
+	if !after.poll.zeitgeist.Exists {
+		t.Fatal("runtime pass discarded the disk facts")
+	}
+}
+
 // Scrolling moves the cursor far faster than tmux answers. The preview probe
 // must wait for the selection to stand still, and a timer belonging to an
 // abandoned selection must not start one.

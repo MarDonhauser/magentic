@@ -43,6 +43,15 @@ func TestWorkHistoryNormalizesAllProviderAdapters(t *testing.T) {
 		`{"id":"co-a","type":"assistant.response","timestamp":"2026-08-19T13:00:01Z","data":{"content":"Copilot output https://example.test/shared","model":"gpt-4.1","usage":{"inputTokens":19,"outputTokens":8}}}`,
 	}, "\n")+"\n")
 
+	antigravityPath := filepath.Join(home, ".gemini", "antigravity-cli", "brain", "antigravity-1", ".system_generated", "logs", "transcript.jsonl")
+	writeHistoryTestFile(t, filepath.Join(home, ".gemini", "antigravity-cli", "history.jsonl"),
+		`{"conversationId":"antigravity-1","display":"Antigravity prompt","timestamp":1787205600000,"workspace":"/work/demo"}`+"\n")
+	writeHistoryTestFile(t, antigravityPath, strings.Join([]string{
+		`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-08-19T14:00:00Z","content":"<USER_REQUEST>\nAntigravity prompt\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is 2026-08-19.\n</ADDITIONAL_METADATA>"}`,
+		`{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-08-19T14:00:01Z","content":"Antigravity output https://example.test/shared"}`,
+		`{"step_index":2,"source":"MODEL","type":"RUN_COMMAND","status":"DONE","created_at":"2026-08-19T14:00:02Z","content":"tool output stays out of the index","tool_calls":[{"name":"run_command","args":{"Cwd":"/work/demo"}}]}`,
+	}, "\n")+"\n")
+
 	associations := HistoryAssociations{
 		Revision: "registry-7",
 		Projects: []HistoryProjectAssociation{{Key: "project-1", Name: "Demo", Path: cwd}},
@@ -51,6 +60,7 @@ func TestWorkHistoryNormalizesAllProviderAdapters(t *testing.T) {
 			{Key: "session-codex", Name: "Codex", ProjectKey: "project-1", Dir: cwd, Provider: HistoryProviderCodex, ConversationID: "codex-1"},
 			{Key: "session-gemini", Name: "Gemini", ProjectKey: "project-1", Dir: cwd, Provider: HistoryProviderGemini, ConversationID: "gemini-1"},
 			{Key: "session-copilot", Name: "Copilot", ProjectKey: "project-1", Dir: cwd, Provider: HistoryProviderCopilot, ConversationID: "copilot-1"},
+			{Key: "session-antigravity", Name: "Antigravity", ProjectKey: "project-1", Dir: cwd, Provider: HistoryProviderAntigravity, ConversationID: "antigravity-1"},
 		},
 	}
 
@@ -58,8 +68,8 @@ func TestWorkHistoryNormalizesAllProviderAdapters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if page.Total != 9 {
-		t.Fatalf("normalized events = %d, want 9: %#v", page.Total, page.Events)
+	if page.Total != 11 {
+		t.Fatalf("normalized events = %d, want 11: %#v", page.Total, page.Events)
 	}
 	if page.Meta.AssociationRevision != "registry-7" {
 		t.Fatalf("association revision = %q", page.Meta.AssociationRevision)
@@ -120,7 +130,7 @@ func TestWorkHistoryNormalizesAllProviderAdapters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, sourcePath := range []string{claudePath, codexPath, geminiPath, filepath.Join(copilotDir, "events.jsonl")} {
+	for _, sourcePath := range []string{claudePath, codexPath, geminiPath, filepath.Join(copilotDir, "events.jsonl"), antigravityPath} {
 		if strings.Contains(string(indexData), sourcePath) {
 			t.Fatalf("private index persisted source path %q", sourcePath)
 		}

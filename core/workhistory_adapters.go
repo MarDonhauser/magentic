@@ -37,6 +37,10 @@ func builtinHistoryAdapters(config WorkHistoryConfig) []historyProviderAdapter {
 		}},
 		geminiHistoryAdapter{root: filepath.Join(config.HomeDir, ".gemini", "tmp")},
 		copilotHistoryAdapter{root: filepath.Join(config.HomeDir, ".copilot", "session-state")},
+		antigravityHistoryAdapter{
+			root:        filepath.Join(config.HomeDir, ".gemini", "antigravity-cli", "brain"),
+			historyPath: filepath.Join(config.HomeDir, ".gemini", "antigravity-cli", "history.jsonl"),
+		},
 	}
 }
 
@@ -839,4 +843,221 @@ func firstHistoryString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// Antigravity CLI (agy, Google)
+
+type antigravityHistoryAdapter struct {
+	root        string
+	historyPath string
+}
+
+func (a antigravityHistoryAdapter) Provider() HistoryProvider { return HistoryProviderAntigravity }
+func (a antigravityHistoryAdapter) Version() int              { return 1 }
+func (a antigravityHistoryAdapter) Roots() []string           { return []string{a.root} }
+
+// Only transcript.jsonl is indexed. transcript_full.jsonl carries the same
+// steps with differently quoted tool arguments and would double every event.
+func (a antigravityHistoryAdapter) Accept(path string) bool {
+	return filepath.Base(path) == "transcript.jsonl"
+}
+
+func (a antigravityHistoryAdapter) Fingerprint(files workHistoryFS, path string, data []byte) (string, error) {
+	workspace, err := antigravitySidecarWorkspace(files, a.historyPath, antigravityConversationID(path, a.root))
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.New()
+	_, _ = sum.Write(data)
+	_, _ = sum.Write([]byte("\x00workspace\x00"))
+	_, _ = sum.Write([]byte(workspace))
+	return hex.EncodeToString(sum.Sum(nil)), nil
+}
+
+type antigravityToolCall struct {
+	Name string                     `json:"name"`
+	Args map[string]json.RawMessage `json:"args"`
+}
+
+type antigravityHistoryLine struct {
+	StepIndex int                   `json:"step_index"`
+	Source    string                `json:"source"`
+	Type      string                `json:"type"`
+	CreatedAt string                `json:"created_at"`
+	Content   string                `json:"content"`
+	ToolCalls []antigravityToolCall `json:"tool_calls"`
+}
+
+func (a antigravityHistoryAdapter) Parse(ctx context.Context, files workHistoryFS, path string, data []byte) ([]historyRecord, []HistoryProblem, error) {
+	conversation := antigravityConversationID(path, a.root)
+	var entries []antigravityHistoryLine
+	malformed := 0
+	err := historyJSONLines(data, func(line []byte, _ int) {
+		if ctx.Err() != nil {
+			return
+		}
+		var entry antigravityHistoryLine
+		if json.Unmarshal(line, &entry) != nil {
+			malformed++
+			return
+		}
+		entries = append(entries, entry)
+	})
+	if err != nil {
+		return nil, malformedHistoryProblem(malformed), err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	cwd, _ := antigravitySidecarWorkspace(files, a.historyPath, conversation)
+	if cwd == "" {
+		for _, entry := range entries {
+			if cwd = antigravityTranscriptCWD(entry.ToolCalls); cwd != "" {
+				break
+			}
+		}
+	}
+	var records []historyRecord
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		switch {
+		case entry.Source == "USER_EXPLICIT" && entry.Type == "USER_INPUT":
+			text := cleanHistoryText(antigravityPromptText(entry.Content))
+			if text == "" || historyInjectedText(text) {
+				continue
+			}
+			records = append(records, historyRecord{
+				ConversationID: conversation, Timestamp: entry.CreatedAt,
+				Role: HistoryRoleDeveloper, Kind: HistoryEventPrompt, Lineage: HistoryLineagePrimary,
+				Text: text, CWD: cwd, NativeID: "step-" + strconv.Itoa(entry.StepIndex),
+			})
+		case entry.Source == "MODEL" && entry.Type == "PLANNER_RESPONSE":
+			// Other MODEL types (VIEW_FILE, LIST_DIRECTORY, RUN_COMMAND and
+			// friends) carry tool results, not assistant prose, and stay out
+			// of the index just like tool-only Claude messages do.
+			text := cleanHistoryText(entry.Content)
+			if text == "" {
+				continue
+			}
+			records = append(records, historyRecord{
+				ConversationID: conversation, Timestamp: entry.CreatedAt,
+				Role: HistoryRoleAssistant, Kind: HistoryEventOutput, Lineage: HistoryLineagePrimary,
+				Text: text, CWD: cwd, NativeID: "step-" + strconv.Itoa(entry.StepIndex),
+			})
+		}
+	}
+	return records, malformedHistoryProblem(malformed), nil
+}
+
+func antigravityConversationID(path, root string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return ""
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) > 1 {
+		return parts[0]
+	}
+	return ""
+}
+
+var (
+	antigravityUserRequest    = regexp.MustCompile(`(?s)<USER_REQUEST>(.*?)</USER_REQUEST>`)
+	antigravityMetadataBlocks = regexp.MustCompile(`(?s)<ADDITIONAL_METADATA>.*?</ADDITIONAL_METADATA>|<USER_SETTINGS_CHANGE>.*?</USER_SETTINGS_CHANGE>`)
+)
+
+// antigravityPromptText keeps the user's own request and drops the envelope
+// agy wraps it in: local time metadata and model-selection change notes that
+// would otherwise pollute every prompt.
+func antigravityPromptText(content string) string {
+	if match := antigravityUserRequest.FindStringSubmatch(content); match != nil {
+		return strings.TrimSpace(match[1])
+	}
+	return strings.TrimSpace(antigravityMetadataBlocks.ReplaceAllString(content, ""))
+}
+
+// antigravitySidecarWorkspace resolves the conversation's working directory
+// from the history.jsonl log next to the brain directory. A missing log means
+// sessions that never reported a workspace, not an error; any other read
+// failure must surface so a half-read mapping is never trusted silently.
+func antigravitySidecarWorkspace(files workHistoryFS, historyPath, conversation string) (string, error) {
+	if strings.TrimSpace(conversation) == "" || strings.TrimSpace(historyPath) == "" {
+		return "", nil
+	}
+	data, err := files.ReadFile(historyPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	workspace := ""
+	scanErr := historyJSONLines(data, func(line []byte, _ int) {
+		if workspace != "" {
+			return
+		}
+		var entry struct {
+			ConversationID string `json:"conversationId"`
+			Workspace      string `json:"workspace"`
+		}
+		if json.Unmarshal(line, &entry) != nil {
+			return
+		}
+		if entry.ConversationID == conversation && strings.TrimSpace(entry.Workspace) != "" {
+			workspace = strings.TrimSpace(entry.Workspace)
+		}
+	})
+	if scanErr != nil {
+		return "", scanErr
+	}
+	return workspace, nil
+}
+
+// antigravityTranscriptCWD falls back to the paths the transcript itself
+// names when the sidecar never logged the conversation. run_command carries
+// its own Cwd; the first listing or search path names the workspace root the
+// session started in.
+func antigravityTranscriptCWD(calls []antigravityToolCall) string {
+	var dir, search string
+	for _, call := range calls {
+		switch call.Name {
+		case "run_command":
+			if value := antigravityArgString(call.Args["Cwd"]); value != "" {
+				return value
+			}
+		case "list_dir":
+			if dir == "" {
+				dir = antigravityArgString(call.Args["DirectoryPath"])
+			}
+		case "grep_search":
+			if search == "" {
+				search = antigravityArgString(call.Args["SearchPath"])
+			}
+		}
+	}
+	return firstHistoryString(dir, search)
+}
+
+// antigravityArgString reads one tool argument. transcript.jsonl quotes path
+// arguments one layer too many ("/work/demo" instead of /work/demo), so a
+// single surrounding double-quote pair is removed.
+func antigravityArgString(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var text string
+	if json.Unmarshal(raw, &text) != nil {
+		return ""
+	}
+	text = strings.TrimSpace(text)
+	if len(text) >= 2 && strings.HasPrefix(text, `"`) && strings.HasSuffix(text, `"`) {
+		if unquoted, err := strconv.Unquote(text); err == nil {
+			text = unquoted
+		} else {
+			text = strings.Trim(text, `"`)
+		}
+	}
+	return strings.TrimSpace(text)
 }

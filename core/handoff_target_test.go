@@ -45,15 +45,26 @@ func TestHandoffAcceptsRecordedVendorsAsTarget(t *testing.T) {
 // Ein Anbieter ohne aufgenommene Bildschirme bleibt als Ziel gesperrt.
 func TestHandoffRefusesUnrecordedVendorAsTarget(t *testing.T) {
 	session := Session{ID: "target", Name: "ziel", RuntimeName: "mgt-ziel", SessionKind: SessionKindCodingAgent}
-	observed := SessionObservation{
-		SessionID: "target", Availability: ObservationAvailable, Presence: SessionPresencePresent,
-		ContentKnown: true, Tool: AgentToolGemini, Status: StatusIdle, Content: "› Type your message",
+	tests := []struct {
+		tool    string
+		content string
+	}{
+		{tool: AgentToolGemini, content: "› Type your message"},
+		{tool: AgentToolAntigravity, content: "> Type your message"},
 	}
-	if err := validateHandoffEnqueueTarget(session, observed); err == nil {
-		t.Fatal("Gemini darf noch kein Handoff-Ziel sein")
-	}
-	if err := validateHandoffDeliveryReady("ziel", promptTargetObservationFromSession(observed)); err == nil {
-		t.Fatal("Gemini darf keine Handoff-Zustellung annehmen")
+	for _, tt := range tests {
+		t.Run(tt.tool, func(t *testing.T) {
+			observed := SessionObservation{
+				SessionID: "target", Availability: ObservationAvailable, Presence: SessionPresencePresent,
+				ContentKnown: true, Tool: tt.tool, Status: StatusIdle, Content: tt.content,
+			}
+			if err := validateHandoffEnqueueTarget(session, observed); err == nil {
+				t.Fatalf("%s darf noch kein Handoff-Ziel sein", tt.tool)
+			}
+			if err := validateHandoffDeliveryReady("ziel", promptTargetObservationFromSession(observed)); err == nil {
+				t.Fatalf("%s darf keine Handoff-Zustellung annehmen", tt.tool)
+			}
+		})
 	}
 }
 

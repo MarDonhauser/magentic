@@ -77,11 +77,12 @@ var shellCommands = map[string]bool{
 }
 
 const (
-	AgentToolClaude  = "claude"
-	AgentToolCodex   = "codex"
-	AgentToolGemini  = "gemini"
-	AgentToolCopilot = "copilot"
-	AgentToolBash    = "bash"
+	AgentToolClaude      = "claude"
+	AgentToolCodex       = "codex"
+	AgentToolGemini      = "gemini"
+	AgentToolCopilot     = "copilot"
+	AgentToolAntigravity = "antigravity"
+	AgentToolBash        = "bash"
 )
 
 // DetectAgentTool translates the command tmux reports for a pane into the

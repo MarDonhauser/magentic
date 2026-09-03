@@ -84,7 +84,7 @@ func TestCodexReachesFirstClassFidelity(t *testing.T) {
 // Ein fremder Bildschirm darf nie als idle durchgehen: Magentic würde ihn
 // sonst als arbeitsbereit melden und Nachrichten hineinschicken.
 func TestUnfamiliarPaneStaysUnknown(t *testing.T) {
-	for _, id := range []string{"codex", "copilot", "gemini"} {
+	for _, id := range []string{"codex", "copilot", "gemini", "antigravity"} {
 		kind, _ := agentKindForID(id)
 		evaluated := evaluateAgentKind(kind, "irgendein fremder Bildschirm ohne bekannte Merkmale")
 		if evaluated.Matched {
@@ -122,6 +122,43 @@ func TestGeminiStaysUnknownAndRefusesInput(t *testing.T) {
 		t.Fatalf("Gemini-Eingabe = %q, want %q", got, promptInputUnknown)
 	}
 	if err := validatePromptTargetObservation("gemini", promptTargetObservationFromSession(observed)); err == nil {
+		t.Fatal("eine unbeobachtete Agent-Art darf keinen Prompt bekommen")
+	}
+}
+
+// Antigravity trägt denselben Vertrag wie Gemini CLI: versioniert und
+// startbar, aber ohne aufgenommene Bildschirme bleibt der Status unbekannt
+// und es geht nichts automatisch in die Session hinein.
+func TestAntigravityStaysUnknownAndRefusesInput(t *testing.T) {
+	kind, ok := agentKindForID("antigravity")
+	if !ok {
+		t.Fatal("kein Antigravity-Manifest")
+	}
+	if kind.screensRecorded {
+		t.Fatal("Antigravity-Manifest behauptet aufgenommene Bildschirme")
+	}
+	if kind.observedVersion == "" {
+		t.Fatal("Antigravity-Manifest nennt keine beobachtete Version")
+	}
+	resolved := resolveSessionStatus(statusInput{
+		session:      Session{ID: "session-1", Name: "one"},
+		present:      true,
+		paneCommand:  "agy",
+		content:      "> Type your message\nDo you want to run this command?\n❯ 1. Yes\n",
+		contentKnown: true,
+		now:          time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC),
+	})
+	if resolved.Status != StatusUnknown || resolved.Source != StatusSourceNone {
+		t.Fatalf("Antigravity-Status = %v aus %q, want unbekannt", resolved.Status.Label(), resolved.Source)
+	}
+	observed := SessionObservation{
+		Availability: ObservationAvailable, Presence: SessionPresencePresent, ContentKnown: true,
+		Tool: AgentToolAntigravity, Status: resolved.Status, Content: "> Type your message",
+	}
+	if got := promptInputStateFromObservation(observed); got != promptInputUnknown {
+		t.Fatalf("Antigravity-Eingabe = %q, want %q", got, promptInputUnknown)
+	}
+	if err := validatePromptTargetObservation("antigravity", promptTargetObservationFromSession(observed)); err == nil {
 		t.Fatal("eine unbeobachtete Agent-Art darf keinen Prompt bekommen")
 	}
 }

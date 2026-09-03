@@ -489,6 +489,22 @@ func agentKindForID(id string) (*agentKind, bool) {
 	return kind, ok
 }
 
+// agentKindForTool resolves a canonical tool identity — what DetectAgentTool
+// reports — to its manifest. Tool and pane command coincide for most vendors,
+// but not for all (agy runs Antigravity), so raw pane-command matching stays
+// the fallback rather than the only path.
+func agentKindForTool(tool string) (*agentKind, bool) {
+	needle := strings.ToLower(strings.TrimSpace(tool))
+	if needle != "" {
+		for _, kind := range loadedAgentKinds().ordered {
+			if strings.ToLower(strings.TrimSpace(kind.tool)) == needle {
+				return kind, true
+			}
+		}
+	}
+	return agentKindForPaneCommand(tool)
+}
+
 func normalizedAgentPaneCommand(command string) string {
 	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(command)), "-")
 }

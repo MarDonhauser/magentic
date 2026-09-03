@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"time"
 
 	"magentic/core"
@@ -106,6 +107,13 @@ func (a *App) hookReportLoop() {
 }
 
 func (a *App) applyHookReportsOnce() bool {
+	// Without pending hook reports there is nothing to refine. The file only
+	// exists while hooks are installed and only has content right after an
+	// agent reported, so in the common case this is one stat call instead of
+	// a Registry load plus a snapshot clone five times a second.
+	if info, err := os.Stat(core.HookReportPath()); err != nil || info.Size() == 0 {
+		return false
+	}
 	st, err := core.LoadState()
 	if err != nil {
 		return false

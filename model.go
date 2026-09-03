@@ -89,12 +89,19 @@ type tuiRepositoryReader interface {
 
 type tickMsg time.Time
 type repoTickMsg time.Time
+type diskTickMsg time.Time
 
 // observationMsg carries the cheap tmux pass, repositoryMsg the expensive git
 // pass. Both are partially filled pollResult values that Update merges into the
 // model's one coherent pollResult.
 type observationMsg pollResult
 type repositoryMsg pollResult
+
+// diskMsg carries the slow file-backed facts: the Registry file on disk, the
+// Zeitgeist file, and externally created tmux runtimes. They change rarely (a
+// registry write, a timer action, a hand-made tmux session), so they ride
+// along with the slow cadence instead of every 2s observation.
+type diskMsg pollResult
 type previewMsg struct {
 	key          tuiSessionKey
 	observation  core.SessionObservation
@@ -141,6 +148,7 @@ type model struct {
 	height         int
 	pollBusy       bool
 	repoBusy       bool
+	diskBusy       bool
 	previewPending    bool
 	previewGeneration int
 	inbox             core.AttentionInbox
@@ -257,24 +265,34 @@ func (m *model) moveInboxCursor(delta int) {
 	m.inboxCursor = next
 }
 
-func (m model) orphanAgents() []Agent {
-	var out []Agent
-	for _, a := range m.state.Agents {
-		if a.Project == "" || m.state.ProjectByName(a.Project) == nil {
-			out = append(out, a)
-		}
-	}
-	return out
-}
-
-func (m model) sortAgents(agents []Agent) []Agent {
-	sort.SliceStable(agents, func(i, j int) bool {
-		return statusRank(m.statusFor(agents[i])) < statusRank(m.statusFor(agents[j]))
-	})
-	return agents
-}
-
 func (m model) rows() []treeRow {
+	if m.state == nil {
+		return nil
+	}
+	agents := m.state.Agents
+	// One pass over the Sessions: bucket indices per Project, remember the
+	// orphans, and resolve every status rank once. The previous shape asked
+	// AgentsFor (one full scan plus one copy per Project) and then paid a map
+	// lookup with a freshly built key per status comparison while sorting.
+	ranks := make([]int, len(agents))
+	for i := range agents {
+		ranks[i] = statusRank(m.statusForIndex(agents[i]))
+	}
+	knownProjects := make(map[string]int, len(m.state.Projects))
+	for i := range m.state.Projects {
+		knownProjects[m.state.Projects[i].Name] = i
+	}
+	buckets := make(map[string][]int, len(m.state.Projects))
+	var orphans []int
+	for i := range agents {
+		if name := agents[i].Project; name != "" {
+			if _, ok := knownProjects[name]; ok {
+				buckets[name] = append(buckets[name], i)
+				continue
+			}
+		}
+		orphans = append(orphans, i)
+	}
 	var rows []treeRow
 	for i := range m.state.Projects {
 		p := &m.state.Projects[i]
@@ -282,17 +300,33 @@ func (m model) rows() []treeRow {
 		if m.collapsed[p.Name] {
 			continue
 		}
-		for _, a := range m.sortAgents(m.state.AgentsFor(p.Name)) {
-			rows = append(rows, treeRow{kind: rowAgent, agent: a, project: p})
-		}
+		rows = appendAgentRows(rows, agents, buckets[p.Name], ranks, p)
 	}
-	if orphans := m.orphanAgents(); len(orphans) > 0 {
+	if len(orphans) > 0 {
 		rows = append(rows, treeRow{kind: rowProject, project: nil})
 		if !m.collapsed[orphanKey] {
-			for _, a := range m.sortAgents(orphans) {
-				rows = append(rows, treeRow{kind: rowAgent, agent: a})
-			}
+			rows = appendAgentRows(rows, agents, orphans, ranks, nil)
 		}
+	}
+	return rows
+}
+
+// statusForIndex resolves the rank input for one Session without callers
+// paying sessionKey's allocation more than once per Session per tree build.
+func (m model) statusForIndex(session Agent) AgentStatus {
+	if observation, ok := m.poll.observed[sessionKey(session)]; ok {
+		return observation.Status
+	}
+	return StatusUnknown
+}
+
+func appendAgentRows(rows []treeRow, agents []Agent, indices []int, ranks []int, project *Project) []treeRow {
+	ordered := append([]int(nil), indices...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return ranks[ordered[i]] < ranks[ordered[j]]
+	})
+	for _, index := range ordered {
+		rows = append(rows, treeRow{kind: rowAgent, agent: agents[index], project: project})
 	}
 	return rows
 }
@@ -385,26 +419,42 @@ func repoTick() tea.Cmd {
 	return tea.Tick(repositoryInterval, func(t time.Time) tea.Msg { return repoTickMsg(t) })
 }
 
+func diskTick() tea.Cmd {
+	return tea.Tick(diskInterval, func(t time.Time) tea.Msg { return diskTickMsg(t) })
+}
+
 const (
 	tuiPollTimeout = 5 * time.Second
 	// The tmux pass is cheap enough to run continuously; one git pass costs
 	// several hundred milliseconds across every Project and Worktree, so it runs
-	// on its own slower cadence and additionally after every action.
+	// on its own slower cadence and additionally after every action. The
+	// file-backed facts (Registry file, Zeitgeist file, external runtimes)
+	// change rarely, so they share the slow cadence instead of burdening every
+	// 2s observation with two file reads and an extra tmux listing.
 	observationInterval = 2 * time.Second
 	repositoryInterval  = 10 * time.Second
+	diskInterval        = 10 * time.Second
 )
 
 func observeCmd(state State) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), tuiPollTimeout)
 		defer cancel()
-		res := collectObservationFacts(ctx, state, core.Observe)
+		return observationMsg(collectObservationFacts(ctx, state, core.Observe))
+	}
+}
+
+func diskCmd(state State) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), tuiPollTimeout)
+		defer cancel()
+		var res pollResult
 		res.discovery = discoverNew(ctx, &state)
 		res.zeitgeist = zeitgeistInfo()
 		if disk, err := LoadState(); err == nil {
 			res.diskState = disk
 		}
-		return observationMsg(res)
+		return diskMsg(res)
 	}
 }
 
@@ -610,13 +660,13 @@ func (m model) statusFor(session Agent) AgentStatus {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(m.pollNow(), tick(), repoTick(), fetchUsageCmd(), usageTick())
+	return tea.Batch(m.pollNow(), tick(), repoTick(), diskTick(), fetchUsageCmd(), usageTick())
 }
 
-// pollNow refreshes both Modules at once. Actions call it because they change
-// runtime and repository facts together.
+// pollNow refreshes all Modules at once. Actions call it because they change
+// runtime, repository and Registry facts together.
 func (m model) pollNow() tea.Cmd {
-	return tea.Batch(observeCmd(*m.state), repositoryCmd(*m.state))
+	return tea.Batch(observeCmd(*m.state), repositoryCmd(*m.state), diskCmd(*m.state))
 }
 
 // previewNow schedules a preview instead of starting one. Scrolling moves the
@@ -682,6 +732,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.repoBusy = true
 		return m, tea.Batch(repositoryCmd(*m.state), repoTick())
+	case diskTickMsg:
+		if m.diskBusy {
+			return m, diskTick()
+		}
+		m.diskBusy = true
+		return m, tea.Batch(diskCmd(*m.state), diskTick())
 	case previewDueMsg:
 		if msg.generation != m.previewGeneration {
 			return m, nil
@@ -714,18 +770,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case observationMsg:
 		m.pollBusy = false
-		var selName string
-		if a := m.selectedAgent(); a != nil {
-			selName = a.Name
-		}
 		m.poll.observation = msg.observation
 		m.poll.observed = msg.observed
 		// Die Steuer-API leitet ihre Ereignisse aus genau diesem Durchlauf ab.
 		publishControlObservation(m.state.Agents, msg.observation)
+		m.executeAttentionPlan()
+		return m, nil
+	case diskMsg:
+		m.diskBusy = false
+		var selName string
+		if a := m.selectedAgent(); a != nil {
+			selName = a.Name
+		}
 		m.poll.discovery = msg.discovery
 		m.poll.diskState = msg.diskState
 		m.poll.zeitgeist = msg.zeitgeist
-		m.executeAttentionPlan()
 		if m.poll.diskState != nil {
 			m.state = m.poll.diskState
 		}
@@ -836,7 +895,11 @@ func (m model) maxAgentNameLen() int {
 }
 
 func (m model) treeWidth() int {
-	w := m.maxAgentNameLen() + 27
+	return m.treeWidthWithNameW(m.maxAgentNameLen())
+}
+
+func (m model) treeWidthWithNameW(nameW int) int {
+	w := nameW + 27
 	for _, p := range m.state.Projects {
 		if l := len([]rune(p.Name)) + 14; l > w {
 			w = l

@@ -779,7 +779,7 @@ func validatePromptTargetObservation(name string, observed promptTargetObservati
 		return fmt.Errorf("Terminalinhalt der Ziel-Session %q ist nicht bekannt", name)
 	}
 	switch observed.Tool {
-	case AgentToolClaude, AgentToolCodex, AgentToolGemini, AgentToolCopilot:
+	case AgentToolClaude, AgentToolCodex, AgentToolGemini, AgentToolCopilot, AgentToolAntigravity:
 	default:
 		return fmt.Errorf("in Ziel-Session %q läuft kein unterstütztes KI-Tool mehr", name)
 	}

@@ -21,6 +21,7 @@ func TestDetectAgentTool(t *testing.T) {
 		{name: "Zweiteilige Version bleibt neutral", command: "2.1", want: ""},
 		{name: "Gemini", command: "gemini", want: "gemini"},
 		{name: "GitHub Copilot", command: "copilot", want: "copilot"},
+		{name: "Antigravity", command: "agy", want: "antigravity"},
 		{name: "Terminal gewinnt", command: "codex", term: true, want: "bash"},
 		{name: "Unbekannte Agent-Session bleibt neutral", command: "node", want: ""},
 	}
@@ -157,6 +158,10 @@ func TestVendorStartCommands(t *testing.T) {
 		{name: "copilot resume ohne Run", vendor: AgentVendorCopilot, mode: "resume", want: "copilot --name 'mgt-navi' --continue"},
 		{name: "gemini neu", vendor: AgentVendorGemini, mode: "new", want: "gemini"},
 		{name: "gemini resume", vendor: AgentVendorGemini, runID: "abc-123", mode: "resume", want: "gemini"},
+		{name: "antigravity neu", vendor: AgentVendorAntigravity, mode: "new", want: "agy"},
+		{name: "antigravity neu mit Run", vendor: AgentVendorAntigravity, runID: "abc-123", mode: "new", want: "agy"},
+		{name: "antigravity resume mit Run", vendor: AgentVendorAntigravity, runID: "abc-123", mode: "resume", want: "agy --conversation 'abc-123'"},
+		{name: "antigravity resume ohne Run", vendor: AgentVendorAntigravity, mode: "resume", want: "agy --continue"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -181,10 +186,11 @@ func TestVendorStartCommands(t *testing.T) {
 
 func TestRunIDOrigin(t *testing.T) {
 	supplied := map[AgentVendor]bool{
-		AgentVendorClaude:  true,
-		AgentVendorCopilot: true,
-		AgentVendorCodex:   false,
-		AgentVendorGemini:  false,
+		AgentVendorClaude:      true,
+		AgentVendorCopilot:     true,
+		AgentVendorCodex:       false,
+		AgentVendorGemini:      false,
+		AgentVendorAntigravity: false,
 	}
 	for vendor, want := range supplied {
 		provider, ok := providerForVendor(vendor)
@@ -243,6 +249,7 @@ func TestProvisionRecordsVendorAndRun(t *testing.T) {
 		{name: "ohne Angabe wird Claude", vendor: "", wantRuns: 1, wantLegacy: true},
 		{name: "Copilot bekommt eine Run-Ref", vendor: AgentVendorCopilot, wantRuns: 1},
 		{name: "Codex startet ohne Run-Ref", vendor: AgentVendorCodex, wantRuns: 0},
+		{name: "Antigravity startet ohne Run-Ref", vendor: AgentVendorAntigravity, wantRuns: 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

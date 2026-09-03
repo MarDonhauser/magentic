@@ -47,15 +47,17 @@ func TestTimelineUsesNormalizedWorkHistoryForAllProviders(t *testing.T) {
 			{ID: core.SessionID("codex-session"), Name: "Codex agent", ProjectID: core.ProjectID("project-id"), Project: "stale", Dir: projectPath, AgentRuns: []core.AgentRunRef{{Vendor: core.AgentVendorCodex, ExternalID: "codex-run"}}},
 			{ID: core.SessionID("gemini-session"), Name: "Gemini agent", ProjectID: core.ProjectID("project-id"), Project: "stale", Dir: projectPath, AgentRuns: []core.AgentRunRef{{Vendor: core.AgentVendorGemini, ExternalID: "gemini-run"}}},
 			{ID: core.SessionID("copilot-session"), Name: "Copilot agent", ProjectID: core.ProjectID("project-id"), Project: "stale", Dir: projectPath, AgentRuns: []core.AgentRunRef{{Vendor: core.AgentVendorCopilot, ExternalID: "copilot-run"}}},
+			{ID: core.SessionID("antigravity-session"), Name: "Antigravity agent", ProjectID: core.ProjectID("project-id"), Project: "stale", Dir: projectPath, AgentRuns: []core.AgentRunRef{{Vendor: core.AgentVendorAntigravity, ExternalID: "antigravity-run"}}},
 		},
 	}
 	writeAppState(t, statePath, state)
 
 	now := time.Now().UTC()
-	claudeAt := now.Add(-4 * time.Minute).Format(time.RFC3339Nano)
-	codexAt := now.Add(-3 * time.Minute).Format(time.RFC3339Nano)
-	geminiAt := now.Add(-2 * time.Minute).Format(time.RFC3339Nano)
-	copilotAt := now.Add(-time.Minute).Format(time.RFC3339Nano)
+	claudeAt := now.Add(-5 * time.Minute).Format(time.RFC3339Nano)
+	codexAt := now.Add(-4 * time.Minute).Format(time.RFC3339Nano)
+	geminiAt := now.Add(-3 * time.Minute).Format(time.RFC3339Nano)
+	copilotAt := now.Add(-2 * time.Minute).Format(time.RFC3339Nano)
+	antigravityAt := now.Add(-time.Minute).Format(time.RFC3339Nano)
 	writeAppFixture(t, filepath.Join(home, ".claude", "projects", "stable", "claude-run.jsonl"), "{malformed}\n"+`{"type":"user","timestamp":"`+claudeAt+`","cwd":"`+projectPath+`","sessionId":"claude-run","message":{"content":"Claude prompt"}}`+"\n")
 	writeAppFixture(t, filepath.Join(codexHome, "sessions", "recent", "codex-run.jsonl"), strings.Join([]string{
 		`{"type":"session_meta","timestamp":"` + codexAt + `","payload":{"id":"codex-run","cwd":"` + projectPath + `"}}`,
@@ -69,13 +71,19 @@ func TestTimelineUsesNormalizedWorkHistoryForAllProviders(t *testing.T) {
 		`{"id":"child","type":"user.message","timestamp":"` + copilotAt + `","data":{"content":"delegated prompt","parentAgentTaskId":"child-run"}}`,
 		`{"id":"primary","type":"user.message","timestamp":"` + copilotAt + `","data":{"content":"Copilot prompt"}}`,
 	}, "\n")+"\n")
+	writeAppFixture(t, filepath.Join(home, ".gemini", "antigravity-cli", "history.jsonl"),
+		`{"conversationId":"antigravity-run","display":"Antigravity prompt","timestamp":1,"workspace":"`+projectPath+`"}`+"\n")
+	writeAppFixture(t, filepath.Join(home, ".gemini", "antigravity-cli", "brain", "antigravity-run", ".system_generated", "logs", "transcript.jsonl"), strings.Join([]string{
+		`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"` + antigravityAt + `","content":"<USER_REQUEST>\nAntigravity prompt\n</USER_REQUEST>"}`,
+		`{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"` + antigravityAt + `","content":"Antigravity output"}`,
+	}, "\n")+"\n")
 
 	got, err := (&App{}).Timeline()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Entries) != 4 {
-		t.Fatalf("Timeline entries = %d, want four normalized primary prompts: %#v", len(got.Entries), got)
+	if len(got.Entries) != 5 {
+		t.Fatalf("Timeline entries = %d, want five normalized primary prompts: %#v", len(got.Entries), got)
 	}
 	bySource := map[string]TimelineEntry{}
 	for _, entry := range got.Entries {
@@ -84,14 +92,15 @@ func TestTimelineUsesNormalizedWorkHistoryForAllProviders(t *testing.T) {
 			t.Fatalf("Timeline used stale name/path inference: %#v", entry)
 		}
 	}
-	if len(got.Sources) != 4 {
-		t.Fatalf("Timeline coverage = %#v, want all four providers", got.Sources)
+	if len(got.Sources) != 5 {
+		t.Fatalf("Timeline coverage = %#v, want all five providers", got.Sources)
 	}
 	want := map[string]struct{ agent, text string }{
-		timelineSourceClaude:  {"Claude agent", "Claude prompt"},
-		timelineSourceCodex:   {"Codex agent", "Codex prompt"},
-		timelineSourceGemini:  {"Gemini agent", "Gemini prompt"},
-		timelineSourceCopilot: {"Copilot agent", "Copilot prompt"},
+		timelineSourceClaude:      {"Claude agent", "Claude prompt"},
+		timelineSourceCodex:       {"Codex agent", "Codex prompt"},
+		timelineSourceGemini:      {"Gemini agent", "Gemini prompt"},
+		timelineSourceCopilot:     {"Copilot agent", "Copilot prompt"},
+		timelineSourceAntigravity: {"Antigravity agent", "Antigravity prompt"},
 	}
 	for source, expected := range want {
 		entry, ok := bySource[source]
@@ -99,7 +108,7 @@ func TestTimelineUsesNormalizedWorkHistoryForAllProviders(t *testing.T) {
 			t.Fatalf("%s entry = %#v", source, entry)
 		}
 	}
-	if strings.Contains(strings.Join([]string{got.Entries[0].Text, got.Entries[1].Text, got.Entries[2].Text, got.Entries[3].Text}, "|"), "delegated") {
+	if strings.Contains(strings.Join([]string{got.Entries[0].Text, got.Entries[1].Text, got.Entries[2].Text, got.Entries[3].Text, got.Entries[4].Text}, "|"), "delegated") {
 		t.Fatalf("Timeline included delegated coding-agent work: %#v", got)
 	}
 	search, err := (&App{}).SearchTranscripts("prompt")
@@ -113,13 +122,13 @@ func TestTimelineUsesNormalizedWorkHistoryForAllProviders(t *testing.T) {
 			t.Fatalf("search attribution = %#v", hit)
 		}
 	}
-	for _, provider := range []string{"Claude Code", "Codex", "Gemini CLI", "GitHub Copilot"} {
+	for _, provider := range []string{"Claude Code", "Codex", "Gemini CLI", "GitHub Copilot", "Antigravity"} {
 		if !providers[provider] {
 			t.Fatalf("SearchTranscripts omitted %s: %#v", provider, search.Hits)
 		}
 	}
-	if len(search.Sources) != 4 {
-		t.Fatalf("SearchTranscripts coverage = %#v, want all four providers", search.Sources)
+	if len(search.Sources) != 5 {
+		t.Fatalf("SearchTranscripts coverage = %#v, want all five providers", search.Sources)
 	}
 }
 

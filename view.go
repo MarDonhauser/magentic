@@ -49,24 +49,27 @@ func (p linePainter) paint(line string) string { return p.prefix + line + p.suff
 var paintDim = newLinePainter(styleDim)
 
 func statusStyle(s AgentStatus) lipgloss.Style {
-	switch s {
-	case StatusRunning:
-		return lipgloss.NewStyle().Foreground(colRunning)
-	case StatusAgents:
-		return lipgloss.NewStyle().Foreground(colAgents)
-	case StatusShell:
-		return lipgloss.NewStyle().Foreground(colAgents)
-	case StatusBlocked:
-		return lipgloss.NewStyle().Foreground(colBlocked).Bold(true)
-	case StatusDone:
-		return lipgloss.NewStyle().Foreground(colAgents)
-	case StatusDead:
-		return lipgloss.NewStyle().Foreground(colDead)
-	case StatusTerm:
-		return lipgloss.NewStyle().Foreground(colTerm)
-	default:
-		return lipgloss.NewStyle().Foreground(colIdle)
+	if style, ok := statusStyleCache[s]; ok {
+		return style
 	}
+	return statusStyleCache[StatusIdle]
+}
+
+// statusStyleCache keeps one Style per status for the render hot path.
+// Building a Style per line (lipgloss.NewStyle().Foreground(...)) allocates on
+// every agent line of every frame; these values are fixed, so they are built
+// once. Style is used by value, copying one is cheap.
+var statusStyleCache = map[AgentStatus]lipgloss.Style{
+	StatusRunning: lipgloss.NewStyle().Foreground(colRunning),
+	StatusAgents:  lipgloss.NewStyle().Foreground(colAgents),
+	StatusShell:   lipgloss.NewStyle().Foreground(colAgents),
+	StatusBlocked: lipgloss.NewStyle().Foreground(colBlocked).Bold(true),
+	StatusDone:    lipgloss.NewStyle().Foreground(colAgents),
+	StatusDead:    lipgloss.NewStyle().Foreground(colDead),
+	StatusTerm:    lipgloss.NewStyle().Foreground(colTerm),
+	StatusIdle:    lipgloss.NewStyle().Foreground(colIdle),
+	StatusExited:  lipgloss.NewStyle().Foreground(colIdle),
+	StatusUnknown: lipgloss.NewStyle().Foreground(colIdle),
 }
 
 // printableASCII reports whether every byte is a printable ASCII character. For
@@ -121,15 +124,86 @@ func (m model) layout() (treeW, detailW, innerH int) {
 	return
 }
 
+func (m model) layoutWithTreeW(treeW int) (detailW, innerH int) {
+	innerH = m.height - 4
+	if innerH < 3 {
+		innerH = 3
+	}
+	detailW = m.width - treeW
+	if detailW < 20 {
+		detailW = 20
+	}
+	return
+}
+
+// frameRows is one View's coherent tree: the rows, the name width every agent
+// line pads to, the per-project session counts, and the selected row. View
+// computes it once and hands it down, so a frame builds and sorts the tree a
+// single time instead of once per panel plus once per selection lookup.
+type frameRows struct {
+	rows    []treeRow
+	nameW   int
+	counts  map[string]int
+	orphans int
+	sel     *treeRow
+}
+
+func (m model) frame() frameRows {
+	rows := m.rows()
+	f := frameRows{rows: rows, nameW: m.maxAgentNameLen()}
+	if m.state != nil {
+		known := make(map[string]bool, len(m.state.Projects))
+		for i := range m.state.Projects {
+			known[m.state.Projects[i].Name] = true
+		}
+		f.counts = make(map[string]int, len(m.state.Projects))
+		for i := range m.state.Agents {
+			if name := m.state.Agents[i].Project; name != "" && known[name] {
+				f.counts[name]++
+			} else {
+				f.orphans++
+			}
+		}
+	}
+	if m.cursor >= 0 && m.cursor < len(rows) {
+		r := rows[m.cursor]
+		f.sel = &r
+	}
+	return f
+}
+
+func (f frameRows) selectedAgent() *Agent {
+	if f.sel != nil && f.sel.kind == rowAgent {
+		return &f.sel.agent
+	}
+	return nil
+}
+
+func (m model) contextProjectIn(rows []treeRow) *Project {
+	if m.cursor < 0 || m.cursor >= len(rows) {
+		return nil
+	}
+	r := rows[m.cursor]
+	if r.project != nil {
+		return r.project
+	}
+	if r.kind == rowAgent && r.agent.Project != "" {
+		return m.state.ProjectByName(r.agent.Project)
+	}
+	return nil
+}
+
 func (m model) View() string {
 	if m.width == 0 {
 		return "starte…"
 	}
-	treeW, detailW, innerH := m.layout()
+	f := m.frame()
+	treeW := m.treeWidthWithNameW(f.nameW)
+	detailW, innerH := m.layoutWithTreeW(treeW)
 
 	header := m.renderHeader()
-	detailContent := m.renderDetails(detailW-4, innerH)
-	tree := m.renderPanel(m.renderTree(treeW-4, innerH), treeW-2, innerH, true)
+	detailContent := m.renderDetailsIn(f, detailW-4, innerH)
+	tree := m.renderPanel(m.renderTreeIn(f, treeW-4, innerH), treeW-2, innerH, true)
 	details := m.renderPanel(detailContent, detailW-2, innerH, false)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, tree, details)
 	footer := m.renderFooter()
@@ -185,13 +259,17 @@ func (m model) renderHeader() string {
 }
 
 func (m model) projectLine(r treeRow, w int) string {
+	return m.projectLineIn(m.frame(), r, w)
+}
+
+func (m model) projectLineIn(f frameRows, r treeRow, w int) string {
 	name := "(ohne projekt)"
-	count := len(m.orphanAgents())
+	count := f.orphans
 	key := orphanKey
 	dirty := ""
 	if r.project != nil {
 		name = r.project.Name
-		count = len(m.state.AgentsFor(r.project.Name))
+		count = f.counts[r.project.Name]
 		key = r.project.Name
 		repository := m.repositoryFactsForProject(*r.project)
 		if repository.presence == core.RepositoryKnown {
@@ -216,9 +294,11 @@ func (m model) projectLine(r treeRow, w int) string {
 }
 
 func (m model) agentLine(a Agent, w int) string {
-	st := m.statusFor(a)
+	return m.agentLineWith(a, w, m.maxAgentNameLen(), m.statusFor(a))
+}
+
+func (m model) agentLineWith(a Agent, w, nameW int, st AgentStatus) string {
 	icon := statusStyle(st).Render(st.Icon())
-	nameW := m.maxAgentNameLen()
 	name := pad(trunc(a.Name, nameW), nameW+1)
 	status := statusStyle(st).Render(pad(st.Label(), 8))
 	lastActive := a.CreatedAt
@@ -243,7 +323,11 @@ func (m model) agentLine(a Agent, w int) string {
 }
 
 func (m model) renderTree(w, h int) string {
-	rows := m.rows()
+	return m.renderTreeIn(m.frame(), w, h)
+}
+
+func (m model) renderTreeIn(f frameRows, w, h int) string {
+	rows := f.rows
 	var lines []string
 	if len(rows) == 0 {
 		lines = []string{styleDim.Render("Keine Projekte."), "", styleDim.Render("p = Projekt hinzufügen")}
@@ -252,9 +336,9 @@ func (m model) renderTree(w, h int) string {
 		var line string
 		switch r.kind {
 		case rowProject:
-			line = m.projectLine(r, w)
+			line = m.projectLineIn(f, r, w)
 		case rowAgent:
-			line = m.agentLine(r.agent, w)
+			line = m.agentLineWith(r.agent, w, f.nameW, m.statusFor(r.agent))
 		case rowSep:
 			line = styleSection.Render(r.label) + " " + styleDim.Render(strings.Repeat("─", max(0, w-len([]rune(r.label))-1)))
 			lines = append(lines, trunc(line, w))
@@ -340,10 +424,14 @@ func (m model) usageLines(w int) []string {
 }
 
 func (m model) renderDetails(w, h int) string {
+	return m.renderDetailsIn(m.frame(), w, h)
+}
+
+func (m model) renderDetailsIn(f frameRows, w, h int) string {
 	if m.inboxOpen {
 		return strings.Join(m.inboxLines(w, h), "\n")
 	}
-	lines, _ := m.detailContent(w, h)
+	lines, _ := m.detailContentIn(f, w, h)
 	return strings.Join(lines, "\n")
 }
 
@@ -444,8 +532,27 @@ func inboxReason(entry core.AttentionInboxEntry) string {
 }
 
 func (m model) detailContent(w, h int) ([]string, int) {
-	a := m.selectedAgent()
-	proj := m.contextProject()
+	return m.detailContentIn(m.frame(), w, h)
+}
+
+func (m model) detailContentIn(f frameRows, w, h int) ([]string, int) {
+	a := f.selectedAgent()
+	var proj *Project
+	if a == nil {
+		proj = m.contextProjectIn(f.rows)
+	} else if f.sel != nil {
+		proj = f.sel.project
+		if proj == nil && a.Project != "" {
+			proj = m.state.ProjectByName(a.Project)
+		}
+	}
+	return m.detailBody(a, proj, w, h)
+}
+
+// detailBody renders the right panel for the given selection. The frame-based
+// callers resolve the selection from their one shared tree; the plain
+// detailContent wrapper keeps the event path (click hit-testing) working.
+func (m model) detailBody(a *Agent, proj *Project, w, h int) ([]string, int) {
 	var lines []string
 	previewStart := -1
 	add := func(s string) { lines = append(lines, trunc(s, w)) }
@@ -505,15 +612,7 @@ func (m model) detailContent(w, h int) ([]string, int) {
 			previewStart = len(lines)
 			label := "Terminal · klick zum Öffnen "
 			add(styleSection.Render("Terminal") + styleDim.Render(" · klick zum Öffnen "+strings.Repeat("─", max(0, w-len([]rune(label))-9))))
-			pv := strings.Split(strings.TrimRight(preview, "\n"), "\n")
-			if len(pv) > remaining {
-				pv = pv[len(pv)-remaining:]
-			}
-			for _, l := range pv {
-				// Truncate first, then colour: the raw line keeps trunc on its
-				// ASCII fast path and the painter never measures at all.
-				lines = append(lines, paintDim.paint(trunc(strings.ReplaceAll(l, "\t", "  "), w)))
-			}
+		appendPreviewTail(&lines, preview, remaining, w)
 		} else if remaining > 3 && observed && observation.Presence == core.SessionPresencePresent && !previewKnown {
 			add(styleSection.Render("Terminal"))
 			add(" " + styleDim.Render("Inhalt unbekannt"))
@@ -523,6 +622,33 @@ func (m model) detailContent(w, h int) ([]string, int) {
 		lines = lines[:h]
 	}
 	return lines, previewStart
+}
+
+// appendPreviewTail appends at most maxLines trailing lines of the terminal
+// preview. It scans for the last newlines first and splits only that suffix,
+// so a 200-line capture shown in a 40-line panel splits 40 lines instead of
+// 200 on every frame.
+func appendPreviewTail(lines *[]string, preview string, maxLines, w int) {
+	trimmed := strings.TrimRight(preview, "\n")
+	start := 0
+	seen := 0
+	for i := len(trimmed) - 1; i >= 0 && seen < maxLines; i-- {
+		if trimmed[i] == '\n' {
+			seen++
+			if seen == maxLines {
+				start = i + 1
+				break
+			}
+		}
+	}
+	for _, l := range strings.Split(trimmed[start:], "\n") {
+		if strings.Contains(l, "\t") {
+			l = strings.ReplaceAll(l, "\t", "  ")
+		}
+		// Truncate first, then colour: the raw line keeps trunc on its
+		// ASCII fast path and the painter never measures at all.
+		*lines = append(*lines, paintDim.paint(trunc(l, w)))
+	}
 }
 
 type tuiRepositoryFacts struct {

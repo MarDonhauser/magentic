@@ -39,6 +39,11 @@ type App struct {
 	observationAt    time.Time
 	observationInput map[core.SessionID]string
 	observeSessions  func(context.Context, []core.Session) core.ObservationSnapshot
+	surveyMu         sync.Mutex
+	surveyResult     core.RepositoriesSurvey
+	surveyErr        error
+	surveyAt         time.Time
+	surveyFP         string
 	startTerm        func(*exec.Cmd, *pty.Winsize) (*os.File, error)
 }
 
@@ -143,7 +148,46 @@ func (a *App) Overview(fresh bool) (core.Overview, error) {
 		return core.Overview{}, err
 	}
 	snapshot := a.observationFor(st.Agents, fresh)
-	return core.BuildOverviewFromObservation(st, snapshot), nil
+	survey, surveyErr := a.cachedSurvey(st.Projects, fresh)
+	return core.BuildOverviewWithSurvey(st, snapshot, survey, surveyErr), nil
+}
+
+// overviewSurveyTTL bounds how often the 3s Overview poll takes a fresh Git
+// Survey. A Survey spawns one process per Project plus one per Worktree, so
+// reusing a recent one for the polls in between is what keeps the app quiet.
+// An explicit refresh (fresh=true) always surveys anew.
+const overviewSurveyTTL = 10 * time.Second
+
+func (a *App) cachedSurvey(projects []core.Project, fresh bool) (core.RepositoriesSurvey, error) {
+	fingerprint := surveyFingerprint(projects)
+	if !fresh {
+		a.surveyMu.Lock()
+		cached, cachedErr, cachedAt, cachedFP := a.surveyResult, a.surveyErr, a.surveyAt, a.surveyFP
+		a.surveyMu.Unlock()
+		if time.Since(cachedAt) <= overviewSurveyTTL && cachedFP == fingerprint {
+			return cached, cachedErr
+		}
+	}
+	survey, err := core.NewRepositories().Survey(context.Background(), append([]core.Project(nil), projects...))
+	a.surveyMu.Lock()
+	a.surveyResult, a.surveyErr, a.surveyAt, a.surveyFP = survey, err, time.Now(), fingerprint
+	a.surveyMu.Unlock()
+	return survey, err
+}
+
+func surveyFingerprint(projects []core.Project) string {
+	var b strings.Builder
+	for _, p := range projects {
+		b.WriteString(string(p.ID))
+		b.WriteByte(0)
+		b.WriteString(p.Name)
+		b.WriteByte(0)
+		b.WriteString(p.Path)
+		b.WriteByte(0)
+		b.WriteString(p.MainBranch)
+		b.WriteByte(0)
+	}
+	return b.String()
 }
 
 // Inbox returns the blocked inbox of the last attention cycle: every Session

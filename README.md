@@ -107,7 +107,7 @@ es keins — das zeigt der Punkt an der Session selbst schon deutlich genug.
   Coding-Agent-Anbieter. Treffer behalten Anbieter und bekannte
   Projektzuordnung; eine unbekannte Zuordnung wird ausdrücklich so angezeigt.
 - **Verlauf** — führt die eigenen Prompts der letzten sieben Tage aus den
-  lokalen Sessions von **Claude Code, Codex, Gemini CLI und GitHub Copilot**
+  lokalen Sessions von **Claude Code, Codex, Gemini CLI, GitHub Copilot und Antigravity**
   chronologisch zusammen. Quelle und Projekt stehen direkt am Eintrag; bekannte
   magentic-Sessions lassen sich weiterhin per Klick öffnen. Codex berücksichtigt
   dabei auch ein abweichendes `CODEX_HOME`.
@@ -127,7 +127,7 @@ es keins — das zeigt der Punkt an der Session selbst schon deutlich genug.
 - **Statistik** (`⌘⇧S`) — Aktivität, Tokens, bekannte Kosten, Cache-Quote,
   Commits, Projekte, Modelle und eine Heatmap Wochentag × Stunde. Sie nutzt
   denselben normalisierten WorkHistory-Index wie der Verlauf und zeigt für
-  Claude Code, Codex, Gemini CLI und GitHub Copilot, ob die jeweilige Quelle
+  Claude Code, Codex, Gemini CLI, GitHub Copilot und Antigravity, ob die jeweilige Quelle
   vollständig, teilweise oder gar nicht lesbar war. Der Index liegt privat
   neben dem State unter `work-history/index.json` und wird inkrementell
   aktualisiert.
@@ -339,7 +339,7 @@ einen offenen Dialog schreiben.
 
 Welche Bildschirmzeile welchen Status bedeutet, steht nicht im Go-Code, sondern
 in einem Manifest pro Agent-Art. Magentic bringt Manifeste für Claude Code,
-Codex, GitHub Copilot und Gemini CLI mit (`core/agents/*.yaml`, in die Binary
+Codex, GitHub Copilot, Gemini CLI und Antigravity mit (`core/agents/*.yaml`, in die Binary
 eingebettet). Eigene Manifeste liegen in `~/.config/magentic/agents/*.yaml`;
 eine Datei dort ersetzt eine mitgelieferte Agent-Art mit derselben `kind`
 vollständig oder bringt eine neue hinzu.
@@ -394,8 +394,8 @@ abgeleitet, dass der ruhende Bildschirm seit dem letzten Blick neu ist.
 
 Ein ungültiges Manifest wird mit Begründung abgelehnt; die mitgelieferte
 Agent-Art bleibt dann in Kraft. Eine Agent-Art, für die nur ein kaputtes
-Manifest existiert, bleibt unbekannt statt idle. Gemini CLI ist ein
-mitgeliefertes Beispiel für `screens_recorded: false`: startbar und
+Manifest existiert, bleibt unbekannt statt idle. Gemini CLI und Antigravity sind
+mitgelieferte Beispiele für `screens_recorded: false`: startbar und
 verwaltbar, aber ohne gedeuteten Status, bis jemand seine Bildschirme
 aufnimmt.
 
@@ -456,7 +456,7 @@ Die gemeinsame Logik in `core/` ist entlang weniger tiefer Module organisiert:
   Worktree-Zustand; fehlgeschlagene oder fehlerhafte Git-Antworten gelten nie als
   „sauber“. Desktop-Aktionen lösen opake WorktreeRefs frisch auf.
 - **WorkHistory** normalisiert lokale Verläufe von Claude Code, Codex, Gemini
-  CLI und GitHub Copilot einmal für Verlauf, Suche, Links und Statistik.
+  CLI, GitHub Copilot und Antigravity einmal für Verlauf, Suche, Links und Statistik.
 - **Specifications** adaptiert die unterstützten Spec-Layouts, vergibt stabile
   SpecificationRefs, hält physische Projektgrenzen ein und verbindet laufende
   Sessions nur über deren dauerhafte Referenz. Das Board scannt Archive nur
@@ -506,8 +506,8 @@ Migrationsgrenzen.
   nur ein opakes Start-Token, das Specifications unmittelbar vor dem Start
   erneut auflöst.
 - Die **Statistik** liest Provider-Aktivität aus demselben normalisierten
-  WorkHistory-Index wie Verlauf, Suche und Links. Claude Code, Codex, Gemini CLI
-  und GitHub Copilot werden durch private Adapter vereinheitlicht; unlesbare
+  WorkHistory-Index wie Verlauf, Suche und Links. Claude Code, Codex, Gemini CLI,
+  GitHub Copilot und Antigravity werden durch private Adapter vereinheitlicht; unlesbare
   Quellen und nicht bepreisbare Modelle bleiben als teilweise oder unbekannt
   sichtbar. Git-Commits und Identität kommen über das Repositories-Modul.
 

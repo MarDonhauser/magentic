@@ -1,0 +1,15 @@
+# Antigravity (Google, Binary `agy` 1.1.5). Seine Bildschirme sind auf keiner
+# Maschine beobachtet worden, auf der Magentic entwickelt wurde — vor jeder
+# Nutzung verlangt agy einen interaktiven Google-OAuth-Login, den Magentic
+# nicht eigenmächtig durchführen kann. Solange niemand seine Bildschirme
+# aufnimmt, bleibt sein Status unbekannt: Magentic startet und verwaltet die
+# Session, tippt aber nichts hinein.
+kind: antigravity
+label: Antigravity
+tool: antigravity
+observed_version: "1.1.5"
+screens_recorded: false
+tail: 25
+
+pane_commands:
+  - regex: '^agy(-.*)?$'

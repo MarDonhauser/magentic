@@ -21,10 +21,11 @@ import (
 type HistoryProvider string
 
 const (
-	HistoryProviderClaude  HistoryProvider = "claude"
-	HistoryProviderCodex   HistoryProvider = "codex"
-	HistoryProviderGemini  HistoryProvider = "gemini"
-	HistoryProviderCopilot HistoryProvider = "copilot"
+	HistoryProviderClaude      HistoryProvider = "claude"
+	HistoryProviderCodex       HistoryProvider = "codex"
+	HistoryProviderGemini      HistoryProvider = "gemini"
+	HistoryProviderCopilot     HistoryProvider = "copilot"
+	HistoryProviderAntigravity HistoryProvider = "antigravity"
 )
 
 var historyProviders = []HistoryProvider{
@@ -32,6 +33,7 @@ var historyProviders = []HistoryProvider{
 	HistoryProviderCodex,
 	HistoryProviderGemini,
 	HistoryProviderCopilot,
+	HistoryProviderAntigravity,
 }
 
 func (p HistoryProvider) Label() string {
@@ -44,6 +46,8 @@ func (p HistoryProvider) Label() string {
 		return "Gemini CLI"
 	case HistoryProviderCopilot:
 		return "GitHub Copilot"
+	case HistoryProviderAntigravity:
+		return "Antigravity"
 	default:
 		return string(p)
 	}
@@ -240,6 +244,8 @@ func historyProviderFromAgentVendor(vendor AgentVendor) (HistoryProvider, bool) 
 		return HistoryProviderGemini, true
 	case AgentVendorCopilot:
 		return HistoryProviderCopilot, true
+	case AgentVendorAntigravity:
+		return HistoryProviderAntigravity, true
 	default:
 		return "", false
 	}

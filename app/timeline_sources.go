@@ -9,10 +9,11 @@ import (
 // These labels are part of the Wails DTO consumed by the existing desktop UI.
 // Provider parsing and source identity live in core.WorkHistory.
 const (
-	timelineSourceClaude  = "Claude Code"
-	timelineSourceCodex   = "Codex"
-	timelineSourceGemini  = "Gemini CLI"
-	timelineSourceCopilot = "GitHub Copilot"
+	timelineSourceClaude      = "Claude Code"
+	timelineSourceCodex       = "Codex"
+	timelineSourceGemini      = "Gemini CLI"
+	timelineSourceCopilot     = "GitHub Copilot"
+	timelineSourceAntigravity = "Antigravity"
 )
 
 // timelineEntries is deliberately a concrete transport copy. The desktop

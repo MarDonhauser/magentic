@@ -12,10 +12,11 @@ type SessionID string
 type AgentVendor string
 
 const (
-	AgentVendorClaude  AgentVendor = "claude"
-	AgentVendorCodex   AgentVendor = "codex"
-	AgentVendorGemini  AgentVendor = "gemini"
-	AgentVendorCopilot AgentVendor = "copilot"
+	AgentVendorClaude      AgentVendor = "claude"
+	AgentVendorCodex       AgentVendor = "codex"
+	AgentVendorGemini      AgentVendor = "gemini"
+	AgentVendorCopilot     AgentVendor = "copilot"
+	AgentVendorAntigravity AgentVendor = "antigravity"
 )
 
 type AgentRunRef struct {

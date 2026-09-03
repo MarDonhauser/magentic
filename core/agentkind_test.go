@@ -213,7 +213,7 @@ func TestUserManifestIntroducesUnsupportedKind(t *testing.T) {
 }
 
 func TestShippedManifestsLoadAndValidate(t *testing.T) {
-	for _, id := range []string{"claude", "codex", "copilot", "gemini"} {
+	for _, id := range []string{"claude", "codex", "copilot", "gemini", "antigravity"} {
 		kind, ok := agentKindForID(id)
 		if !ok {
 			t.Fatalf("mitgeliefertes Manifest %q fehlt", id)
@@ -240,6 +240,7 @@ func TestPaneCommandRecognitionComesFromManifests(t *testing.T) {
 		{"codex", "codex"},
 		{"github-copilot", "copilot"},
 		{"gemini", "gemini"},
+		{"agy", "antigravity"},
 		{"node", ""},
 		{"zsh", ""},
 	}

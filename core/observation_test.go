@@ -331,6 +331,7 @@ func TestObserveDoesNotFabricateStatusForUnfamiliarScreens(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	cases := []struct {
 		tool    string
+		command string
 		content string
 	}{
 		{tool: AgentToolCodex, content: "irgendein fremder Bildschirm\nohne bekannte Merkmale\n"},
@@ -338,12 +339,19 @@ func TestObserveDoesNotFabricateStatusForUnfamiliarScreens(t *testing.T) {
 		// Gemini wurde nie beobachtet; auch ein Dialog, den Claude erkennen
 		// würde, bleibt für Gemini unbekannt.
 		{tool: AgentToolGemini, content: "Do you want to run this command?\n❯ 1. Yes\n"},
+		// Antigravity wurde ebenfalls nie beobachtet und verhält sich genauso.
+		// tmux meldet hier das Binary ("agy"), nicht den Tool-Namen.
+		{tool: AgentToolAntigravity, command: "agy", content: "Do you want to run this command?\n❯ 1. Yes\n"},
 	}
 	for _, tt := range cases {
 		t.Run(tt.tool, func(t *testing.T) {
+			command := tt.command
+			if command == "" {
+				command = tt.tool
+			}
 			runner := &recordingObservationRunner{run: func(_ context.Context, args ...string) (string, error) {
 				if args[0] == "list-panes" {
-					return "mgt-one\t%3\t" + tt.tool + "\t1787227200\t1\t1\n", nil
+					return "mgt-one\t%3\t" + command + "\t1787227200\t1\t1\n", nil
 				}
 				return tt.content, nil
 			}}

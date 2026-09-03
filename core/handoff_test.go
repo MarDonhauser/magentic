@@ -220,6 +220,8 @@ func TestValidateHandoffTargetRequiresKnownClaudeState(t *testing.T) {
 		{name: "codex unknown", mutate: func(o *SessionObservation) { o.Tool, o.Status = AgentToolCodex, StatusUnknown }, wantErr: "ist unbekannt"},
 		// Gemini wurde nie beobachtet und bleibt als Ziel gesperrt.
 		{name: "gemini", mutate: func(o *SessionObservation) { o.Tool, o.Status = AgentToolGemini, StatusIdle }, wantErr: "für gemini unbekannt"},
+		// Antigravity wurde ebenfalls nie beobachtet und bleibt als Ziel gesperrt.
+		{name: "antigravity", mutate: func(o *SessionObservation) { o.Tool, o.Status = AgentToolAntigravity, StatusIdle }, wantErr: "für antigravity unbekannt"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -273,6 +275,26 @@ func TestOverviewHandoffCapabilitiesMatchModulePolicy(t *testing.T) {
 	got = toOvAgent(target, gemini, "")
 	if !got.HandoffSource || got.HandoffTarget {
 		t.Fatalf("Gemini-Fähigkeiten = source %v target %v", got.HandoffSource, got.HandoffTarget)
+	}
+
+	antigravity := handoffObservation(target, AgentToolAntigravity, StatusIdle, "> Type your message")
+	got = toOvAgent(target, antigravity, "")
+	if !got.HandoffSource || got.HandoffTarget {
+		t.Fatalf("Antigravity-Fähigkeiten = source %v target %v", got.HandoffSource, got.HandoffTarget)
+	}
+}
+
+// Tool und Pane-Befehl fallen nicht bei jedem Anbieter zusammen: tmux meldet
+// "agy", die Beobachtung "antigravity". Beide Identitäten müssen zum Anbieter
+// führen, sonst verliert eine laufende Session ihre Handoff-Erkennung.
+func TestHandoffVendorResolutionCoversToolAndPaneCommand(t *testing.T) {
+	for _, identity := range []string{"agy", "antigravity"} {
+		if vendor, ok := handoffVendorForTool(identity); !ok || vendor != AgentVendorAntigravity {
+			t.Fatalf("handoffVendorForTool(%q) = %q, %v", identity, vendor, ok)
+		}
+	}
+	if kind, ok := agentKindForTool("antigravity"); !ok || kind.id != "antigravity" {
+		t.Fatalf("agentKindForTool(antigravity) = %#v, %v", kind, ok)
 	}
 }
 

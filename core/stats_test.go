@@ -198,7 +198,7 @@ func TestModelCostOnlyPricesClaude(t *testing.T) {
 	if cost, priced := modelCost(HistoryProviderClaude, "claude-sonnet-4-6-experimental", input, output, cacheRead, cacheWrite); priced || cost != 0 {
 		t.Fatalf("Claude model with an unknown suffix inherited a prefix price: (%f, %v)", cost, priced)
 	}
-	for _, provider := range []HistoryProvider{HistoryProviderCodex, HistoryProviderGemini, HistoryProviderCopilot} {
+	for _, provider := range []HistoryProvider{HistoryProviderCodex, HistoryProviderGemini, HistoryProviderCopilot, HistoryProviderAntigravity} {
 		if cost, priced := modelCost(provider, "claude-sonnet-4-6", input, output, cacheRead, cacheWrite); priced || cost != 0 {
 			t.Errorf("%s inherited Claude pricing: (%f, %v)", provider, cost, priced)
 		}

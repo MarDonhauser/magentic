@@ -201,7 +201,7 @@ func newHandoffTestApp() *App {
 			switch observed.Tool {
 			case core.AgentToolClaude:
 				observed.Status, observed.Detail = core.InferStatusFromPane(command, observed.Content)
-			case core.AgentToolCodex, core.AgentToolGemini, core.AgentToolCopilot:
+			case core.AgentToolCodex, core.AgentToolGemini, core.AgentToolCopilot, core.AgentToolAntigravity:
 				observed.Status = core.StatusUnknown
 			default:
 				if session.IsTerm() {

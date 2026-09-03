@@ -92,6 +92,17 @@ func TestRunExistsPerVendor(t *testing.T) {
 	if gemini.RunExists(run) {
 		t.Fatal("Gemini kann keinen Lauf belegen und muss false liefern")
 	}
+	antigravity, _ := providerForVendor(AgentVendorAntigravity)
+	if antigravity.RunExists(run) {
+		t.Fatal("fehlender Antigravity-Lauf wurde als vorhanden gemeldet")
+	}
+	writeFile(t, filepath.Join(home, ".gemini", "antigravity-cli", "brain", run, ".system_generated", "logs", "transcript.jsonl"), "{}\n")
+	if !antigravity.RunExists(run) {
+		t.Fatal("Antigravity-Lauf mit Brain-Verzeichnis wurde nicht erkannt")
+	}
+	if antigravity.RunExists("") {
+		t.Fatal("eine leere Run-ID ist nie vorhanden")
+	}
 	claude, _ := providerForVendor(AgentVendorClaude)
 	if claude.RunExists("") {
 		t.Fatal("eine leere Run-ID ist nie vorhanden")
