@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -46,214 +47,242 @@ type ManagedInflight struct {
 	FailedAt   time.Time `json:"failedAt,omitzero"`
 }
 
-// ManagedTurnTracker holds one managed Session's turn, its in-flight prompt
-// and its streamed conversation. The agent host owns the tracker for its own
-// Session; the daemon holds one per known Session for what the host reported.
-// All methods are safe for concurrent use.
-type ManagedTurnTracker struct {
-	mu            sync.Mutex
-	turns         map[SessionID]*ManagedTurn
-	inflight      map[SessionID]*ManagedInflight
-	conversations map[SessionID]*Conversation
-	now           func() time.Time
+// ManagedTurns holds exactly one managed Session's turn, its in-flight prompt
+// and its streamed conversation. One Session is the whole unit of this module:
+// an agent host owns one Session, so nothing here is addressed by a Session
+// identity a caller has to keep repeating. All methods are safe for
+// concurrent use.
+type ManagedTurns struct {
+	mu           sync.Mutex
+	sessionID    SessionID
+	turn         *ManagedTurn
+	inflight     *ManagedInflight
+	conversation Conversation
+	now          func() time.Time
 }
 
-// NewManagedTurnTracker creates an empty tracker.
-func NewManagedTurnTracker() *ManagedTurnTracker {
-	return &ManagedTurnTracker{
-		turns:         map[SessionID]*ManagedTurn{},
-		inflight:      map[SessionID]*ManagedInflight{},
-		conversations: map[SessionID]*Conversation{},
-		now:           time.Now,
-	}
+// NewManagedTurns creates the turn state of one managed Session.
+func NewManagedTurns(sessionID SessionID) *ManagedTurns {
+	return &ManagedTurns{sessionID: sessionID, now: time.Now}
 }
+
+// SessionID is the managed Session this state belongs to.
+func (t *ManagedTurns) SessionID() SessionID { return t.sessionID }
 
 // StartTurn records that a turn began for the delivered Outbox message. A
 // second start while a turn is running is a caller error and leaves the
 // running turn untouched.
-func (t *ManagedTurnTracker) StartTurn(sessionID SessionID, messageID string) error {
+func (t *ManagedTurns) StartTurn(messageID string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if current := t.turns[sessionID]; current != nil && current.Running {
-		return fmt.Errorf("für Session %q läuft bereits ein Turn", sessionID)
+	if t.turn != nil && t.turn.Running {
+		return fmt.Errorf("für Session %q läuft bereits ein Turn", t.sessionID)
 	}
-	t.turns[sessionID] = &ManagedTurn{
-		SessionID: sessionID, Running: true, MessageID: messageID, StartedAt: t.now(),
-	}
+	t.beginTurn(messageID)
 	return nil
 }
 
+// beginTurn replaces the held turn with a fresh running one. The caller holds
+// the lock.
+func (t *ManagedTurns) beginTurn(messageID string) {
+	t.turn = &ManagedTurn{
+		SessionID: t.sessionID, Running: true, MessageID: messageID, StartedAt: t.now(),
+	}
+}
+
 // EndTurn records the turn's end with its explicit reason. A failed turn
-// carries the vendor's own reason. Ending a Session with no running turn
-// reports false and changes nothing.
-func (t *ManagedTurnTracker) EndTurn(sessionID SessionID, reason TurnEndReason, failReason string) (ManagedTurn, bool) {
+// carries the vendor's own reason. Ending with no running turn reports false
+// and changes nothing.
+func (t *ManagedTurns) EndTurn(reason TurnEndReason, failReason string) (ManagedTurn, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	current := t.turns[sessionID]
-	if current == nil || !current.Running {
-		return ManagedTurn{SessionID: sessionID}, false
+	if t.turn == nil || !t.turn.Running {
+		return ManagedTurn{SessionID: t.sessionID}, false
 	}
-	current.Running = false
-	current.EndedAt = t.now()
-	current.EndReason = reason
-	current.FailReason = failReason
-	return *current, true
+	t.turn.Running = false
+	t.turn.EndedAt = t.now()
+	t.turn.EndReason = reason
+	t.turn.FailReason = failReason
+	return *t.turn, true
 }
 
 // InterruptTurn ends the running turn with the interrupted reason and leaves
 // everything else — the Session, its process, its conversation — untouched.
-// Interrupting a Session with no running turn is refused and stops nothing.
-func (t *ManagedTurnTracker) InterruptTurn(sessionID SessionID) (ManagedTurn, error) {
-	ended, ok := t.EndTurn(sessionID, TurnEndInterrupted, "")
+// Interrupting with no running turn is refused and stops nothing.
+func (t *ManagedTurns) InterruptTurn() (ManagedTurn, error) {
+	ended, ok := t.EndTurn(TurnEndInterrupted, "")
 	if !ok {
-		return ManagedTurn{SessionID: sessionID},
-			fmt.Errorf("für Session %q läuft kein Turn, der unterbrochen werden könnte", sessionID)
+		return ManagedTurn{SessionID: t.sessionID},
+			fmt.Errorf("für Session %q läuft kein Turn, der unterbrochen werden könnte", t.sessionID)
 	}
 	return ended, nil
 }
 
-// TurnRunning reports whether the Session has a running turn.
-func (t *ManagedTurnTracker) TurnRunning(sessionID SessionID) bool {
+// TurnRunning reports whether a turn is running.
+func (t *ManagedTurns) TurnRunning() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.turns[sessionID] != nil && t.turns[sessionID].Running
+	return t.turn != nil && t.turn.Running
 }
 
-// TurnState returns the Session's current or last turn, or false when no turn
-// was ever recorded for it.
-func (t *ManagedTurnTracker) TurnState(sessionID SessionID) (ManagedTurn, bool) {
+// TurnState returns the current or last turn, or false when no turn was ever
+// recorded.
+func (t *ManagedTurns) TurnState() (ManagedTurn, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	current := t.turns[sessionID]
-	if current == nil {
-		return ManagedTurn{SessionID: sessionID}, false
+	if t.turn == nil {
+		return ManagedTurn{SessionID: t.sessionID}, false
 	}
-	return *current, true
+	return *t.turn, true
 }
 
 // MarkInflight records that a prompt was sent and its acknowledgement is
 // still outstanding. A second prompt is never sent while one is in flight:
 // the Outbox keeps its strict FIFO through this claim.
-func (t *ManagedTurnTracker) MarkInflight(sessionID SessionID, messageID, text string) {
+func (t *ManagedTurns) MarkInflight(messageID, text string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.inflight[sessionID] = &ManagedInflight{
-		SessionID: sessionID, MessageID: messageID, Text: text, SentAt: t.now(),
+	t.inflight = &ManagedInflight{
+		SessionID: t.sessionID, MessageID: messageID, Text: text, SentAt: t.now(),
 	}
 }
 
-// Inflight reports the Session's unacknowledged prompt, if any.
-func (t *ManagedTurnTracker) Inflight(sessionID SessionID) (ManagedInflight, bool) {
+// Inflight reports the unacknowledged prompt, if any.
+func (t *ManagedTurns) Inflight() (ManagedInflight, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	pending := t.inflight[sessionID]
-	if pending == nil || pending.MessageID == "" {
-		return ManagedInflight{SessionID: sessionID}, false
+	if t.inflight == nil || t.inflight.MessageID == "" {
+		return ManagedInflight{SessionID: t.sessionID}, false
 	}
-	return *pending, true
+	return *t.inflight, true
 }
 
 // ConfirmEcho advances the Outbox on the protocol's echo of the delivered
 // prompt: the matching in-flight prompt leaves the queue and its turn starts.
 // Anything else — a missing echo, an echo for another message — advances
 // nothing and resends nothing.
-func (t *ManagedTurnTracker) ConfirmEcho(sessionID SessionID, messageID string) bool {
+func (t *ManagedTurns) ConfirmEcho(messageID string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	pending := t.inflight[sessionID]
-	if pending == nil || pending.MessageID == "" || pending.MessageID != messageID {
+	if t.inflight == nil || t.inflight.MessageID == "" || t.inflight.MessageID != messageID {
 		return false
 	}
-	delete(t.inflight, sessionID)
-	t.turns[sessionID] = &ManagedTurn{
-		SessionID: sessionID, Running: true, MessageID: messageID, StartedAt: t.now(),
-	}
+	t.inflight = nil
+	t.beginTurn(messageID)
 	return true
+}
+
+// ConfirmEchoByText advances the Outbox on an echo that carries the replayed
+// prompt rather than a message identity — which is what the vendor's protocol
+// actually sends. Only the in-flight prompt's own text matches; an echo of
+// anything else advances nothing.
+func (t *ManagedTurns) ConfirmEchoByText(text string) (string, bool) {
+	t.mu.Lock()
+	pending := t.inflight
+	if pending == nil || pending.MessageID == "" || strings.TrimSpace(pending.Text) != strings.TrimSpace(text) {
+		t.mu.Unlock()
+		return "", false
+	}
+	messageID := pending.MessageID
+	t.inflight = nil
+	t.beginTurn(messageID)
+	t.mu.Unlock()
+	return messageID, true
 }
 
 // FailDelivery records that delivering the prompt failed. The prompt stays
 // queued with its reason — it is reset to queued, never dropped and never
 // retried here.
-func (t *ManagedTurnTracker) FailDelivery(sessionID SessionID, messageID, reason string) {
+func (t *ManagedTurns) FailDelivery(messageID, reason string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	pending := t.inflight[sessionID]
+	pending := t.inflight
 	if pending == nil || pending.MessageID != messageID {
-		pending = &ManagedInflight{SessionID: sessionID, MessageID: messageID}
+		pending = &ManagedInflight{SessionID: t.sessionID, MessageID: messageID}
 	}
 	pending.MessageID = ""
 	pending.FailReason = reason
 	pending.FailedAt = t.now()
-	t.inflight[sessionID] = pending
+	t.inflight = pending
 }
 
-// DeliveryFailure reports the last failed delivery for a Session, if any.
-func (t *ManagedTurnTracker) DeliveryFailure(sessionID SessionID) (reason string, at time.Time, ok bool) {
+// DeliveryFailure reports the last failed delivery, if any.
+func (t *ManagedTurns) DeliveryFailure() (reason string, at time.Time, ok bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	pending := t.inflight[sessionID]
-	if pending == nil || pending.FailReason == "" {
+	if t.inflight == nil || t.inflight.FailReason == "" {
 		return "", time.Time{}, false
 	}
-	return pending.FailReason, pending.FailedAt, true
+	return t.inflight.FailReason, t.inflight.FailedAt, true
 }
 
-// PublishChunk publishes streamed output as it arrives, marked as still
-// being produced. Repeated chunks for the same message supersede it in
-// place.
-func (t *ManagedTurnTracker) PublishChunk(sessionID SessionID, item Item) Item {
+// PublishChunk publishes streamed output as it arrives, marked as still being
+// produced. Repeated chunks for the same message supersede it in place.
+func (t *ManagedTurns) PublishChunk(item Item) Item {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	item.InProgress = true
 	if item.OccurredAt.IsZero() {
 		item.OccurredAt = t.now()
 	}
-	t.conversationFor(sessionID).Apply(item)
+	t.conversation.Apply(item)
 	return item
 }
 
 // CompleteMessage supersedes the streamed message with its final form. After
-// this call the conversation holds the message exactly once, not marked as
-// in progress.
-func (t *ManagedTurnTracker) CompleteMessage(sessionID SessionID, item Item) Item {
+// this call the conversation holds the message exactly once, not marked as in
+// progress.
+func (t *ManagedTurns) CompleteMessage(item Item) Item {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	item.InProgress = false
 	if item.OccurredAt.IsZero() {
 		item.OccurredAt = t.now()
 	}
-	t.conversationFor(sessionID).Apply(item)
+	t.conversation.Apply(item)
 	return item
 }
 
-// StreamedConversation returns the streamed Items held for a Session in
-// order. It is what the conversation surface renders; completed messages
-// appear in their final form, in-progress ones marked as such.
-func (t *ManagedTurnTracker) StreamedConversation(sessionID SessionID) []Item {
+// StreamedConversation returns the streamed Items in order. It is what the
+// conversation surface renders; completed messages appear in their final
+// form, in-progress ones marked as such.
+func (t *ManagedTurns) StreamedConversation() []Item {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	conversation := t.conversations[sessionID]
-	if conversation == nil {
-		return nil
-	}
-	return append([]Item(nil), conversation.Items...)
+	return append([]Item(nil), t.conversation.Items...)
 }
 
 // ApplyStreamedItems folds Items the host reported (for example after a
 // daemon restart) into the held conversation, superseding by identity.
-func (t *ManagedTurnTracker) ApplyStreamedItems(sessionID SessionID, items []Item) {
+func (t *ManagedTurns) ApplyStreamedItems(items []Item) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.conversationFor(sessionID).Apply(items...)
+	t.conversation.Apply(items...)
 }
 
-func (t *ManagedTurnTracker) conversationFor(sessionID SessionID) *Conversation {
-	conversation := t.conversations[sessionID]
-	if conversation == nil {
-		conversation = &Conversation{}
-		t.conversations[sessionID] = conversation
+// ManagedTurnTracker is the daemon's index of what every known managed
+// Session's host reported. It holds no turn logic of its own: one Session's
+// state is a ManagedTurns, and this is the map from Session identity to it.
+type ManagedTurnTracker struct {
+	mu       sync.Mutex
+	sessions map[SessionID]*ManagedTurns
+}
+
+// NewManagedTurnTracker creates an empty tracker.
+func NewManagedTurnTracker() *ManagedTurnTracker {
+	return &ManagedTurnTracker{sessions: map[SessionID]*ManagedTurns{}}
+}
+
+// For returns the Session's turn state, creating an empty one on first use.
+func (t *ManagedTurnTracker) For(sessionID SessionID) *ManagedTurns {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	turns := t.sessions[sessionID]
+	if turns == nil {
+		turns = NewManagedTurns(sessionID)
+		t.sessions[sessionID] = turns
 	}
-	return conversation
+	return turns
 }
 
 // ErrManagedHostUnreachable reports a managed Session whose host cannot be

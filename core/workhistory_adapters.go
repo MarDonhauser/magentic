@@ -394,23 +394,6 @@ func (a claudeHistoryAdapter) Fingerprint(_ workHistoryFS, _ string, data []byte
 	return basicHistoryFingerprint(data), nil
 }
 
-type claudeHistoryLine struct {
-	Type          string          `json:"type"`
-	UUID          string          `json:"uuid"`
-	Timestamp     string          `json:"timestamp"`
-	CWD           string          `json:"cwd"`
-	SessionID     string          `json:"sessionId"`
-	IsMeta        bool            `json:"isMeta"`
-	IsSidechain   bool            `json:"isSidechain"`
-	ToolUseResult json.RawMessage `json:"toolUseResult"`
-	Message       struct {
-		Role    string          `json:"role"`
-		Model   string          `json:"model"`
-		Content json.RawMessage `json:"content"`
-		Usage   json.RawMessage `json:"usage"`
-	} `json:"message"`
-}
-
 func (a claudeHistoryAdapter) Parse(ctx context.Context, _ workHistoryFS, path string, data []byte) ([]historyRecord, []HistoryProblem, error) {
 	conversation := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	alias := claudeProjectAlias(path, a.root)
@@ -420,8 +403,8 @@ func (a claudeHistoryAdapter) Parse(ctx context.Context, _ workHistoryFS, path s
 		if ctx.Err() != nil {
 			return
 		}
-		var entry claudeHistoryLine
-		if json.Unmarshal(line, &entry) != nil {
+		entry, ok := decodeClaudeRecord(line)
+		if !ok {
 			malformed++
 			return
 		}
@@ -437,7 +420,12 @@ func (a claudeHistoryAdapter) Parse(ctx context.Context, _ workHistoryFS, path s
 			if entry.IsMeta || len(entry.ToolUseResult) > 0 {
 				return
 			}
-			text := cleanHistoryText(historyExtractText(entry.Message.Content))
+			blocks, plain := claudeTextBlocks(entry.Content)
+			text := plain
+			if blocks != nil {
+				text = claudeJoinText(blocks)
+			}
+			text = cleanHistoryText(text)
 			if text == "" || historyInjectedText(text) {
 				return
 			}
@@ -447,8 +435,13 @@ func (a claudeHistoryAdapter) Parse(ctx context.Context, _ workHistoryFS, path s
 				Text: text, CWD: entry.CWD, ProjectAlias: alias, NativeID: entry.UUID,
 			})
 		case "assistant":
-			text := cleanHistoryText(historyExtractText(entry.Message.Content))
-			usage, usageInvalid := historyUsageFromRaw(entry.Message.Usage)
+			blocks, plain := claudeTextBlocks(entry.Content)
+			text := plain
+			if blocks != nil {
+				text = claudeJoinText(blocks)
+			}
+			text = cleanHistoryText(text)
+			usage, usageInvalid := historyUsageFromRaw(entry.Usage)
 			if usageInvalid {
 				malformed++
 			}
@@ -462,7 +455,7 @@ func (a claudeHistoryAdapter) Parse(ctx context.Context, _ workHistoryFS, path s
 			records = append(records, historyRecord{
 				ConversationID: conversation, Timestamp: entry.Timestamp,
 				Role: HistoryRoleAssistant, Kind: kind, Lineage: lineage,
-				Text: text, Model: entry.Message.Model, Usage: usage,
+				Text: text, Model: entry.Model, Usage: usage,
 				CWD: entry.CWD, ProjectAlias: alias, NativeID: entry.UUID,
 			})
 		}

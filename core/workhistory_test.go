@@ -484,6 +484,62 @@ func removeHistoryTestFile(t *testing.T, path string) {
 	}
 }
 
+// TestHistoryProviderFromAgentVendorCoversEveryKnownVendor hält den Fehler
+// fest, den der frühere handgepflegte Fünf-Arm-Switch erlaubt hätte: ein
+// Vendor, der bei builtinAgentProviders registriert ist, aber im
+// History-Adapter vergessen wurde, oder umgekehrt.
+func TestHistoryProviderFromAgentVendorCoversEveryKnownVendor(t *testing.T) {
+	for _, provider := range builtinAgentProviders() {
+		vendor := provider.Vendor()
+		got, ok := historyProviderFromAgentVendor(vendor)
+		if !ok {
+			t.Fatalf("registered vendor %q has no HistoryProvider equivalent", vendor)
+		}
+		if string(got) != string(vendor) {
+			t.Fatalf("HistoryProvider %q does not share identity with AgentVendor %q", got, vendor)
+		}
+	}
+	for _, provider := range historyProviders {
+		if _, ok := providerForVendor(AgentVendor(provider)); !ok {
+			t.Fatalf("HistoryProvider %q has no registered AgentVendor equivalent", provider)
+		}
+	}
+	if _, ok := historyProviderFromAgentVendor(AgentVendor("unknown-vendor")); ok {
+		t.Fatal("unregistered vendor must not resolve to a HistoryProvider")
+	}
+}
+
+// TestHistoryProviderPersistedStringsUnchanged hält die auf Platte
+// gespeicherten Zeichenketten fest. Sie stehen in persistiertem JSON und in
+// Index-Dateien; ein Vendorwechsel darf bestehende Registry- und
+// History-Indizes nicht entwerten.
+func TestHistoryProviderPersistedStringsUnchanged(t *testing.T) {
+	want := map[HistoryProvider]string{
+		HistoryProviderClaude:      "claude",
+		HistoryProviderCodex:       "codex",
+		HistoryProviderGemini:      "gemini",
+		HistoryProviderCopilot:     "copilot",
+		HistoryProviderAntigravity: "antigravity",
+	}
+	for provider, literal := range want {
+		if string(provider) != literal {
+			t.Fatalf("HistoryProvider %v changed persisted string, want %q", provider, literal)
+		}
+	}
+	wantVendor := map[AgentVendor]string{
+		AgentVendorClaude:      "claude",
+		AgentVendorCodex:       "codex",
+		AgentVendorGemini:      "gemini",
+		AgentVendorCopilot:     "copilot",
+		AgentVendorAntigravity: "antigravity",
+	}
+	for vendor, literal := range wantVendor {
+		if string(vendor) != literal {
+			t.Fatalf("AgentVendor %v changed persisted string, want %q", vendor, literal)
+		}
+	}
+}
+
 func historyTestCoverage(t *testing.T, meta HistoryMeta, provider HistoryProvider) HistoryProviderCoverage {
 	t.Helper()
 	for _, coverage := range meta.Coverage {

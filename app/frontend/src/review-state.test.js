@@ -3,9 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   comparisonModeLabel,
-  lineRef,
   commentAnchorText,
-  sortComments,
   diffFileState,
   canCommentOnFile,
   cappedNotice,
@@ -16,25 +14,16 @@ import {
   commentedPaths,
 } from './review-state.js';
 
-test('Comparison modes and line references read as whole sentences', () => {
+test('Comparison modes read as whole sentences', () => {
   assert.equal(comparisonModeLabel('branch'), 'Branch gegen Basis-Branch');
   assert.equal(comparisonModeLabel('working_tree'), 'Arbeitsverzeichnis gegen HEAD');
   assert.equal(comparisonModeLabel(''), 'Arbeitsverzeichnis gegen HEAD');
-
-  assert.equal(lineRef({ newStart: 12, newEnd: 12 }), 'Zeile 12');
-  assert.equal(lineRef({ newStart: 12, newEnd: 14 }), 'Zeilen 12–14');
-  assert.equal(lineRef({ oldStart: 7, oldEnd: 7 }), 'Zeile 7 (entfernte Zeile)');
-  assert.equal(lineRef({ oldStart: 7, oldEnd: 9 }), 'Zeilen 7–9 (entfernte Zeilen)');
-  assert.equal(commentAnchorText({ path: 'app/a.go', newStart: 30, newEnd: 32 }), 'app/a.go, Zeilen 30–32');
 });
 
-test('Comments sort by file then line regardless of creation order', () => {
-  const sorted = sortComments([
-    { id: 'c2', path: 'app/b.go', newStart: 3 },
-    { id: 'c1', path: 'app/a.go', newStart: 30 },
-    { id: 'c3', path: 'app/a.go', newStart: 5 },
-  ]);
-  assert.deepEqual(sorted.map((comment) => comment.id), ['c3', 'c1', 'c2']);
+test('Anchor text renders the line reference Go already decided, and never invents one', () => {
+  assert.equal(commentAnchorText({ path: 'app/a.go', lineRef: 'Zeilen 30–32' }), 'app/a.go, Zeilen 30–32');
+  assert.equal(commentAnchorText({ path: 'app/b.go', lineRef: 'Zeile 7 (entfernte Zeile)' }), 'app/b.go, Zeile 7 (entfernte Zeile)');
+  assert.equal(commentAnchorText({}), '(unbekannte Datei), ohne Zeilenangabe');
 });
 
 test('File states separate commentable content from listed-only entries', () => {

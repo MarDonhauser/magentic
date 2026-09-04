@@ -27,10 +27,159 @@ const (
 
 // ControlVerbs is the complete verb set, in the order the help text lists them.
 func ControlVerbs() []ControlVerb {
-	return []ControlVerb{
-		ControlSessionStart, ControlSessionList, ControlSessionSend,
-		ControlSessionOutput, ControlSessionWait, ControlSessionKill,
-		ControlSessionWhoami, ControlSessionWatch,
+	specs := ControlVerbSpecs()
+	verbs := make([]ControlVerb, 0, len(specs))
+	for _, spec := range specs {
+		verbs = append(verbs, spec.Verb)
+	}
+	return verbs
+}
+
+// ControlFlagKind is the flag.FlagSet primitive a ControlFlag parses as.
+type ControlFlagKind int
+
+const (
+	ControlFlagString ControlFlagKind = iota
+	ControlFlagBool
+	ControlFlagInt
+)
+
+// ControlFlag is one flag of one verb's command line, declared once and read
+// by both the CLI's flag.FlagSet and its generated help and default checks.
+type ControlFlag struct {
+	Name    string
+	Usage   string
+	Kind    ControlFlagKind
+	Default string
+	// SetString, SetBool and SetInt fill ControlArgs from the parsed flag
+	// value; exactly the one matching Kind is ever called.
+	SetString func(*ControlArgs, string)
+	SetBool   func(*ControlArgs, bool)
+	SetInt    func(*ControlArgs, int)
+}
+
+// ControlVerbSpec is the single declaration behind one verb's CLI flags, help
+// line and dispatch. A new verb needs one new entry here, not six edits.
+type ControlVerbSpec struct {
+	Verb    ControlVerb
+	Summary string
+	Flags   []ControlFlag
+	// After runs once flags are parsed, for the handful of things a flag
+	// alone cannot express: session.send's positional text fallback and
+	// session.whoami's marker read from the environment.
+	After func(args *ControlArgs, remaining []string)
+}
+
+// ControlVerbSpecs is the complete declaration of the control vocabulary, in
+// the order the help text lists it.
+func ControlVerbSpecs() []ControlVerbSpec {
+	return []ControlVerbSpec{
+		{
+			Verb:    ControlSessionStart,
+			Summary: "Session in einem Projekt oder Worktree starten",
+			Flags: []ControlFlag{
+				{Name: "project", Usage: "Projekt (ProjectID oder Projektname)", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Project = v }},
+				{Name: "name", Usage: "Name der neuen Session", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Name = v }},
+				{Name: "vendor", Usage: "Agent-Art, etwa claude oder codex", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Vendor = AgentVendor(v) }},
+				{Name: "terminal", Usage: "Eine Terminal-Session ohne Coding-Agent starten", Kind: ControlFlagBool,
+					SetBool: func(a *ControlArgs, v bool) {
+						if v {
+							a.Kind = SessionKindTerminal
+						}
+					}},
+				{Name: "worktree", Usage: "Bestehender Worktree des Projekts (Handle)", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Worktree = v }},
+				{Name: "new-worktree", Usage: "Einen frischen verwalteten Worktree anlegen", Kind: ControlFlagBool,
+					SetBool: func(a *ControlArgs, v bool) { a.NewWorktree = v }},
+				{Name: "dir", Usage: "Verzeichnis, das zu einem Worktree des Projekts gehören muss", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Directory = v }},
+				{Name: "prompt", Usage: "Erster Prompt an den Coding-Agent", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Prompt = v }},
+			},
+		},
+		{
+			Verb:    ControlSessionList,
+			Summary: "Sessions mit ihrer Beobachtung auflisten",
+			Flags: []ControlFlag{
+				{Name: "project", Usage: "Nur Sessions dieses Projekts auflisten", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Project = v }},
+				{Name: "worktree", Usage: "Nur Sessions dieses Worktrees auflisten (Handle)", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Worktree = v }},
+			},
+		},
+		{
+			Verb:    ControlSessionSend,
+			Summary: "Text an den Coding-Agent einer Session senden",
+			Flags: []ControlFlag{
+				{Name: "session", Usage: "SessionID oder Name", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Session = v }},
+				{Name: "project", Usage: "Projekt, das einen Namen eindeutig macht", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Project = v }},
+				{Name: "text", Usage: "Zu sendender Text", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Text = v }},
+			},
+			After: func(args *ControlArgs, remaining []string) {
+				if args.Text == "" && len(remaining) > 0 {
+					args.Text = strings.Join(remaining, " ")
+				}
+			},
+		},
+		{
+			Verb:    ControlSessionOutput,
+			Summary: "Sichtbaren Inhalt einer Session lesen",
+			Flags: []ControlFlag{
+				{Name: "session", Usage: "SessionID oder Name", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Session = v }},
+				{Name: "project", Usage: "Projekt, das einen Namen eindeutig macht", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Project = v }},
+				{Name: "lines", Usage: "Nur so viele letzte Zeilen zurückgeben", Kind: ControlFlagInt, Default: "0",
+					SetInt: func(a *ControlArgs, v int) { a.Lines = v }},
+			},
+		},
+		{
+			Verb:    ControlSessionWait,
+			Summary: "Auf die gepinnte Belegung einer Session warten",
+			Flags: []ControlFlag{
+				{Name: "session", Usage: "SessionID oder Name", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Session = v }},
+				{Name: "project", Usage: "Projekt, das einen Namen eindeutig macht", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Project = v }},
+				{Name: "until", Usage: "Wartebedingung: done oder waiting", Kind: ControlFlagString, Default: "done",
+					SetString: func(a *ControlArgs, v string) { a.Until = v }},
+				{Name: "timeout", Usage: "Zeitgrenze in Sekunden, 0 wartet ohne Grenze", Kind: ControlFlagInt, Default: "0",
+					SetInt: func(a *ControlArgs, v int) { a.TimeoutMS = v * 1000 }},
+			},
+		},
+		{
+			Verb:    ControlSessionKill,
+			Summary: "Runtime einer Session beenden, der Worktree bleibt",
+			Flags: []ControlFlag{
+				{Name: "session", Usage: "SessionID oder Name", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Session = v }},
+				{Name: "project", Usage: "Projekt, das einen Namen eindeutig macht", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Project = v }},
+			},
+		},
+		{
+			Verb:    ControlSessionWhoami,
+			Summary: "Eigene Session aus den Marker-Angaben auflösen",
+			After: func(args *ControlArgs, _ []string) {
+				args.Marker = ControlMarkerFromEnvironment()
+			},
+		},
+		{
+			Verb:    ControlSessionWatch,
+			Summary: "Zustandswechsel als Ereignisstrom mitlesen",
+			Flags: []ControlFlag{
+				{Name: "project", Usage: "Nur Ereignisse dieses Projekts empfangen", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Project = v }},
+				{Name: "session", Usage: "Nur Ereignisse dieser Session empfangen", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Session = v }},
+			},
+		},
 	}
 }
 

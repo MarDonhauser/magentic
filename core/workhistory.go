@@ -16,24 +16,31 @@ import (
 )
 
 // HistoryProvider is a stable, provider-qualified source identity. It is not a
-// display label and must not be inferred from a Session name.
+// display label and must not be inferred from a Session name. Its members are
+// conversions of the AgentVendor constants, not independent literals, so the
+// two enumerations cannot drift apart into two parallel vendor identities.
 type HistoryProvider string
 
 const (
-	HistoryProviderClaude      HistoryProvider = "claude"
-	HistoryProviderCodex       HistoryProvider = "codex"
-	HistoryProviderGemini      HistoryProvider = "gemini"
-	HistoryProviderCopilot     HistoryProvider = "copilot"
-	HistoryProviderAntigravity HistoryProvider = "antigravity"
+	HistoryProviderClaude      HistoryProvider = HistoryProvider(AgentVendorClaude)
+	HistoryProviderCodex       HistoryProvider = HistoryProvider(AgentVendorCodex)
+	HistoryProviderGemini      HistoryProvider = HistoryProvider(AgentVendorGemini)
+	HistoryProviderCopilot     HistoryProvider = HistoryProvider(AgentVendorCopilot)
+	HistoryProviderAntigravity HistoryProvider = HistoryProvider(AgentVendorAntigravity)
 )
 
-var historyProviders = []HistoryProvider{
-	HistoryProviderClaude,
-	HistoryProviderCodex,
-	HistoryProviderGemini,
-	HistoryProviderCopilot,
-	HistoryProviderAntigravity,
-}
+// historyProviders enumerates every known provider by reading the same
+// vendor catalog AgentProvider registration uses (builtinAgentProviders),
+// rather than a second hand-maintained list that could silently omit a
+// vendor added only there.
+var historyProviders = func() []HistoryProvider {
+	providers := builtinAgentProviders()
+	out := make([]HistoryProvider, 0, len(providers))
+	for _, provider := range providers {
+		out = append(out, HistoryProvider(provider.Vendor()))
+	}
+	return out
+}()
 
 func (p HistoryProvider) Label() string {
 	switch p {
@@ -233,21 +240,16 @@ func NewHistoryAssociations(state State) HistoryAssociations {
 	return out
 }
 
+// historyProviderFromAgentVendor turns a Session's AgentVendor into its
+// HistoryProvider identity. Both share the same underlying string, so this is
+// a membership check against the known vendor catalog (the same one
+// AgentProvider registration uses) instead of a hand-maintained switch that a
+// new vendor could be added without ever touching.
 func historyProviderFromAgentVendor(vendor AgentVendor) (HistoryProvider, bool) {
-	switch vendor {
-	case AgentVendorClaude:
-		return HistoryProviderClaude, true
-	case AgentVendorCodex:
-		return HistoryProviderCodex, true
-	case AgentVendorGemini:
-		return HistoryProviderGemini, true
-	case AgentVendorCopilot:
-		return HistoryProviderCopilot, true
-	case AgentVendorAntigravity:
-		return HistoryProviderAntigravity, true
-	default:
+	if _, known := providerForVendor(vendor); !known {
 		return "", false
 	}
+	return HistoryProvider(vendor), true
 }
 
 type HistoryEventQuery struct {

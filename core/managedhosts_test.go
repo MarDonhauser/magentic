@@ -5,30 +5,39 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
-func testManagedHostStorePath(t *testing.T) string {
+func testManagedHostRegistry(t *testing.T) *ManagedHostRegistry {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "mh")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	return filepath.Join(dir, "managed-hosts.json")
+	return OpenManagedHostRegistry(filepath.Join(dir, "managed-hosts.json"))
+}
+
+// The Registry holds its store path once. MAGENTIC_MANAGED_HOSTS stays the
+// one place that overrides it, and no caller derives the path a second time.
+func TestNewManagedHostRegistryTakesItsPathFromTheEnvironment(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "elsewhere.json")
+	t.Setenv("MAGENTIC_MANAGED_HOSTS", path)
+	if got := NewManagedHostRegistry().Path(); got != path {
+		t.Fatalf("registry path = %q, want %q", got, path)
+	}
 }
 
 // 3.1: the record exists before any process is spawned, and a failed spawn
 // leaves a record marked as not started.
 func TestRecordManagedHostIntentPrecedesSpawn(t *testing.T) {
-	storePath := testManagedHostStorePath(t)
+	registry := testManagedHostRegistry(t)
 	sessionID := SessionID("session-1")
 	token := NewAgentHostToken()
-	if err := RecordManagedHostIntent(storePath, sessionID, "/tmp/session-1.sock", token); err != nil {
+	if err := registry.RecordIntent(sessionID, "/tmp/session-1.sock", token); err != nil {
 		t.Fatal(err)
 	}
-	records, err := ManagedHostRecords(storePath)
+	records, err := registry.Records()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,9 +48,9 @@ func TestRecordManagedHostIntentPrecedesSpawn(t *testing.T) {
 		t.Fatalf("recorded intent = %+v, want session %q token %q", records[0], sessionID, token)
 	}
 
-	// A failed spawn never calls MarkManagedHostStarted, so the record stays
-	// exactly what a failed-spawn record looks like: recorded, not started.
-	records, err = ManagedHostRecords(storePath)
+	// A failed spawn never calls MarkStarted, so the record stays exactly
+	// what a failed-spawn record looks like: recorded, not started.
+	records, err = registry.Records()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,25 +58,35 @@ func TestRecordManagedHostIntentPrecedesSpawn(t *testing.T) {
 		t.Fatal("a failed spawn must leave the record unstarted")
 	}
 
-	if err := MarkManagedHostStarted(storePath, sessionID); err != nil {
+	if err := registry.MarkStarted(sessionID); err != nil {
 		t.Fatal(err)
 	}
-	records, _ = ManagedHostRecords(storePath)
+	records, _ = registry.Records()
 	if !records[0].Started {
-		t.Fatal("MarkManagedHostStarted did not persist")
+		t.Fatal("MarkStarted did not persist")
+	}
+
+	if err := registry.Forget(sessionID); err != nil {
+		t.Fatal(err)
+	}
+	records, _ = registry.Records()
+	if len(records) != 0 {
+		t.Fatalf("records = %+v, want none after Forget", records)
 	}
 }
 
 // 3.2: a live host is reclaimed without a second process being started; a
 // dead host marks its Session as having no process; a socket answering with
-// the wrong token is neither adopted nor killed.
+// the wrong token is neither adopted nor killed — and is reported as its own
+// outcome, because "nothing is there" and "something foreign is there" call
+// for opposite readings.
 func TestReconcileManagedHosts(t *testing.T) {
-	storePath := testManagedHostStorePath(t)
-	t.Setenv("MAGENTIC_STATE", filepath.Dir(storePath)+"/state.json")
+	registry := testManagedHostRegistry(t)
+	t.Setenv("MAGENTIC_STATE", filepath.Dir(registry.Path())+"/state.json")
 
 	liveID := SessionID("session-live")
 	deadID := SessionID("session-dead")
-	wrongTokenID := SessionID("session-wrong-token")
+	foreignID := SessionID("session-foreign")
 
 	liveToken := NewAgentHostToken()
 	liveHost, err := StartAgentHost(liveID, liveToken)
@@ -76,27 +95,27 @@ func TestReconcileManagedHosts(t *testing.T) {
 	}
 	defer liveHost.Close()
 
-	wrongToken := NewAgentHostToken()
-	wrongHost, err := StartAgentHost(wrongTokenID, NewAgentHostToken())
+	expectedToken := NewAgentHostToken()
+	foreignHost, err := StartAgentHost(foreignID, NewAgentHostToken())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer wrongHost.Close()
+	defer foreignHost.Close()
 
-	if err := RecordManagedHostIntent(storePath, liveID, liveHost.Path(), liveToken); err != nil {
+	if err := registry.RecordIntent(liveID, liveHost.Path(), liveToken); err != nil {
 		t.Fatal(err)
 	}
-	if err := RecordManagedHostIntent(storePath, deadID, "/nonexistent/session-dead.sock", NewAgentHostToken()); err != nil {
+	if err := registry.RecordIntent(deadID, "/nonexistent/session-dead.sock", NewAgentHostToken()); err != nil {
 		t.Fatal(err)
 	}
 	// The store records the token the daemon expects, which no longer
-	// matches what wrongHost actually answers with.
-	if err := RecordManagedHostIntent(storePath, wrongTokenID, wrongHost.Path(), wrongToken); err != nil {
+	// matches what foreignHost actually answers with.
+	if err := registry.RecordIntent(foreignID, foreignHost.Path(), expectedToken); err != nil {
 		t.Fatal(err)
 	}
 
-	state := &State{Agents: []Session{{ID: liveID, Name: "live"}, {ID: deadID, Name: "dead"}, {ID: wrongTokenID, Name: "wrong"}}}
-	results, err := ReconcileManagedHosts(storePath, state)
+	state := &State{Agents: []Session{{ID: liveID, Name: "live"}, {ID: deadID, Name: "dead"}, {ID: foreignID, Name: "foreign"}}}
+	results, err := registry.Reconcile(state)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,12 +129,12 @@ func TestReconcileManagedHosts(t *testing.T) {
 	if outcomes[deadID] != ManagedHostGone {
 		t.Fatalf("dead host outcome = %v, want gone", outcomes[deadID])
 	}
-	if outcomes[wrongTokenID] != ManagedHostGone {
-		t.Fatalf("wrong-token host outcome = %v, want gone (neither adopted nor killed)", outcomes[wrongTokenID])
+	if outcomes[foreignID] != ManagedHostForeign {
+		t.Fatalf("foreign host outcome = %v, want foreign (neither adopted nor killed)", outcomes[foreignID])
 	}
-	// Neither adopted nor killed: the process behind wrongHost is still
+	// Neither adopted nor killed: the process behind foreignHost is still
 	// alive and unaffected by reconciliation.
-	if !wrongHost.listenerAlive() {
+	if !foreignHost.listenerAlive() {
 		t.Fatal("reconciliation touched a socket it could not confirm")
 	}
 }
@@ -131,33 +150,46 @@ func (h *AgentHost) listenerAlive() bool {
 	return true
 }
 
-// 3.3: stopping a managed Session signals only the recorded identity, and no
-// process-table search appears anywhere in the managed path's source.
-func TestManagedPathNeverSearchesTheProcessTable(t *testing.T) {
-	for _, file := range []string{"agenthost.go", "agenthost_process.go", "managedhosts.go"} {
-		data, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		source := string(data)
-		for _, forbidden := range []string{"pgrep", "pkill", "\"ps\"", "ps aux", "FindProcess"} {
-			if strings.Contains(source, forbidden) {
-				// FindProcess against a *recorded* PID is legitimate (it's how
-				// Go signals a known process); only flag scans, not lookups by
-				// the identity this file itself recorded.
-				if forbidden == "FindProcess" {
-					continue
-				}
-				t.Fatalf("%s contains %q, a process-table search pattern forbidden on the managed path", file, forbidden)
-			}
-		}
+// 3.3: stopping a managed Session signals only the recorded identity. Two
+// hosts run byte-identical command lines, so any stop that searched the
+// process table — by name, by command line, by anything but the identity the
+// host itself recorded — would take both down. Only the one that was asked to
+// stop may end.
+func TestStoppingOneManagedHostLeavesAnIdenticalOneAlive(t *testing.T) {
+	testAgentHostEnv(t)
+	binary, argv := "sleep", []string{"30"}
+
+	stopped, err := StartAgentHost(SessionID("session-stopped"), NewAgentHostToken())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stopped.StartVendorProcess(binary, argv, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	untouched, err := StartAgentHost(SessionID("session-untouched"), NewAgentHostToken())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer untouched.Close()
+	if err := untouched.StartVendorProcess(binary, argv, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := stopped.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if stopped.HostState().Alive {
+		t.Fatal("the stopped host's process is still alive")
+	}
+	if !untouched.HostState().Alive {
+		t.Fatal("stopping one managed Session ended another with the same command line")
 	}
 }
 
 // 3.4: reconciliation lists the orphan and terminates nothing.
 func TestReconcileManagedHostsReportsOrphanWithoutTerminating(t *testing.T) {
-	storePath := testManagedHostStorePath(t)
-	t.Setenv("MAGENTIC_STATE", filepath.Dir(storePath)+"/state.json")
+	registry := testManagedHostRegistry(t)
+	t.Setenv("MAGENTIC_STATE", filepath.Dir(registry.Path())+"/state.json")
 
 	orphanID := SessionID("session-orphan")
 	token := NewAgentHostToken()
@@ -169,20 +201,20 @@ func TestReconcileManagedHostsReportsOrphanWithoutTerminating(t *testing.T) {
 	if err := host.StartVendorProcess("sleep", []string{"30"}, t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	if err := RecordManagedHostIntent(storePath, orphanID, host.Path(), token); err != nil {
+	if err := registry.RecordIntent(orphanID, host.Path(), token); err != nil {
 		t.Fatal(err)
 	}
 
 	// No Session by this ID exists any more.
 	state := &State{Agents: nil}
-	results, err := ReconcileManagedHosts(storePath, state)
+	results, err := registry.Reconcile(state)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(results) != 1 || results[0].Outcome != ManagedHostOrphaned {
 		t.Fatalf("results = %+v, want one orphaned outcome", results)
 	}
-	if !host.VendorProcessAlive() {
+	if !host.HostState().Alive {
 		t.Fatal("reconciliation terminated an orphaned host's process; it must only report it")
 	}
 }
@@ -190,16 +222,16 @@ func TestReconcileManagedHostsReportsOrphanWithoutTerminating(t *testing.T) {
 // 3.5: a second daemon refuses ownership, states the reason, and starts no
 // agent process.
 func TestReconcileManagedHostsIfOwningRefusesWhenAnotherDaemonOwns(t *testing.T) {
-	storePath := testManagedHostStorePath(t)
-	t.Setenv("MAGENTIC_STATE", filepath.Dir(storePath)+"/state.json")
+	registry := testManagedHostRegistry(t)
+	t.Setenv("MAGENTIC_STATE", filepath.Dir(registry.Path())+"/state.json")
 	sessionID := SessionID("session-1")
-	if err := RecordManagedHostIntent(storePath, sessionID, "/tmp/session-1.sock", NewAgentHostToken()); err != nil {
+	if err := registry.RecordIntent(sessionID, "/tmp/session-1.sock", NewAgentHostToken()); err != nil {
 		t.Fatal(err)
 	}
 	state := &State{Agents: []Session{{ID: sessionID, Name: "s"}}}
 
 	claimErr := ErrControlServedElsewhere
-	results, err := ReconcileManagedHostsIfOwning(claimErr, storePath, state)
+	results, err := registry.ReconcileIfOwning(claimErr, state)
 	if !errors.Is(err, ErrControlServedElsewhere) {
 		t.Fatalf("err = %v, want the stated ownership refusal", err)
 	}

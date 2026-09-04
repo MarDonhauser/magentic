@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -160,21 +161,32 @@ func (s *PermissionStore) RequestForSession(sessionID SessionID) (PermissionRequ
 	return PermissionRequest{}, false
 }
 
+// ErrPermissionWaitAbandoned reports that the caller stopped waiting before a
+// decision arrived. The request itself is untouched by that: it stays open,
+// still waiting for a person. Giving up on an answer is never an answer.
+var ErrPermissionWaitAbandoned = errors.New("das Warten auf die Entscheidung wurde abgebrochen")
+
 // Wait blocks until the request is answered or closed, then reports how it
 // closed. It is what the agent's permission tool call waits in: the agent
-// stays blocked rather than being answered on anyone's behalf.
-func (s *PermissionStore) Wait(id string) (PermissionDecision, PermissionOutcome, error) {
+// stays blocked rather than being answered on anyone's behalf. ctx bounds the
+// wait for this caller only — a cancelled wait leaves the request open, which
+// is what makes the wait testable without making it decidable.
+func (s *PermissionStore) Wait(ctx context.Context, id string) (PermissionDecision, PermissionOutcome, error) {
 	s.mu.Lock()
 	entry, known := s.requests[id]
 	s.mu.Unlock()
 	if !known {
 		return "", "", ErrPermissionUnknown
 	}
-	decision, ok := <-entry.decided
-	if !ok {
-		return "", s.closedOutcome(id), nil
+	select {
+	case decision, ok := <-entry.decided:
+		if !ok {
+			return "", s.closedOutcome(id), nil
+		}
+		return decision, s.decisionOutcome(decision), nil
+	case <-ctx.Done():
+		return "", "", fmt.Errorf("%w: %v", ErrPermissionWaitAbandoned, ctx.Err())
 	}
-	return decision, s.decisionOutcome(decision), nil
 }
 
 // Answer delivers a developer's decision exactly once and closes the
@@ -257,7 +269,7 @@ func (s *PermissionStore) decisionOutcome(decision PermissionDecision) Permissio
 // activity, at the point it occurred.
 func PermissionRequestItem(request PermissionRequest) Item {
 	return Item{
-		ID: "permission-request-" + request.ID,
+		ID:         "permission-request-" + request.ID,
 		OccurredAt: request.RaisedAt,
 		Role:       ItemRoleAgent,
 		Kind:       ItemKindPermissionRequest,
@@ -289,7 +301,7 @@ func PermissionOutcomeItem(request PermissionRequest) Item {
 		occurred = request.RaisedAt
 	}
 	return Item{
-		ID: "permission-decision-" + request.ID,
+		ID:         "permission-decision-" + request.ID,
 		OccurredAt: occurred,
 		Role:       ItemRoleDeveloper,
 		Kind:       ItemKindPermissionDecision,

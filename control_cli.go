@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"magentic/core"
@@ -63,92 +64,64 @@ func runControlSession(cli controlCLI, args []string) int {
 	return renderControlResponse(cli, response, machine)
 }
 
-// parseControlInvocation marshals the arguments of one verb into a request.
+// parseControlInvocation marshals the arguments of one verb into a request,
+// reading its flags from that verb's single ControlVerbSpec.
 func parseControlInvocation(cli controlCLI, verb string, args []string) (core.ControlRequest, bool, string, int) {
+	spec, known := controlVerbSpecByName(verb)
+	if !known {
+		fmt.Fprintf(cli.stderr, "Unbekanntes Verb %q — bekannt sind: %s.\n", verb, controlVerbNames())
+		return core.ControlRequest{}, false, "", controlExitAddressing
+	}
 	set := flag.NewFlagSet("magentic session "+verb, flag.ContinueOnError)
 	set.SetOutput(cli.stderr)
 	machine := set.Bool("json", false, "Ein einzelnes JSON-Dokument auf die Standardausgabe schreiben")
 	socket := set.String("socket", "", "Abweichende Sitzungs-Adresse der Steuer-API")
+
+	strs := make([]*string, len(spec.Flags))
+	bools := make([]*bool, len(spec.Flags))
+	ints := make([]*int, len(spec.Flags))
+	for i, flagSpec := range spec.Flags {
+		switch flagSpec.Kind {
+		case core.ControlFlagString:
+			strs[i] = set.String(flagSpec.Name, flagSpec.Default, flagSpec.Usage)
+		case core.ControlFlagBool:
+			bools[i] = set.Bool(flagSpec.Name, flagSpec.Default == "true", flagSpec.Usage)
+		case core.ControlFlagInt:
+			def, _ := strconv.Atoi(flagSpec.Default)
+			ints[i] = set.Int(flagSpec.Name, def, flagSpec.Usage)
+		}
+	}
+
 	var request core.ControlRequest
-	switch verb {
-	case "start":
-		set.StringVar(&request.Args.Project, "project", "", "Projekt (ProjectID oder Projektname)")
-		set.StringVar(&request.Args.Name, "name", "", "Name der neuen Session")
-		vendor := set.String("vendor", "", "Agent-Art, etwa claude oder codex")
-		terminal := set.Bool("terminal", false, "Eine Terminal-Session ohne Coding-Agent starten")
-		set.StringVar(&request.Args.Worktree, "worktree", "", "Bestehender Worktree des Projekts (Handle)")
-		set.BoolVar(&request.Args.NewWorktree, "new-worktree", false, "Einen frischen verwalteten Worktree anlegen")
-		set.StringVar(&request.Args.Directory, "dir", "", "Verzeichnis, das zu einem Worktree des Projekts gehören muss")
-		set.StringVar(&request.Args.Prompt, "prompt", "", "Erster Prompt an den Coding-Agent")
-		if err := set.Parse(args); err != nil {
-			return request, false, "", controlExitAddressing
-		}
-		request.Verb = core.ControlSessionStart
-		request.Args.Vendor = core.AgentVendor(*vendor)
-		if *terminal {
-			request.Args.Kind = core.SessionKindTerminal
-		}
-	case "list":
-		set.StringVar(&request.Args.Project, "project", "", "Nur Sessions dieses Projekts auflisten")
-		set.StringVar(&request.Args.Worktree, "worktree", "", "Nur Sessions dieses Worktrees auflisten (Handle)")
-		if err := set.Parse(args); err != nil {
-			return request, false, "", controlExitAddressing
-		}
-		request.Verb = core.ControlSessionList
-	case "send":
-		set.StringVar(&request.Args.Session, "session", "", "SessionID oder Name")
-		set.StringVar(&request.Args.Project, "project", "", "Projekt, das einen Namen eindeutig macht")
-		set.StringVar(&request.Args.Text, "text", "", "Zu sendender Text")
-		if err := set.Parse(args); err != nil {
-			return request, false, "", controlExitAddressing
-		}
-		request.Verb = core.ControlSessionSend
-		if request.Args.Text == "" && set.NArg() > 0 {
-			request.Args.Text = strings.Join(set.Args(), " ")
-		}
-	case "output":
-		set.StringVar(&request.Args.Session, "session", "", "SessionID oder Name")
-		set.StringVar(&request.Args.Project, "project", "", "Projekt, das einen Namen eindeutig macht")
-		set.IntVar(&request.Args.Lines, "lines", 0, "Nur so viele letzte Zeilen zurückgeben")
-		if err := set.Parse(args); err != nil {
-			return request, false, "", controlExitAddressing
-		}
-		request.Verb = core.ControlSessionOutput
-	case "wait":
-		set.StringVar(&request.Args.Session, "session", "", "SessionID oder Name")
-		set.StringVar(&request.Args.Project, "project", "", "Projekt, das einen Namen eindeutig macht")
-		set.StringVar(&request.Args.Until, "until", "done", "Wartebedingung: done oder waiting")
-		seconds := set.Int("timeout", 0, "Zeitgrenze in Sekunden, 0 wartet ohne Grenze")
-		if err := set.Parse(args); err != nil {
-			return request, false, "", controlExitAddressing
-		}
-		request.Verb = core.ControlSessionWait
-		request.Args.TimeoutMS = *seconds * 1000
-	case "kill":
-		set.StringVar(&request.Args.Session, "session", "", "SessionID oder Name")
-		set.StringVar(&request.Args.Project, "project", "", "Projekt, das einen Namen eindeutig macht")
-		if err := set.Parse(args); err != nil {
-			return request, false, "", controlExitAddressing
-		}
-		request.Verb = core.ControlSessionKill
-	case "whoami":
-		if err := set.Parse(args); err != nil {
-			return request, false, "", controlExitAddressing
-		}
-		request.Verb = core.ControlSessionWhoami
-		request.Args.Marker = core.ControlMarkerFromEnvironment()
-	case "watch":
-		set.StringVar(&request.Args.Project, "project", "", "Nur Ereignisse dieses Projekts empfangen")
-		set.StringVar(&request.Args.Session, "session", "", "Nur Ereignisse dieser Session empfangen")
-		if err := set.Parse(args); err != nil {
-			return request, false, "", controlExitAddressing
-		}
-		request.Verb = core.ControlSessionWatch
-	default:
-		fmt.Fprintf(cli.stderr, "Unbekanntes Verb %q — bekannt sind: %s.\n", verb, controlVerbNames())
+	if err := set.Parse(args); err != nil {
 		return request, false, "", controlExitAddressing
 	}
+	request.Verb = spec.Verb
+	for i, flagSpec := range spec.Flags {
+		switch flagSpec.Kind {
+		case core.ControlFlagString:
+			flagSpec.SetString(&request.Args, *strs[i])
+		case core.ControlFlagBool:
+			flagSpec.SetBool(&request.Args, *bools[i])
+		case core.ControlFlagInt:
+			flagSpec.SetInt(&request.Args, *ints[i])
+		}
+	}
+	if spec.After != nil {
+		spec.After(&request.Args, set.Args())
+	}
 	return request, *machine, *socket, controlExitOK
+}
+
+// controlVerbSpecByName resolves the CLI-local verb name ("start", not
+// "session.start") against the shared ControlVerbSpecs declaration.
+func controlVerbSpecByName(name string) (core.ControlVerbSpec, bool) {
+	for _, spec := range core.ControlVerbSpecs() {
+		if strings.TrimPrefix(string(spec.Verb), "session.") == name {
+			return spec, true
+		}
+	}
+	return core.ControlVerbSpec{}, false
 }
 
 // renderControlResponse writes exactly one document in machine-readable mode
@@ -252,21 +225,14 @@ func controlVerbNames() string {
 	return strings.Join(names, ", ")
 }
 
-// controlSessionHelp lists every verb of the control surface.
+// controlSessionHelp lists every verb of the control surface, generated from
+// the same ControlVerbSpecs the flag parser reads.
 func controlSessionHelp() string {
 	var help strings.Builder
 	help.WriteString("magentic session — Sessions steuern, über die lokale Steuer-API\n\n")
-	for _, line := range [][2]string{
-		{"start", "Session in einem Projekt oder Worktree starten"},
-		{"list", "Sessions mit ihrer Beobachtung auflisten"},
-		{"send", "Text an den Coding-Agent einer Session senden"},
-		{"output", "Sichtbaren Inhalt einer Session lesen"},
-		{"wait", "Auf die gepinnte Belegung einer Session warten"},
-		{"kill", "Runtime einer Session beenden, der Worktree bleibt"},
-		{"whoami", "Eigene Session aus den Marker-Angaben auflösen"},
-		{"watch", "Zustandswechsel als Ereignisstrom mitlesen"},
-	} {
-		fmt.Fprintf(&help, "  magentic session %-8s %s\n", line[0], line[1])
+	for _, spec := range core.ControlVerbSpecs() {
+		name := strings.TrimPrefix(string(spec.Verb), "session.")
+		fmt.Fprintf(&help, "  magentic session %-8s %s\n", name, spec.Summary)
 	}
 	help.WriteString("\n  --json     Genau ein JSON-Dokument auf die Standardausgabe\n")
 	help.WriteString("  --socket   Abweichende Sitzungs-Adresse der Steuer-API\n")

@@ -95,7 +95,7 @@ func reconcileManagedHosts() {
 		core.Logf("Managed-Hosts nicht abgeglichen, State nicht ladbar: %v", err)
 		return
 	}
-	results, err := core.ReconcileManagedHostsIfOwning(nil, core.ManagedHostStorePath(), state)
+	results, err := core.NewManagedHostRegistry().ReconcileIfOwning(nil, state)
 	if err != nil {
 		core.Logf("Managed-Hosts nicht abgeglichen: %v", err)
 		return
@@ -104,6 +104,8 @@ func reconcileManagedHosts() {
 		switch result.Outcome {
 		case core.ManagedHostGone:
 			core.Logf("Managed-Host für Session %q ist nicht mehr erreichbar", result.SessionID)
+		case core.ManagedHostForeign:
+			core.Logf("Auf dem Socket des Managed-Hosts für Session %q antwortet ein fremder Prozess; er wird weder übernommen noch beendet", result.SessionID)
 		case core.ManagedHostOrphaned:
 			core.Logf("Managed-Host für Session %q verzeichnet, aber die Session existiert nicht mehr", result.SessionID)
 		}

@@ -8,49 +8,14 @@ export function comparisonModeLabel(mode) {
   return 'Arbeitsverzeichnis gegen HEAD';
 }
 
-function anchorOf(comment) {
-  const pick = (start, end) => {
-    const s = Number(start) || 0;
-    let e = Number(end) || 0;
-    if (e < s) e = s;
-    return [s, e];
-  };
-  let [start, end] = pick(comment?.newStart, comment?.newEnd);
-  let removed = false;
-  if (!start && !end) {
-    [start, end] = pick(comment?.oldStart, comment?.oldEnd);
-    removed = true;
-  }
-  return { start, end, removed };
-}
-
-// lineRef states the anchored lines of one comment the way the prompt quotes
-// them, so the diff marking and the sent text agree.
-export function lineRef(comment) {
-  const { start, end, removed } = anchorOf(comment);
-  if (!start) return 'ohne Zeilenangabe';
-  const ref = end === start ? `Zeile ${start}` : `Zeilen ${start}–${end}`;
-  if (!removed) return ref;
-  return end === start ? `${ref} (entfernte Zeile)` : `${ref} (entfernte Zeilen)`;
-}
-
+// commentAnchorText combines the file path with the line reference Go
+// already rendered on the comment (core.ReviewLineRef), so the anchor text
+// and comment order are decided once, in Go, and this module only renders
+// them.
 export function commentAnchorText(comment) {
   const path = String(comment?.path ?? '').trim() || '(unbekannte Datei)';
-  return `${path}, ${lineRef(comment)}`;
-}
-
-// sortComments keeps the comment list in file-then-line order, mirroring the
-// Registry ordering the rendered prompt uses.
-export function sortComments(comments) {
-  const list = Array.isArray(comments) ? [...comments] : [];
-  const anchorLine = (comment) => anchorOf(comment).start;
-  return list.sort((a, b) => {
-    const pathA = String(a?.path ?? '');
-    const pathB = String(b?.path ?? '');
-    if (pathA !== pathB) return pathA < pathB ? -1 : 1;
-    if (anchorLine(a) !== anchorLine(b)) return anchorLine(a) - anchorLine(b);
-    return String(a?.id ?? '') < String(b?.id ?? '') ? -1 : 1;
-  });
+  const ref = String(comment?.lineRef ?? '').trim() || 'ohne Zeilenangabe';
+  return `${path}, ${ref}`;
 }
 
 // diffFileState names how one file entry renders: binary and capped files are

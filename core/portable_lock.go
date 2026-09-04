@@ -16,12 +16,33 @@ const (
 	portableLockStaleAfter = time.Minute
 	portableLockHeartbeat  = 10 * time.Second
 	portableLockRetry      = 10 * time.Millisecond
+
+	portableLockOwnerPrefix = "owner-"
+)
+
+// errPortableLockTaken meldet, dass der kanonische Pfad bereits von einer
+// fremden Generation belegt ist. Nur dieser Fall darf erneut versucht werden.
+var errPortableLockTaken = errors.New("portable lock is taken")
+
+// portableLockStage benennt die Punkte, an denen eine Generation nach ihrer
+// Validierung aufräumt. Ein Test klemmt sich hier ein, weil sich das Fenster
+// zwischen Prüfung und Aufräumen sonst nicht deterministisch treffen lässt.
+type portableLockStage string
+
+const (
+	portableLockStagePublish portableLockStage = "publish"
+	portableLockStageRelease portableLockStage = "release"
 )
 
 type portableDirectoryLockConfig struct {
 	staleAfter time.Duration
 	heartbeat  time.Duration
 	retry      time.Duration
+
+	// Test-Seams, in Produktion nil: publishOwner ersetzt die Owner-Publikation,
+	// beforeCleanup hält zwischen Validierung und Aufräumen an.
+	publishOwner  func(owner, nonce string) error
+	beforeCleanup func(stage portableLockStage)
 }
 
 func (c portableDirectoryLockConfig) normalized() portableDirectoryLockConfig {
@@ -43,6 +64,31 @@ func (c portableDirectoryLockConfig) normalized() portableDirectoryLockConfig {
 	return c
 }
 
+// portableLockClaim ist die Generation, die dieser Prozess am kanonischen Pfad
+// hält. Der Nonce steckt im Namen der Owner-Datei, deshalb adressieren Freigabe
+// und Heartbeat genau diese Generation und nie die eines Nachfolgers, der
+// denselben Pfad inzwischen neu belegt hat.
+type portableLockClaim struct {
+	dir        string
+	owner      string
+	nonce      string
+	generation string
+}
+
+func newPortableLockClaim(dir, nonce string) portableLockClaim {
+	generation := portableLockOwnerPrefix + nonce
+	return portableLockClaim{
+		dir:        dir,
+		owner:      filepath.Join(dir, generation),
+		nonce:      nonce,
+		generation: generation,
+	}
+}
+
+func (c portableLockClaim) held() bool {
+	return portableLockOwnedBy(c.owner, c.nonce)
+}
+
 // withPortableDirectoryLock is the fallback for platforms where this package
 // has no native advisory-lock Adapter. The owner nonce prevents an old holder
 // from deleting a successor's lock; the heartbeat distinguishes a long live
@@ -59,34 +105,26 @@ func withPortableDirectoryLockConfig(ctx context.Context, lockDir string, config
 	if err := os.MkdirAll(filepath.Dir(lockDir), 0o700); err != nil {
 		return err
 	}
-	owner := filepath.Join(lockDir, "owner")
-	nonce := NewUUID()
 	for {
-		err := os.Mkdir(lockDir, 0o700)
+		claim, err := publishPortableLockClaim(lockDir, config)
 		if err == nil {
-			if writeErr := writePortableDirectoryLockOwner(owner, nonce); writeErr != nil {
-				// This process created the unpublished lock directory. Removing the
-				// exact directory also clears a temporary owner file left by a short
-				// write; no successor can own it yet.
-				_ = os.RemoveAll(lockDir)
-				return fmt.Errorf("write lock owner: %w", writeErr)
-			}
 			stop := make(chan struct{})
 			done := make(chan struct{})
-			go heartbeatPortableDirectoryLock(owner, nonce, config.heartbeat, stop, done)
+			go heartbeatPortableLockClaim(claim, config.heartbeat, stop, done)
 			defer func() {
 				close(stop)
 				<-done
-				releasePortableDirectoryLock(lockDir, owner, nonce)
+				releasePortableLockClaim(claim, config)
 			}()
 			return fn()
 		}
-		if !os.IsExist(err) {
-			return fmt.Errorf("create lock directory: %w", err)
+		if !errors.Is(err, errPortableLockTaken) {
+			return err
 		}
-		if nonce, stale := portableDirectoryLockOwnerIfStale(lockDir, owner, config.staleAfter); stale {
-			_ = recoverPortableDirectoryLock(lockDir, owner, nonce, config.staleAfter)
-			continue
+		if sighting, inspectErr := inspectPortableLock(lockDir); inspectErr == nil && sighting.stale(config.staleAfter) {
+			if recoverPortableLock(sighting) == nil {
+				continue
+			}
 		}
 		timer := time.NewTimer(config.retry)
 		select {
@@ -98,6 +136,46 @@ func withPortableDirectoryLockConfig(ctx context.Context, lockDir string, config
 		case <-timer.C:
 		}
 	}
+}
+
+// publishPortableLockClaim baut die vollständige Generation neben dem
+// kanonischen Pfad und schiebt sie mit einem Rename hinein. Das Lock-Verzeichnis
+// ist dadurch nie ohne Owner sichtbar, und ein Fehlschlag räumt ausschließlich
+// den eigenen, nicht wiederverwendbaren Staging-Pfad ab.
+func publishPortableLockClaim(lockDir string, config portableDirectoryLockConfig) (portableLockClaim, error) {
+	// Ein sichtbar belegter Pfad wird ohne Staging beantwortet, damit ein
+	// wartender Kandidat nicht im Retry-Takt schreibt und synct. Die
+	// Ausschlussentscheidung fällt weiterhin allein das Rename.
+	if _, err := os.Lstat(lockDir); err == nil {
+		return portableLockClaim{}, errPortableLockTaken
+	}
+	nonce := NewUUID()
+	claim := newPortableLockClaim(lockDir, nonce)
+	staging := lockDir + ".staging-" + nonce
+	if err := os.Mkdir(staging, 0o700); err != nil {
+		return portableLockClaim{}, fmt.Errorf("create lock directory: %w", err)
+	}
+	write := config.publishOwner
+	if write == nil {
+		write = writePortableDirectoryLockOwner
+	}
+	if err := write(filepath.Join(staging, claim.generation), nonce); err != nil {
+		if config.beforeCleanup != nil {
+			config.beforeCleanup(portableLockStagePublish)
+		}
+		_ = os.RemoveAll(staging)
+		return portableLockClaim{}, fmt.Errorf("write lock owner: %w", err)
+	}
+	if err := os.Rename(staging, lockDir); err != nil {
+		_ = os.RemoveAll(staging)
+		// Ein belegtes Ziel ist der Normalfall der Konkurrenz und kein Fehler;
+		// alles andere bricht ab, statt endlos zu wiederholen.
+		if _, statErr := os.Lstat(lockDir); statErr == nil {
+			return portableLockClaim{}, errPortableLockTaken
+		}
+		return portableLockClaim{}, fmt.Errorf("create lock directory: %w", err)
+	}
+	return claim, nil
 }
 
 func writePortableDirectoryLockOwner(owner, nonce string) error {
@@ -126,7 +204,7 @@ func writePortableDirectoryLockOwner(owner, nonce string) error {
 	return writeErr
 }
 
-func heartbeatPortableDirectoryLock(owner, nonce string, interval time.Duration, stop <-chan struct{}, done chan<- struct{}) {
+func heartbeatPortableLockClaim(claim portableLockClaim, interval time.Duration, stop <-chan struct{}, done chan<- struct{}) {
 	defer close(done)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -135,71 +213,117 @@ func heartbeatPortableDirectoryLock(owner, nonce string, interval time.Duration,
 		case <-stop:
 			return
 		case now := <-ticker.C:
-			if !portableLockOwnedBy(owner, nonce) {
+			if !claim.held() {
 				return
 			}
-			_ = os.Chtimes(owner, now, now)
+			_ = os.Chtimes(claim.owner, now, now)
 		}
 	}
 }
 
-func portableDirectoryLockOwnerIfStale(lockDir, owner string, staleAfter time.Duration) (string, bool) {
-	data, err := os.ReadFile(owner)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return "", false
-		}
-		info, statErr := os.Stat(lockDir)
-		return "", statErr == nil && time.Since(info.ModTime()) > staleAfter
-	}
-	nonce, valid := parsePortableDirectoryLockOwner(data)
-	info, err := os.Stat(owner)
-	if err != nil || time.Since(info.ModTime()) <= staleAfter {
-		return "", false
-	}
-	if !valid {
-		return "", true
-	}
-	return nonce, true
-}
-
-func recoverPortableDirectoryLock(lockDir, owner, expectedNonce string, staleAfter time.Duration) error {
-	data, err := os.ReadFile(owner)
-	if err != nil {
-		if !os.IsNotExist(err) || expectedNonce != "" {
-			return err
-		}
-		info, statErr := os.Stat(lockDir)
-		if statErr != nil || time.Since(info.ModTime()) <= staleAfter {
-			return errors.New("ownerless lock is not stale")
-		}
-	} else {
-		nonce, valid := parsePortableDirectoryLockOwner(data)
-		info, statErr := os.Stat(owner)
-		if statErr != nil || time.Since(info.ModTime()) <= staleAfter {
-			return errors.New("lock owner heartbeat resumed")
-		}
-		if valid {
-			if expectedNonce == "" || nonce != expectedNonce || !portableLockOwnedBy(owner, nonce) {
-				return errors.New("lock owner changed")
-			}
-		} else if expectedNonce != "" {
-			return errors.New("lock owner changed")
-		}
-	}
-	tombstone := lockDir + ".abandoned-" + NewUUID()
-	if err := os.Rename(lockDir, tombstone); err != nil {
-		return err
-	}
-	return os.RemoveAll(tombstone)
-}
-
-func releasePortableDirectoryLock(lockDir, owner, nonce string) {
-	if !portableLockOwnedBy(owner, nonce) {
+// releasePortableLockClaim gibt ausschließlich die eigene Generation frei. Die
+// Owner-Datei trägt den Nonce im Namen, und das Verzeichnis wird nur im leeren
+// Zustand entfernt: Ein Nachfolger, der den Pfad bereits neu belegt hat, hält
+// eine eigene Owner-Datei und übersteht damit beide Schritte unverändert.
+func releasePortableLockClaim(claim portableLockClaim, config portableDirectoryLockConfig) {
+	if !claim.held() {
 		return
 	}
-	_ = os.Remove(owner)
-	_ = os.Remove(lockDir)
+	if config.beforeCleanup != nil {
+		config.beforeCleanup(portableLockStageRelease)
+	}
+	_ = os.Remove(claim.owner)
+	_ = os.Remove(claim.dir)
+}
+
+// portableLockEntry ist ein beobachteter Eintrag samt der Änderungszeit, unter
+// der er gesehen wurde.
+type portableLockEntry struct {
+	path    string
+	modTime time.Time
+}
+
+// portableLockSighting ist die Momentaufnahme einer fremden Generation. Die
+// Wiederherstellung arbeitet nur auf ihr, damit sie später nichts entfernt, was
+// erst nach der Beobachtung entstanden ist.
+type portableLockSighting struct {
+	dir     string
+	entries []portableLockEntry
+	latest  time.Time
+}
+
+func (s portableLockSighting) stale(after time.Duration) bool {
+	return time.Since(s.latest) > after
+}
+
+func inspectPortableLock(lockDir string) (portableLockSighting, error) {
+	listing, err := os.ReadDir(lockDir)
+	if err != nil {
+		return portableLockSighting{}, err
+	}
+	sighting := portableLockSighting{dir: lockDir}
+	for _, item := range listing {
+		path := filepath.Join(lockDir, item.Name())
+		info, statErr := os.Lstat(path)
+		if statErr != nil {
+			// Der Blick ist bereits überholt; eine spätere Runde sieht mehr.
+			return portableLockSighting{}, statErr
+		}
+		sighting.entries = append(sighting.entries, portableLockEntry{path: path, modTime: info.ModTime()})
+		if info.ModTime().After(sighting.latest) {
+			sighting.latest = info.ModTime()
+		}
+	}
+	if len(sighting.entries) == 0 {
+		// Ein leeres Verzeichnis stammt aus einem Absturz vor oder nach der
+		// Publikation; seine eigene Änderungszeit ist der einzige Anhaltspunkt.
+		info, statErr := os.Stat(lockDir)
+		if statErr != nil {
+			return portableLockSighting{}, statErr
+		}
+		sighting.latest = info.ModTime()
+	}
+	return sighting, nil
+}
+
+// recoverPortableLock entfernt genau die beobachtete Generation. Jeder Eintrag
+// wird nur gelöscht, solange seine Änderungszeit die beobachtete ist – ein
+// wieder aufgenommener Heartbeat bricht damit exakt ab –, und das Verzeichnis
+// selbst nur im leeren Zustand. Ein Nachfolger überlebt deshalb auch mehrere
+// verspätete Wiederhersteller: Seine Owner-Datei trägt einen anderen Namen und
+// hält das Verzeichnis gefüllt.
+func recoverPortableLock(sighting portableLockSighting) error {
+	for _, entry := range sighting.entries {
+		info, err := os.Lstat(entry.path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		if !info.ModTime().Equal(entry.modTime) {
+			return errors.New("lock owner heartbeat resumed")
+		}
+		if err := os.RemoveAll(entry.path); err != nil {
+			return err
+		}
+	}
+	if len(sighting.entries) == 0 {
+		info, err := os.Stat(sighting.dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if !info.ModTime().Equal(sighting.latest) {
+			return errors.New("ownerless lock changed")
+		}
+	}
+	if err := os.Remove(sighting.dir); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func portableLockOwnedBy(owner, nonce string) bool {

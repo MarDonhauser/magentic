@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -52,6 +54,57 @@ func TestReadmeDocumentsTheImplementedControlSurface(t *testing.T) {
 	}
 	if !strings.Contains(document, "**Agent Control**") {
 		t.Fatal("Die Architektur-Sektion nennt das Agent-Control-Modul nicht")
+	}
+}
+
+// TestControlCLIFlagsMatchTheSpecDefaults holds the CLI's actual flag.FlagSet
+// wiring against core.ControlVerbSpecs(): every verb parsed with no arguments
+// must produce exactly the ControlArgs its Flags' Defaults declare, and any
+// After step. A spec Default that drifted from what the CLI registers would
+// otherwise only show up as a silently wrong runtime default.
+func TestControlCLIFlagsMatchTheSpecDefaults(t *testing.T) {
+	for _, spec := range core.ControlVerbSpecs() {
+		name := strings.TrimPrefix(string(spec.Verb), "session.")
+		t.Run(name, func(t *testing.T) {
+			var expected core.ControlArgs
+			for _, flag := range spec.Flags {
+				switch flag.Kind {
+				case core.ControlFlagString:
+					flag.SetString(&expected, flag.Default)
+				case core.ControlFlagBool:
+					flag.SetBool(&expected, flag.Default == "true")
+				case core.ControlFlagInt:
+					value := 0
+					if flag.Default != "" {
+						parsed, err := strconv.Atoi(flag.Default)
+						if err != nil {
+							t.Fatalf("Default von %q ist keine Zahl: %q", flag.Name, flag.Default)
+						}
+						value = parsed
+					}
+					flag.SetInt(&expected, value)
+				}
+			}
+			if spec.After != nil {
+				spec.After(&expected, nil)
+			}
+
+			var stdout, stderr bytes.Buffer
+			request, machine, _, code := parseControlInvocation(
+				controlCLI{stdout: &stdout, stderr: &stderr}, name, nil)
+			if code != controlExitOK {
+				t.Fatalf("Parsen ohne Argumente scheiterte: Exit-Code %d (%s)", code, stderr.String())
+			}
+			if machine {
+				t.Fatal("--json ist ohne Argumente nicht gesetzt")
+			}
+			if request.Verb != spec.Verb {
+				t.Fatalf("Verb = %q, want %q", request.Verb, spec.Verb)
+			}
+			if request.Args != expected {
+				t.Fatalf("Args = %+v, want %+v (aus den Flag-Defaults der Spec)", request.Args, expected)
+			}
+		})
 	}
 }
 

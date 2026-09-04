@@ -130,32 +130,6 @@ var claudeMetadataRecordTypes = map[string]bool{
 	"queue-operation": true,
 }
 
-type claudeConversationRecord struct {
-	Type            string `json:"type"`
-	Subtype         string `json:"subtype"`
-	UUID            string `json:"uuid"`
-	Timestamp       string `json:"timestamp"`
-	IsMeta          bool   `json:"isMeta"`
-	IsSidechain     bool   `json:"isSidechain"`
-	ParentToolUseID string `json:"parentToolUseID"`
-	Message         struct {
-		Role    string          `json:"role"`
-		Content json.RawMessage `json:"content"`
-	} `json:"message"`
-}
-
-type claudeContentBlock struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text"`
-	Thinking  string          `json:"thinking"`
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	Input     json.RawMessage `json:"input"`
-	ToolUseID string          `json:"tool_use_id"`
-	Content   json.RawMessage `json:"content"`
-	IsError   bool            `json:"is_error"`
-}
-
 // claudeConversationScan normalizes one record file. It holds the tool calls
 // still waiting for their result, so a result appended in a later reading
 // completes the Item published earlier, and the tool-use ids of delegated
@@ -186,8 +160,8 @@ func (s *claudeConversationScan) Normalize(source ConversationSource, data []byt
 }
 
 func (s *claudeConversationScan) normalizeRecord(source ConversationSource, line []byte) []Item {
-	var record claudeConversationRecord
-	if json.Unmarshal(line, &record) != nil {
+	record, ok := decodeClaudeRecord(line)
+	if !ok {
 		// A line that is not JSON carries no record identity, so no stable
 		// Item could be derived from it.
 		return nil
@@ -229,12 +203,13 @@ func (s *claudeConversationScan) normalizeRecord(source ConversationSource, line
 	}
 }
 
-func (s *claudeConversationScan) normalizeUserRecord(source ConversationSource, record claudeConversationRecord, recordID string) []Item {
-	blocks, plain := claudeContentBlocks(record.Message.Content)
+func (s *claudeConversationScan) normalizeUserRecord(source ConversationSource, record claudeRecord, recordID string) []Item {
+	blocks, plain := claudeTextBlocks(record.Content)
 	if blocks == nil {
 		// A user record whose content is plain text is a developer prompt,
-		// unless Claude injected it as meta text of its own.
-		if record.IsMeta || strings.TrimSpace(plain) == "" {
+		// unless Claude injected it itself, as meta text or as its own
+		// framework prose — the same rule WorkHistory applies to attribution.
+		if record.IsMeta || strings.TrimSpace(plain) == "" || historyInjectedText(plain) {
 			return nil
 		}
 		return []Item{s.promptItem(source, record, recordID, 0, plain)}
@@ -247,7 +222,7 @@ func (s *claudeConversationScan) normalizeUserRecord(source ConversationSource, 
 				items = append(items, completed)
 			}
 		case "text":
-			if record.IsMeta || strings.TrimSpace(block.Text) == "" {
+			if record.IsMeta || strings.TrimSpace(block.Text) == "" || historyInjectedText(block.Text) {
 				continue
 			}
 			items = append(items, s.promptItem(source, record, recordID, index, block.Text))
@@ -256,7 +231,7 @@ func (s *claudeConversationScan) normalizeUserRecord(source ConversationSource, 
 	return items
 }
 
-func (s *claudeConversationScan) promptItem(source ConversationSource, record claudeConversationRecord, recordID string, index int, text string) Item {
+func (s *claudeConversationScan) promptItem(source ConversationSource, record claudeRecord, recordID string, index int, text string) Item {
 	item := s.baseItem(source, record, recordID, index)
 	item.Role = ItemRoleDeveloper
 	item.Kind = ItemKindDeveloperPrompt
@@ -265,8 +240,8 @@ func (s *claudeConversationScan) promptItem(source ConversationSource, record cl
 	return item
 }
 
-func (s *claudeConversationScan) normalizeAssistantRecord(source ConversationSource, record claudeConversationRecord, recordID string) []Item {
-	blocks, plain := claudeContentBlocks(record.Message.Content)
+func (s *claudeConversationScan) normalizeAssistantRecord(source ConversationSource, record claudeRecord, recordID string) []Item {
+	blocks, plain := claudeTextBlocks(record.Content)
 	if blocks == nil {
 		if strings.TrimSpace(plain) == "" {
 			return nil
@@ -340,7 +315,7 @@ func (s *claudeConversationScan) completeToolCall(block claudeContentBlock) (Ite
 	return item, true
 }
 
-func (s *claudeConversationScan) baseItem(source ConversationSource, record claudeConversationRecord, recordID string, index int) Item {
+func (s *claudeConversationScan) baseItem(source ConversationSource, record claudeRecord, recordID string, index int) Item {
 	item := Item{
 		ID:         claudeItemID(recordID, index),
 		OccurredAt: claudeRecordTime(record.Timestamp),
@@ -360,7 +335,7 @@ func (s *claudeConversationScan) baseItem(source ConversationSource, record clau
 	return item
 }
 
-func (s *claudeConversationScan) unknownItem(source ConversationSource, record claudeConversationRecord, recordID, label, title string) Item {
+func (s *claudeConversationScan) unknownItem(source ConversationSource, record claudeRecord, recordID, label, title string) Item {
 	item := s.baseItem(source, record, recordID, 0)
 	item.Role = ItemRoleSystem
 	item.Kind = ItemKindUnknown
@@ -393,25 +368,6 @@ func claudeRecordTime(value string) time.Time {
 	return stamp.UTC()
 }
 
-// claudeContentBlocks reads a message content that is either an array of typed
-// blocks or one plain string. A nil block slice means the content was plain.
-func claudeContentBlocks(raw json.RawMessage) ([]claudeContentBlock, string) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 {
-		return nil, ""
-	}
-	if trimmed[0] == '[' {
-		var blocks []claudeContentBlock
-		if json.Unmarshal(trimmed, &blocks) != nil {
-			return nil, ""
-		}
-		return blocks, ""
-	}
-	var text string
-	_ = json.Unmarshal(trimmed, &text)
-	return nil, text
-}
-
 // claudeDetailLimit caps what one Item carries. A tool result has no bound —
 // a single command can print megabytes — and an Item's detail travels whole to
 // every interface, on the first reading and in every later event. Cutting it
@@ -422,7 +378,7 @@ const claudeDetailLimit = 64 << 10
 // claudeResultText reads a tool result's content, which Claude writes either
 // as one string or as an array of text blocks.
 func claudeResultText(raw json.RawMessage) string {
-	blocks, plain := claudeContentBlocks(raw)
+	blocks, plain := claudeTextBlocks(raw)
 	if blocks == nil {
 		return claudeCappedDetail(plain)
 	}
