@@ -86,3 +86,25 @@ func SendSessionReview(id SessionID, observe func(context.Context, []Session) Ob
 	_, err = OpenRegistry(StatePath()).Change(context.Background(), MarkReviewSent(session.ID, session.Name, time.Now()))
 	return err
 }
+
+// ReviewCommentsForReading gibt die Kommentare mit gerendertem Ankertext
+// zurück. Der Text entsteht erst beim Lesen: gespeichert werden nur die
+// Zeilennummern, damit ReviewLineRef die einzige Stelle bleibt, an der aus
+// ihnen Oberflächentext wird. Die Eingabe bleibt unverändert.
+func ReviewCommentsForReading(comments []ReviewComment) []ReviewComment {
+	if len(comments) == 0 {
+		return nil
+	}
+	read := make([]ReviewComment, len(comments))
+	copy(read, comments)
+	for i := range read {
+		read[i].LineRef = ReviewLineRef(read[i])
+	}
+	return read
+}
+
+// ReviewForReading gibt eine Review mit gerenderten Ankertexten zurück.
+func ReviewForReading(review SessionReview) SessionReview {
+	review.Comments = ReviewCommentsForReading(review.Comments)
+	return review
+}

@@ -126,8 +126,7 @@ func (a *App) OpenReview(sessionID string) (*core.SessionReview, error) {
 	if session.Review == nil {
 		return nil, nil
 	}
-	review := *session.Review
-	review.Comments = append([]core.ReviewComment(nil), session.Review.Comments...)
+	review := core.ReviewForReading(*session.Review)
 	return &review, nil
 }
 
@@ -137,7 +136,11 @@ func (a *App) SentReviews(sessionID string) ([]core.SessionReview, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append([]core.SessionReview(nil), session.SentReviews...), nil
+	sent := make([]core.SessionReview, 0, len(session.SentReviews))
+	for _, review := range session.SentReviews {
+		sent = append(sent, core.ReviewForReading(review))
+	}
+	return sent, nil
 }
 
 // ReviewPreview renders the open Review into the prompt that SendReview would

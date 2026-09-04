@@ -133,6 +133,10 @@ type ReviewComment struct {
 	Text      string             `json:"text"`
 	Mode      DiffComparisonMode `json:"mode"`
 	CreatedAt time.Time          `json:"created_at"`
+	// LineRef ist der gerenderte Ankertext. Er wird beim Lesen aus
+	// ReviewLineRef erzeugt und nie gespeichert, damit Anker und Reihenfolge
+	// eine einzige Regel bleiben statt einer zweiten, alternden Kopie.
+	LineRef string `json:"lineRef,omitempty"`
 }
 
 // SessionReview is one Review belonging to a Session. A zero SentAt means the

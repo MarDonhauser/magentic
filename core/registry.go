@@ -257,6 +257,9 @@ func QueueDueSessionAutomation(sessionID SessionID, automationID string, at time
 // AddReviewComment appends a comment to the Session's one open Review,
 // creating the Review when the Session has none yet.
 func AddReviewComment(sessionID SessionID, name string, comment ReviewComment) RegistryChange {
+	// Der Ankertext ist abgeleitet und gehört nicht auf die Platte: sonst
+	// altert eine Kopie neben ReviewLineRef.
+	comment.LineRef = ""
 	return RegistryChange{kind: registryAddReviewComment, sessionID: sessionID, sessionName: name, reviewComment: comment}
 }
 
