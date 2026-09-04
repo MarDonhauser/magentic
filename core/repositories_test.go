@@ -822,11 +822,11 @@ func TestRepositoryWorktreeForDirectoryPrefersContainingManagedWorktree(t *testi
 	managedPath := filepath.Join(filepath.Dir(projectPath), "project-agents", "topic")
 	worktrees := []RepositoryWorktree{{Path: projectPath, Main: true}, {Path: managedPath}}
 
-	worktree, found := repositoryWorktreeForDirectory(worktrees, filepath.Join(managedPath, "internal", "package"))
-	if !found || !sameRepositoryPath(worktree.Path, managedPath) {
-		t.Fatalf("repositoryWorktreeForDirectory() = %#v, %v", worktree, found)
+	index := repositoryWorktreeIndexForDirectory(worktrees, filepath.Join(managedPath, "internal", "package"))
+	if index < 0 || !sameRepositoryPath(worktrees[index].Path, managedPath) {
+		t.Fatalf("repositoryWorktreeIndexForDirectory() = %d", index)
 	}
-	if _, found := repositoryWorktreeForDirectory(worktrees, filepath.Join(filepath.Dir(projectPath), "outside")); found {
+	if index := repositoryWorktreeIndexForDirectory(worktrees, filepath.Join(filepath.Dir(projectPath), "outside")); index >= 0 {
 		t.Fatal("unrelated directory was assigned to a Worktree")
 	}
 }

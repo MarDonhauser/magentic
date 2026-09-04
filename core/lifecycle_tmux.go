@@ -156,7 +156,7 @@ func (tmuxLifecycleRuntime) DeliverInitial(_ context.Context, session Session, p
 	// enqueuePrompt confirms only in-process scheduling. The durable state
 	// therefore remains delivery_unknown until a future observation can prove
 	// acceptance; reconciliation intentionally does not submit it again.
-	if err := enqueuePrompt(session.TmuxName(), prompt, true, provider.Tool(), true, true, false, nil); err != nil {
+	if err := enqueuePrompt(promptTargetForSession(session), prompt, true, provider.Tool(), true, true, false, nil); err != nil {
 		return false, err
 	}
 	return false, nil

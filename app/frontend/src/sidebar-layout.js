@@ -9,7 +9,9 @@ function sessionsOf(ov) {
   for (const p of ov?.projects || []) {
     for (const wt of p.worktrees || []) {
       for (const a of wt.agents || []) {
-        if (a.dock || a.status === 'dead') continue;
+        // core entscheidet, was lebt (OvAgent.live); eine resumable Session
+        // gehört weiter in ihre Projektgruppe.
+        if (a.dock || !(a.live || a.resumable)) continue;
         agents.set(String(a.id), {
           ...a,
           project: p.name,

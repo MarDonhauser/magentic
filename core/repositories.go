@@ -1507,11 +1507,11 @@ func (a RepositoryBranchAssignment) Known() bool { return a.State == RepositoryK
 // is turned into "which branch belongs to this directory" and "which Worktree
 // has this branch checked out". Consumers derive neither of the two again.
 type RepositoryBranchAssignments struct {
-	State       RepositoryKnowledge                 `json:"state"`
-	Problem     *RepositoryProblem                  `json:"problem,omitempty"`
-	Worktrees   []RepositoryWorktree                `json:"worktrees,omitempty"`
-	Assignments []RepositoryBranchAssignment        `json:"assignments,omitempty"`
-	ByBranch    map[string]RepositoryWorktree       `json:"-"`
+	State       RepositoryKnowledge           `json:"state"`
+	Problem     *RepositoryProblem            `json:"problem,omitempty"`
+	Worktrees   []RepositoryWorktree          `json:"worktrees,omitempty"`
+	Assignments []RepositoryBranchAssignment  `json:"assignments,omitempty"`
+	ByBranch    map[string]RepositoryWorktree `json:"-"`
 }
 
 func (a RepositoryBranchAssignments) Known() bool { return a.State == RepositoryKnown }
@@ -1696,14 +1696,6 @@ func sameRepositoryPath(a, b string) bool {
 		return false
 	}
 	return repositoryComparablePath(a) == repositoryComparablePath(b)
-}
-
-func repositoryWorktreeForDirectory(worktrees []RepositoryWorktree, directory string) (RepositoryWorktree, bool) {
-	index := repositoryWorktreeIndexForDirectory(worktrees, directory)
-	if index < 0 {
-		return RepositoryWorktree{}, false
-	}
-	return worktrees[index], true
 }
 
 func repositoryWorktreeIndexForDirectory(worktrees []RepositoryWorktree, directory string) int {

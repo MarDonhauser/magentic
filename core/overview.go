@@ -35,6 +35,14 @@ type OvAgent struct {
 	Automation *OvAutomation     `json:"automation,omitempty"`
 	StatusLine *OvStatusLine     `json:"statusLine,omitempty"`
 
+	// Live sagt, ob die Session als lebend gilt. Die Regel gehört hierher:
+	// eine Oberfläche, die sie aus dem Status-String neu ableitet, hat eine
+	// zweite Fassung davon — und vier Oberflächen hatten vier verschiedene.
+	Live bool `json:"live"`
+	// Working sagt, ob gerade gearbeitet wird. Das ist eine andere Frage als
+	// Live: eine wartende Session lebt, arbeitet aber nicht.
+	Working bool `json:"working"`
+
 	// Resumable marks a Session whose runtime is gone but whose record still
 	// carries everything a resume needs. It renders with its own label in the
 	// Session's normal Project group, never as running and never as dead.
@@ -210,6 +218,12 @@ func statusKey(s AgentStatus) string {
 func agentAlive(s AgentStatus) bool {
 	return s == StatusRunning || s == StatusAgents || s == StatusShell || s == StatusBlocked ||
 		s == StatusDone || s == StatusIdle || s == StatusTerm
+}
+
+// agentWorking nennt die Sessions, die gerade arbeiten. Eine blockierte
+// Session lebt, arbeitet aber nicht — sie wartet auf eine Antwort.
+func agentWorking(s AgentStatus) bool {
+	return s == StatusRunning || s == StatusAgents || s == StatusShell || s == StatusTerm
 }
 
 type overviewRepositories interface {
@@ -667,6 +681,8 @@ func toOvAgent(a Agent, observed SessionObservation, branch string, res SessionR
 		Term:          a.IsTerm(),
 		Phase:         phase,
 		PhaseLabel:    phaseLabel,
+		Live:          agentAlive(st),
+		Working:       agentWorking(st),
 		Deployed:      agentAlive(st) && !a.DeployAt.IsZero() && time.Since(a.DeployAt) < 45*time.Minute,
 		Known:         false,
 		OwnDirty:      0,
@@ -685,6 +701,8 @@ func toOvAgent(a Agent, observed SessionObservation, branch string, res SessionR
 			agent.Label = ResumableStatusLabel
 			agent.Detail = ResumeLastSeen(a)
 			agent.Resumable = true
+			agent.Live = false
+			agent.Working = false
 			agent.ResumeFresh = res.FreshOnly
 			agent.LastSeen = ResumeLastSeen(a)
 		} else if res.Reason != "" {

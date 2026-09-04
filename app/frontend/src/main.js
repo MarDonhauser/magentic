@@ -98,7 +98,8 @@ function pipelineRunningFor(project) {
 function agentVisual(a, project) {
   const proj = project ?? a?.project;
   const st = STATUS[a?.status] || STATUS.unknown;
-  const alive = ['running', 'agents', 'blocked', 'done', 'idle', 'term'].includes(a?.status);
+  // Lebendigkeit entscheidet core (OvAgent.live), nicht diese Oberfläche.
+  const alive = a?.live === true;
   if (alive && (a?.phase === 'deploy' || a?.deployed) && pipelineRunningFor(proj)) {
     const p = PHASE.pipeline;
     return { color: p.color, ico: p.ico, label: p.label };
@@ -2063,7 +2064,7 @@ function liveSessions() {
   for (const p of ov?.projects || []) {
     for (const wt of p.worktrees || []) {
       for (const a of wt.agents || []) {
-        if (a.dock || ['dead', 'exited'].includes(a.status)) continue;
+        if (a.dock || !(a.live || a.resumable)) continue;
         sessions.push({ ...a, project: p.name, branch: a.branch || wt.branch || '' });
       }
     }
@@ -2075,7 +2076,7 @@ function attentionState() {
   const sessions = liveSessions();
   return {
     waiting: sessions.filter(a => a.status === 'blocked'),
-    active: sessions.filter(a => ['running', 'agents', 'shell', 'term'].includes(a.status)),
+    active: sessions.filter(a => a.working === true),
     finished: sessions.filter(a => a.status === 'done'),
     unread: sessions.filter(a => a.unread && a.status !== 'blocked'),
     unknown: sessions.filter(a => !a.status || a.status === 'unknown'),

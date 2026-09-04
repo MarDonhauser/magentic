@@ -95,8 +95,8 @@ type ObservationSnapshot struct {
 	// Ein Client, der über das Netz liest, setzt remote (siehe
 	// observation_transport.go): „Host konnte tmux nicht beobachten" bleibt
 	// damit unterscheidbar von „Client erreicht den Host nicht".
-	Transport         ObservationTransport `json:"transport,omitempty"`
-	TransportProblem  string               `json:"transportProblem,omitempty"`
+	Transport        ObservationTransport `json:"transport,omitempty"`
+	TransportProblem string               `json:"transportProblem,omitempty"`
 }
 
 // promptInputState is the provider-aware input fact consumed by prompt
@@ -123,23 +123,6 @@ type promptTargetObservation struct {
 }
 
 type observationReader func(context.Context, []Session) ObservationSnapshot
-
-// observePromptTarget adapts a runtime-only prompt transport target to one
-// fresh, targeted Observation. The scoped SessionID exists only to preserve
-// Observation's stable join semantics for this single probe. The reader is an
-// explicit seam so a caller's coherent Observation Adapter is also used for
-// delivery-time revalidation.
-func observePromptTarget(ctx context.Context, runtimeName string, observe observationReader) promptTargetObservation {
-	if observe == nil {
-		observe = Observe
-	}
-	target := Session{
-		ID:          SessionID("prompt-target:" + runtimeName),
-		Name:        strings.TrimPrefix(runtimeName, SessionPrefix),
-		RuntimeName: runtimeName,
-	}
-	return promptTargetObservationFromSnapshot(target, observe(ctx, []Session{target}))
-}
 
 func promptTargetObservationFromSnapshot(target Session, snapshot ObservationSnapshot) promptTargetObservation {
 	for _, observed := range snapshot.Sessions {

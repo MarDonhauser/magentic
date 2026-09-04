@@ -49,22 +49,40 @@ func TestPromptTargetQueuePassesAbsoluteDeadlineToDelivery(t *testing.T) {
 }
 
 func TestForgetPromptTargetQueueDropsRemovedSession(t *testing.T) {
-	session := "magentic-forget-test"
-	first := queueForPromptTarget(session)
-	t.Cleanup(func() { forgetPromptTargetQueue(session) })
+	target := promptTargetForSession(Session{ID: "forget-test", Name: "forget-test", RuntimeName: "magentic-forget-test"})
+	first := queueForPromptTarget(target)
+	t.Cleanup(func() { forgetPromptTargetQueue(target) })
 
-	if _, ok := promptTargetQueues.Load(session); !ok {
+	if _, ok := promptTargetQueues.Load(target.key()); !ok {
 		t.Fatal("queue for session was not stored")
 	}
 
-	forgetPromptTargetQueue(session)
-	if _, ok := promptTargetQueues.Load(session); ok {
+	forgetPromptTargetQueue(target)
+	if _, ok := promptTargetQueues.Load(target.key()); ok {
 		t.Fatal("queue for removed session is still stored")
 	}
 
-	second := queueForPromptTarget(session)
+	second := queueForPromptTarget(target)
 	if second == first {
 		t.Fatal("reused runtime address inherited the removed session's queue")
+	}
+}
+
+// TestPromptTargetQueueKeyFollowsStableIdentity hält fest, warum die
+// Warteschlange nach SessionID schlüsselt: eine neue Session, die die
+// Laufzeitadresse einer entfernten erbt, darf deren Einträge nicht erben.
+func TestPromptTargetQueueKeyFollowsStableIdentity(t *testing.T) {
+	removed := promptTargetForSession(Session{ID: "session-a", Name: "hera", RuntimeName: "magentic-hera"})
+	successor := promptTargetForSession(Session{ID: "session-b", Name: "hera", RuntimeName: "magentic-hera"})
+	if removed.key() == successor.key() {
+		t.Fatalf("zwei Sessions teilen den Warteschlangenschlüssel %q", removed.key())
+	}
+	t.Cleanup(func() {
+		forgetPromptTargetQueue(removed)
+		forgetPromptTargetQueue(successor)
+	})
+	if queueForPromptTarget(removed) == queueForPromptTarget(successor) {
+		t.Fatal("Nachfolger erbte die Warteschlange der entfernten Session")
 	}
 }
 

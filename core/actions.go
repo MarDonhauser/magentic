@@ -413,8 +413,8 @@ func newPromptTargetQueue() *promptTargetQueue {
 	}
 }
 
-func queueForPromptTarget(session string) *promptTargetQueue {
-	q, _ := promptTargetQueues.LoadOrStore(session, newPromptTargetQueue())
+func queueForPromptTarget(target promptTarget) *promptTargetQueue {
+	q, _ := promptTargetQueues.LoadOrStore(target.key(), newPromptTargetQueue())
 	return q.(*promptTargetQueue)
 }
 
@@ -422,8 +422,8 @@ func queueForPromptTarget(session string) *promptTargetQueue {
 // map lives for the process lifetime, so without this every removed Session
 // leaves one entry behind — and a reused runtime address would inherit stale
 // pending entries.
-func forgetPromptTargetQueue(session string) {
-	promptTargetQueues.Delete(session)
+func forgetPromptTargetQueue(target promptTarget) {
+	promptTargetQueues.Delete(target.key())
 }
 
 func (q *promptTargetQueue) begin(key string) (*pendingPrompt, bool) {
@@ -447,8 +447,8 @@ func (q *promptTargetQueue) finish(key string, pending *pendingPrompt, err error
 	q.pendingMu.Unlock()
 }
 
-func promptDeadlineError(session string) error {
-	return fmt.Errorf("%w: Ziel-Session %q", errPromptDeliveryDeadline, strings.TrimPrefix(session, SessionPrefix))
+func promptDeadlineError(label string) error {
+	return fmt.Errorf("%w: Ziel-Session %q", errPromptDeliveryDeadline, label)
 }
 
 func waitForPromptDeadline(deadline time.Time, delay time.Duration, session string) error {
@@ -535,33 +535,44 @@ func (q *promptTargetQueue) enqueue(session, key string, synchronous bool, deadl
 	return nil
 }
 
-func inspectLivePromptTargetUsing(session, expectedTool string, observe observationReader) (promptTargetObservation, error) {
-	name := strings.TrimPrefix(session, SessionPrefix)
-	observed := observePromptTarget(context.Background(), session, observe)
+// inspectLivePromptTarget löst das Ziel frisch auf und beobachtet die Session,
+// die die stabile Identität JETZT trägt. Der zurückgegebene promptTarget führt
+// den aktuellen RuntimeName mit, damit der Aufrufer dieselbe Session sendet,
+// die er beobachtet hat.
+func inspectLivePromptTarget(target promptTarget, expectedTool string, observe observationReader) (promptTarget, promptTargetObservation, error) {
+	resolved, session, err := target.resolve()
+	if err != nil {
+		return target, promptTargetObservation{}, err
+	}
+	name := resolved.label()
+	observed := observeResolvedPromptTarget(context.Background(), session, observe)
 	if err := validatePromptTargetObservation(name, observed); err != nil {
-		return promptTargetObservation{}, err
+		return resolved, promptTargetObservation{}, err
 	}
 	if expectedTool != "" && observed.Tool != expectedTool {
-		return promptTargetObservation{}, fmt.Errorf(
+		return resolved, promptTargetObservation{}, fmt.Errorf(
 			"KI-Tool in Ziel-Session %q wechselte von %s zu %s", name, expectedTool, observed.Tool,
 		)
 	}
-	return observed, nil
+	return resolved, observed, nil
 }
 
-func deliverPrompt(session, prompt string, submit bool, expectedTool string, waitForReady, tolerateStartup bool, validate promptTargetValidator, deadline time.Time, observe observationReader) error {
+func deliverPrompt(target promptTarget, prompt string, submit bool, expectedTool string, waitForReady, tolerateStartup bool, validate promptTargetValidator, deadline time.Time, observe observationReader) error {
 	if waitForReady {
 		for {
-			if err := waitForPromptDeadline(deadline, time.Second, session); err != nil {
+			if err := waitForPromptDeadline(deadline, time.Second, target.label()); err != nil {
 				return err
 			}
-			observed, err := inspectLivePromptTargetUsing(session, expectedTool, observe)
+			// Jede Runde löst neu auf: eine entfernte Session bricht ab, eine
+			// umbenannte wird unter ihrem neuen Namen weiterverfolgt.
+			resolved, observed, err := inspectLivePromptTarget(target, expectedTool, observe)
 			if err != nil {
-				if tolerateStartup {
+				if tolerateStartup && !errors.Is(err, errPromptTargetGone) {
 					continue
 				}
 				return err
 			}
+			target = resolved
 			if observed.Input != promptInputReady {
 				continue
 			}
@@ -570,16 +581,16 @@ func deliverPrompt(session, prompt string, submit bool, expectedTool string, wai
 					continue
 				}
 			}
-			if err := waitForPromptDeadline(deadline, 500*time.Millisecond, session); err != nil {
+			if err := waitForPromptDeadline(deadline, 500*time.Millisecond, target.label()); err != nil {
 				return err
 			}
-			return sendPromptLiteralValidated(session, prompt, submit, expectedTool, validate, observe)
+			return sendPromptLiteralValidated(target, prompt, submit, expectedTool, validate, observe)
 		}
 	}
 	if !time.Now().Before(deadline) {
-		return promptDeadlineError(session)
+		return promptDeadlineError(target.label())
 	}
-	return sendPromptLiteralValidated(session, prompt, submit, expectedTool, validate, observe)
+	return sendPromptLiteralValidated(target, prompt, submit, expectedTool, validate, observe)
 }
 
 func promptDeliveryKey(prompt string, submit bool, expectedTool string, waitForReady, tolerateStartup, preferSync bool, validate promptTargetValidator) string {
@@ -600,19 +611,19 @@ func promptDeliveryKey(prompt string, submit bool, expectedTool string, waitForR
 	}, "\x00")
 }
 
-func enqueuePrompt(session, prompt string, submit bool, expectedTool string, waitForReady, tolerateStartup, preferSync bool, validate promptTargetValidator) error {
-	return enqueuePromptUsing(session, prompt, submit, expectedTool, waitForReady, tolerateStartup, preferSync, validate, nil)
+func enqueuePrompt(target promptTarget, prompt string, submit bool, expectedTool string, waitForReady, tolerateStartup, preferSync bool, validate promptTargetValidator) error {
+	return enqueuePromptUsing(target, prompt, submit, expectedTool, waitForReady, tolerateStartup, preferSync, validate, nil)
 }
 
-func enqueuePromptUsing(session, prompt string, submit bool, expectedTool string, waitForReady, tolerateStartup, preferSync bool, validate promptTargetValidator, observe observationReader) error {
+func enqueuePromptUsing(target promptTarget, prompt string, submit bool, expectedTool string, waitForReady, tolerateStartup, preferSync bool, validate promptTargetValidator, observe observationReader) error {
 	if strings.TrimSpace(prompt) == "" {
 		return fmt.Errorf("Prompt ist leer")
 	}
 	key := promptDeliveryKey(prompt, submit, expectedTool, waitForReady, tolerateStartup, preferSync, validate)
-	q := queueForPromptTarget(session)
+	q := queueForPromptTarget(target)
 	deadline := time.Now().Add(promptDeliveryTimeout)
-	return q.enqueue(session, key, preferSync, deadline, func(deadline time.Time) error {
-		return deliverPrompt(session, prompt, submit, expectedTool, waitForReady, tolerateStartup, validate, deadline, observe)
+	return q.enqueue(target.label(), key, preferSync, deadline, func(deadline time.Time) error {
+		return deliverPrompt(target, prompt, submit, expectedTool, waitForReady, tolerateStartup, validate, deadline, observe)
 	})
 }
 
@@ -631,35 +642,63 @@ func promptTerminalInput(prompt string) string {
 // sendPromptLiteralValidated passes the prompt as one tmux argument. In
 // particular, it must never be interpolated into a shell command: handoff
 // metadata can contain paths and names that have meaning to a shell.
-func sendPromptLiteralValidated(session, prompt string, submit bool, expectedTool string, validate promptTargetValidator, observe observationReader) error {
-	observed, err := inspectLivePromptTargetUsing(session, expectedTool, observe)
+// sendPromptLiteralValidated stellt zu. Es hält dabei die
+// RuntimeName-Transition-Sperre über die gesamte letzte Phase: letzte
+// Beobachtung, literales Senden, Beobachtung vor Enter und Enter. Nur so kann
+// zwischen Beobachtung und Senden keine Umbenennung dazwischentreten, die den
+// Namen an eine andere Session weiterreicht.
+//
+// Der Prompt geht als ein tmux-Argument. Er darf insbesondere nie in eine
+// Shell-Zeile interpoliert werden: Handoff-Metadaten enthalten Pfade und
+// Namen, die für eine Shell Bedeutung haben.
+func sendPromptLiteralValidated(target promptTarget, prompt string, submit bool, expectedTool string, validate promptTargetValidator, observe observationReader) error {
+	resolved, _, err := target.resolve()
 	if err != nil {
 		return err
 	}
-	if validate != nil {
-		if err := validate(observed); err != nil {
+	runtimeName := resolved.runtime
+	return resolved.withRuntimeTransition(runtimeName, func() error {
+		// Unter der Sperre erneut auflösen: der Name, auf den wir warten,
+		// muss immer noch der adressierten Session gehören.
+		locked, _, err := resolved.resolve()
+		if err != nil {
 			return err
 		}
-	}
-	if _, err := Tmux("send-keys", "-t", TargetPane(session), "-l", promptTerminalInput(prompt)); err != nil {
-		return fmt.Errorf("Prompt an tmux senden: %w", err)
-	}
-	if !submit {
+		if locked.runtime != runtimeName {
+			return fmt.Errorf(
+				"Ziel-Session %q wechselte ihre Laufzeitadresse während der Zustellung", locked.label(),
+			)
+		}
+
+		_, observed, err := inspectLivePromptTarget(locked, expectedTool, observe)
+		if err != nil {
+			return err
+		}
+		if validate != nil {
+			if err := validate(observed); err != nil {
+				return err
+			}
+		}
+		if _, err := Tmux("send-keys", "-t", TargetPane(runtimeName), "-l", promptTerminalInput(prompt)); err != nil {
+			return fmt.Errorf("Prompt an tmux senden: %w", err)
+		}
+		if !submit {
+			return nil
+		}
+		_, observed, err = inspectLivePromptTarget(locked, expectedTool, observe)
+		if err != nil {
+			return err
+		}
+		if validate != nil {
+			if err := validate(observed); err != nil {
+				return err
+			}
+		}
+		if _, err := Tmux("send-keys", "-t", TargetPane(runtimeName), "Enter"); err != nil {
+			return fmt.Errorf("Prompt in tmux absenden: %w", err)
+		}
 		return nil
-	}
-	observed, err = inspectLivePromptTargetUsing(session, expectedTool, observe)
-	if err != nil {
-		return err
-	}
-	if validate != nil {
-		if err := validate(observed); err != nil {
-			return err
-		}
-	}
-	if _, err := Tmux("send-keys", "-t", TargetPane(session), "Enter"); err != nil {
-		return fmt.Errorf("Prompt in tmux absenden: %w", err)
-	}
-	return nil
+	})
 }
 
 func StartSkillAgent(st *State, projectID ProjectID, dir, prompt, kind, nameHint string) (string, error) {

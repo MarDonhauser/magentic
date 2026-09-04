@@ -45,20 +45,20 @@ type GraphBranch struct {
 }
 
 type GitGraph struct {
-	ProjectID    ProjectID           `json:"projectId"`
-	Project      string              `json:"project"`
-	Main         string              `json:"main"`
-	Lanes        int                 `json:"lanes"`
-	Commits      []GraphCommit       `json:"commits"`
-	Branches     []GraphBranch       `json:"branches"`
-	Truncate bool `json:"truncated"`
+	ProjectID ProjectID     `json:"projectId"`
+	Project   string        `json:"project"`
+	Main      string        `json:"main"`
+	Lanes     int           `json:"lanes"`
+	Commits   []GraphCommit `json:"commits"`
+	Branches  []GraphBranch `json:"branches"`
+	Truncate  bool          `json:"truncated"`
 	// Availability trägt die Kenntnis über das Repository selbst,
 	// HistoryAvailability die über den gelesenen Verlauf. Ein unlesbarer
 	// Verlauf macht ein vorhandenes Repository nicht unbekannt.
 	Availability        RepositoryKnowledge `json:"availability"`
 	HistoryAvailability RepositoryKnowledge `json:"historyAvailability"`
-	Problems     []RepositoryProblem `json:"problems,omitempty"`
-	Err          string              `json:"err,omitempty"`
+	Problems            []RepositoryProblem `json:"problems,omitempty"`
+	Err                 string              `json:"err,omitempty"`
 }
 
 func BuildGitGraph(s *State, projectID ProjectID, limit int) GitGraph {

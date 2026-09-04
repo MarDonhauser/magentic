@@ -305,3 +305,37 @@ func TestOverviewProjectsQueuedOutboxMessages(t *testing.T) {
 		t.Fatal("an empty Outbox produced a queued projection")
 	}
 }
+
+// TestOverviewEmitsLivenessAsAFact hält fest, dass Lebendigkeit und Arbeit
+// Tatsachen des Overviews sind und nicht aus dem Status-String abgeleitet
+// werden müssen. Vier Oberflächen leiteten sie vorher mit vier verschiedenen
+// Mengen ab; keine davon kannte "resumable".
+func TestOverviewEmitsLivenessAsAFact(t *testing.T) {
+	cases := []struct {
+		status  AgentStatus
+		live    bool
+		working bool
+	}{
+		{StatusRunning, true, true},
+		{StatusAgents, true, true},
+		{StatusShell, true, true},
+		{StatusTerm, true, true},
+		{StatusBlocked, true, false},
+		{StatusIdle, true, false},
+		{StatusDone, true, false},
+		{StatusExited, false, false},
+		{StatusDead, false, false},
+		{StatusUnknown, false, false},
+	}
+	for _, c := range cases {
+		if got := agentAlive(c.status); got != c.live {
+			t.Errorf("agentAlive(%v) = %v, erwartet %v", c.status, got, c.live)
+		}
+		if got := agentWorking(c.status); got != c.working {
+			t.Errorf("agentWorking(%v) = %v, erwartet %v", c.status, got, c.working)
+		}
+		if agentWorking(c.status) && !agentAlive(c.status) {
+			t.Errorf("Status %v arbeitet, ohne zu leben", c.status)
+		}
+	}
+}

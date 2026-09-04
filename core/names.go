@@ -62,11 +62,19 @@ var nameStripPrefixes = []string{"agent/", "feature/", "feat/", "fix/", "bugfix/
 
 // SessionNameHint liefert den Branch-Namen des Verzeichnisses, solange der
 // aussagekräftiger ist als der übergebene Fallback (Worktree- oder Projektname).
+// nameHintRepositories ist der Seam, über den der Namensvorschlag sein
+// Repository-Wissen bezieht. Er ist eine Variable, weil SessionNameHint eine
+// freie Funktion mit vielen Aufrufern ist; ein Test tauscht ihn, statt ein
+// echtes Git zu brauchen.
+var nameHintRepositories interface {
+	Inspect(context.Context, RepositoryInspectRequest) (RepositoryInspection, error)
+} = NewRepositories()
+
 func SessionNameHint(dir, fallback string) string {
 	if dir == "" {
 		return fallback
 	}
-	inspection, err := NewRepositories().Inspect(context.Background(), RepositoryInspectRequest{Directory: dir})
+	inspection, err := nameHintRepositories.Inspect(context.Background(), RepositoryInspectRequest{Directory: dir})
 	if err != nil || !inspection.Checkout.Known() || inspection.Checkout.Value.Kind != RepositoryBranchCheckout {
 		return fallback
 	}

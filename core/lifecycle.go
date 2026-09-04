@@ -2,12 +2,10 @@ package core
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 )
@@ -220,10 +218,14 @@ type SessionLifecycle struct {
 	// transitions serialisiert Project-, Worktree-, Session- und
 	// Runtime-Übergänge über einen Koordinator, der ihre Reihenfolge kennt.
 	transitions transitionCoordinator
-	observe     func(context.Context, []Session) ObservationSnapshot
-	discover    func(context.Context, *State) RegistryDiscovery
-	ledgerPath  string
-	now         func() time.Time
+	// ledger ist der durable Speicher der Transitionen. Er liegt in
+	// lifecycle_ledger.go: eigenes Modul, drei Methoden, eigener Begriff für
+	// Ablösung.
+	ledger     lifecycleLedgerStore
+	observe    func(context.Context, []Session) ObservationSnapshot
+	discover   func(context.Context, *State) RegistryDiscovery
+	ledgerPath string
+	now        func() time.Time
 }
 
 func OpenSessionLifecycle(config SessionLifecycleConfig) *SessionLifecycle {
@@ -252,31 +254,14 @@ func newSessionLifecycle(registry lifecycleRegistry, runtime lifecycleRuntime, r
 	return &SessionLifecycle{
 		registry: registry, runtime: exactLifecycleRuntime{delegate: runtime}, repositories: repositories,
 		transitions: newTransitionCoordinator(lockRoot),
+		ledger:      newLifecycleLedgerStore(ledgerPath, time.Now),
 		observe:     Observe, discover: DiscoverNew,
 		ledgerPath: ledgerPath, now: time.Now,
 	}
 }
 
 func (l *SessionLifecycle) Snapshot(ctx context.Context) (LifecycleSnapshot, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	var snapshot LifecycleSnapshot
-	err := withRegistryFileLock(ctx, l.ledgerPath, func() error {
-		ledger, err := readLifecycleLedger(l.ledgerPath)
-		if err != nil {
-			return err
-		}
-		snapshot.Revision = ledger.Revision
-		for _, record := range ledger.Records {
-			snapshot.Records = append(snapshot.Records, record)
-		}
-		sort.Slice(snapshot.Records, func(i, j int) bool {
-			return snapshot.Records[i].UpdatedAt.After(snapshot.Records[j].UpdatedAt)
-		})
-		return nil
-	})
-	return snapshot, err
+	return l.ledger.Records(ctx)
 }
 
 func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvision) (SessionLifecycleResult, error) {
@@ -417,7 +402,7 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 					if availabilityErr := l.requireProvisionTargetAvailable(ctx, freshSession); availabilityErr != nil {
 						return availabilityErr
 					}
-					if _, putErr := l.putRecord(ctx, record, false); putErr != nil {
+					if _, putErr := l.ledger.Put(ctx, record, false); putErr != nil {
 						return putErr
 					}
 					var advanceErr error
@@ -814,7 +799,7 @@ func (l *SessionLifecycle) resumeAfterRestartWithProvider(ctx context.Context, i
 				return recordErr
 			}
 			return l.withRecordRuntimeTransition(ctx, record, func(ctx context.Context) error {
-				if _, putErr := l.putRecord(ctx, record, false); putErr != nil {
+				if _, putErr := l.ledger.Put(ctx, record, false); putErr != nil {
 					return putErr
 				}
 				var advanceErr error
@@ -932,7 +917,7 @@ func (l *SessionLifecycle) Rename(ctx context.Context, id SessionID, name, newNa
 		}
 		current := currentState.Agents[currentIndex]
 		if current.Name == newName {
-			latest, ok, readErr := l.recordForSession(ctx, current.ID)
+			latest, ok, readErr := l.ledger.ForSession(ctx, current.ID)
 			if readErr != nil {
 				return readErr
 			}
@@ -967,7 +952,7 @@ func (l *SessionLifecycle) Rename(ctx context.Context, id SessionID, name, newNa
 			CreatedAt:      now, UpdatedAt: now,
 		}
 		return l.withRecordRuntimeTransition(ctx, record, func(ctx context.Context) error {
-			if _, putErr := l.putRecord(ctx, record, false); putErr != nil {
+			if _, putErr := l.ledger.Put(ctx, record, false); putErr != nil {
 				return putErr
 			}
 			advanced, snapshotErr = l.advanceRename(ctx, record)
@@ -1048,7 +1033,7 @@ func (l *SessionLifecycle) planExisting(ctx context.Context, id SessionID, name 
 // rename that may already have crossed the runtime Seam. A collision rejected
 // before that Seam remains safely supersedable by a newer user intent.
 func (l *SessionLifecycle) settleCrossedRename(ctx context.Context, id SessionID) error {
-	latest, ok, err := l.recordForSession(ctx, id)
+	latest, ok, err := l.ledger.ForSession(ctx, id)
 	if err != nil || !ok || latest.TransitionKind != LifecycleTransitionRename || latest.Phase == LifecycleConverged {
 		return err
 	}
@@ -1110,7 +1095,7 @@ func (l *SessionLifecycle) newStateTransitionRecord(state State, session Session
 // crossing, and Registry convergence under one RuntimeName lock prevents a
 // different Project from adopting the same external process.
 func (l *SessionLifecycle) persistAndAdvanceStateTransition(ctx context.Context, record LifecycleRecord) (LifecycleRecord, error) {
-	if _, err := l.putRecord(ctx, record, false); err != nil {
+	if _, err := l.ledger.Put(ctx, record, false); err != nil {
 		return record, err
 	}
 	if record.TransitionKind == LifecycleTransitionResume {
@@ -1242,7 +1227,7 @@ func (l *SessionLifecycle) advanceSerialized(ctx context.Context, expected Lifec
 	advanced := expected
 	run := func() error {
 		return l.withSessionTransition(ctx, expected.SessionID, expected.Session.Name, func(ctx context.Context) error {
-			latest, ok, readErr := l.recordForSession(ctx, expected.SessionID)
+			latest, ok, readErr := l.ledger.ForSession(ctx, expected.SessionID)
 			if readErr != nil {
 				return readErr
 			}
@@ -1335,7 +1320,7 @@ func (l *SessionLifecycle) reconcileRegisteredSession(ctx context.Context, id Se
 				if !freshSession.LaterAt.IsZero() {
 					desired = SessionDesiredLater
 				}
-				latest, hasRecord, readErr := l.recordForSession(ctx, freshSession.ID)
+				latest, hasRecord, readErr := l.ledger.ForSession(ctx, freshSession.ID)
 				if readErr != nil {
 					return readErr
 				}
@@ -1370,7 +1355,7 @@ func (l *SessionLifecycle) withSessionTransition(ctx context.Context, id Session
 }
 
 func (l *SessionLifecycle) advanceRename(ctx context.Context, expected LifecycleRecord) (LifecycleRecord, error) {
-	record, err := l.currentRecord(ctx, expected)
+	record, err := l.ledger.Current(ctx, expected)
 	if err != nil {
 		return expected, err
 	}
@@ -1451,7 +1436,7 @@ func (l *SessionLifecycle) advanceRename(ctx context.Context, expected Lifecycle
 			// crash after tmux applies the rename is reconciled by observing the
 			// old and target postconditions, never by blindly replaying it.
 			record.MayHaveApplied = true
-			if record, err = l.putRecord(ctx, record, true); err != nil {
+			if record, err = l.ledger.Put(ctx, record, true); err != nil {
 				return record, err
 			}
 			renameErr := l.runtime.Rename(ctx, oldSession, targetRuntime)
@@ -1478,7 +1463,7 @@ func (l *SessionLifecycle) advanceRename(ctx context.Context, expected Lifecycle
 			record.Applied.RuntimeRenameSettled = true
 		}
 		record.Phase = LifecycleRuntimeReady
-		if record, err = l.putRecord(ctx, record, true); err != nil {
+		if record, err = l.ledger.Put(ctx, record, true); err != nil {
 			return record, err
 		}
 	}
@@ -1506,11 +1491,11 @@ func (l *SessionLifecycle) advanceRename(ctx context.Context, expected Lifecycle
 	record.Applied.RegistryUpdated = true
 	record.Phase = LifecycleConverged
 	record.LastError = ""
-	return l.putRecord(ctx, record, true)
+	return l.ledger.Put(ctx, record, true)
 }
 
 func (l *SessionLifecycle) advanceRunning(ctx context.Context, record LifecycleRecord) (LifecycleRecord, error) {
-	current, err := l.currentRecord(ctx, record)
+	current, err := l.ledger.Current(ctx, record)
 	if err != nil {
 		return record, err
 	}
@@ -1545,7 +1530,7 @@ func (l *SessionLifecycle) advanceRunning(ctx context.Context, record LifecycleR
 		}
 		record.Applied.WorktreeReady = change.State == RepositoryKnown
 		record.Phase = LifecycleWorktreeReady
-		if record, err = l.putRecord(ctx, record, true); err != nil {
+		if record, err = l.ledger.Put(ctx, record, true); err != nil {
 			return record, err
 		}
 	}
@@ -1570,7 +1555,7 @@ func (l *SessionLifecycle) advanceRunning(ctx context.Context, record LifecycleR
 			record.Session.BaseCommit = inspection.Baseline.Value.Head
 			record.Session.BaseDirty = append([]string(nil), inspection.Baseline.Value.DirtyPaths...)
 			record.Applied.BaselineKnown = true
-			if record, err = l.putRecord(ctx, record, true); err != nil {
+			if record, err = l.ledger.Put(ctx, record, true); err != nil {
 				return record, err
 			}
 		}
@@ -1604,7 +1589,7 @@ func (l *SessionLifecycle) advanceRunning(ctx context.Context, record LifecycleR
 	}
 	record.Applied.RuntimePresent = exists
 	record.Phase = LifecycleRuntimeReady
-	if record, err = l.putRecord(ctx, record, true); err != nil {
+	if record, err = l.ledger.Put(ctx, record, true); err != nil {
 		return record, err
 	}
 
@@ -1642,7 +1627,7 @@ func (l *SessionLifecycle) advanceRunning(ctx context.Context, record LifecycleR
 	record.Session = registeredState.Agents[registeredIndex]
 	record.Applied.RegistryUpdated = true
 	record.Phase = LifecycleRegistered
-	if record, err = l.putRecord(ctx, record, true); err != nil {
+	if record, err = l.ledger.Put(ctx, record, true); err != nil {
 		return record, err
 	}
 
@@ -1650,7 +1635,7 @@ func (l *SessionLifecycle) advanceRunning(ctx context.Context, record LifecycleR
 		// Persist uncertainty before crossing the tmux Seam. A crash after the
 		// send must not turn into a duplicate prompt during reconciliation.
 		record.PromptDelivery = InitialPromptUnknown
-		if record, err = l.putRecord(ctx, record, true); err != nil {
+		if record, err = l.ledger.Put(ctx, record, true); err != nil {
 			return record, err
 		}
 		confirmed, deliverErr := l.runtime.DeliverInitial(ctx, record.Session, record.InitialPrompt)
@@ -1667,7 +1652,7 @@ func (l *SessionLifecycle) advanceRunning(ctx context.Context, record LifecycleR
 	}
 	record.Phase = LifecycleConverged
 	record.LastError = ""
-	return l.putRecord(ctx, record, true)
+	return l.ledger.Put(ctx, record, true)
 }
 
 // advanceResume converges a resume-after-restart intent. It mirrors
@@ -1677,7 +1662,7 @@ func (l *SessionLifecycle) advanceRunning(ctx context.Context, record LifecycleR
 // create under the fresh name is never adopted, and a Session removed while
 // the resume was in flight is never resurrected.
 func (l *SessionLifecycle) advanceResume(ctx context.Context, record LifecycleRecord) (LifecycleRecord, error) {
-	current, err := l.currentRecord(ctx, record)
+	current, err := l.ledger.Current(ctx, record)
 	if err != nil {
 		return record, err
 	}
@@ -1722,7 +1707,7 @@ func (l *SessionLifecycle) advanceResume(ctx context.Context, record LifecycleRe
 			record.Session.BaseCommit = inspection.Baseline.Value.Head
 			record.Session.BaseDirty = append([]string(nil), inspection.Baseline.Value.DirtyPaths...)
 			record.Applied.BaselineKnown = true
-			if record, err = l.putRecord(ctx, record, true); err != nil {
+			if record, err = l.ledger.Put(ctx, record, true); err != nil {
 				return record, err
 			}
 		}
@@ -1760,7 +1745,7 @@ func (l *SessionLifecycle) advanceResume(ctx context.Context, record LifecycleRe
 		// start is reconciled by observing the fresh name's postcondition,
 		// never by blindly starting a second runtime.
 		record.MayHaveApplied = true
-		if record, err = l.putRecord(ctx, record, true); err != nil {
+		if record, err = l.ledger.Put(ctx, record, true); err != nil {
 			return record, err
 		}
 		startErr := l.runtime.Start(ctx, record.Session, record.StartMode)
@@ -1778,7 +1763,7 @@ func (l *SessionLifecycle) advanceResume(ctx context.Context, record LifecycleRe
 	}
 	record.Applied.RuntimePresent = exists
 	record.Phase = LifecycleRuntimeReady
-	if record, err = l.putRecord(ctx, record, true); err != nil {
+	if record, err = l.ledger.Put(ctx, record, true); err != nil {
 		return record, err
 	}
 
@@ -1810,17 +1795,17 @@ func (l *SessionLifecycle) advanceResume(ctx context.Context, record LifecycleRe
 	record.Session = registeredState.Agents[registeredIndex]
 	record.Applied.RegistryUpdated = true
 	record.Phase = LifecycleRegistered
-	if record, err = l.putRecord(ctx, record, true); err != nil {
+	if record, err = l.ledger.Put(ctx, record, true); err != nil {
 		return record, err
 	}
 
 	record.Phase = LifecycleConverged
 	record.LastError = ""
-	return l.putRecord(ctx, record, true)
+	return l.ledger.Put(ctx, record, true)
 }
 
 func (l *SessionLifecycle) advanceStopped(ctx context.Context, record LifecycleRecord) (LifecycleRecord, error) {
-	current, err := l.currentRecord(ctx, record)
+	current, err := l.ledger.Current(ctx, record)
 	if err != nil {
 		return record, err
 	}
@@ -1848,7 +1833,7 @@ func (l *SessionLifecycle) advanceStopped(ctx context.Context, record LifecycleR
 	}
 	record.Applied.RuntimePresent = false
 	record.Phase = LifecycleRuntimeReady
-	if record, err = l.putRecord(ctx, record, true); err != nil {
+	if record, err = l.ledger.Put(ctx, record, true); err != nil {
 		return record, err
 	}
 	var change RegistryChange
@@ -1861,178 +1846,23 @@ func (l *SessionLifecycle) advanceStopped(ctx context.Context, record LifecycleR
 		return l.failRecord(ctx, record, err)
 	}
 	if record.Desired == SessionDesiredRemoved {
-		forgetPromptTargetQueue(record.Session.TmuxName())
+		forgetPromptTargetQueue(promptTargetForSession(record.Session))
 	}
 	record.Applied.RegistryUpdated = true
 	record.Phase = LifecycleConverged
 	record.LastError = ""
-	return l.putRecord(ctx, record, true)
+	return l.ledger.Put(ctx, record, true)
 }
 
-var ErrLifecycleSuperseded = errors.New("Session Lifecycle transition was superseded")
-
-func (l *SessionLifecycle) currentRecord(ctx context.Context, expected LifecycleRecord) (LifecycleRecord, error) {
-	var record LifecycleRecord
-	err := withRegistryFileLock(ctx, l.ledgerPath, func() error {
-		ledger, err := readLifecycleLedger(l.ledgerPath)
-		if err != nil {
-			return err
-		}
-		current, ok := ledger.Records[string(expected.SessionID)]
-		if !ok || current.TransitionID != expected.TransitionID {
-			return ErrLifecycleSuperseded
-		}
-		record = current
-		return nil
-	})
-	return record, err
-}
-
-func (l *SessionLifecycle) recordForSession(ctx context.Context, id SessionID) (LifecycleRecord, bool, error) {
-	var record LifecycleRecord
-	var ok bool
-	err := withRegistryFileLock(ctx, l.ledgerPath, func() error {
-		ledger, err := readLifecycleLedger(l.ledgerPath)
-		if err != nil {
-			return err
-		}
-		record, ok = ledger.Records[string(id)]
-		return nil
-	})
-	return record, ok, err
-}
-
+// failRecord hält ein Scheitern durabel fest und gibt die Ursache zurück. Das
+// ist Konvergenz-Policy, kein Speicher: der Ledger weiß nicht, was ein
+// Fehlschlag bedeutet.
 func (l *SessionLifecycle) failRecord(ctx context.Context, record LifecycleRecord, cause error) (LifecycleRecord, error) {
 	record.Phase = LifecycleFailed
 	record.LastError = cause.Error()
-	saved, saveErr := l.putRecord(ctx, record, true)
+	saved, saveErr := l.ledger.Put(ctx, record, true)
 	if saveErr != nil {
 		return record, errors.Join(cause, saveErr)
 	}
 	return saved, cause
-}
-
-func (l *SessionLifecycle) putRecord(ctx context.Context, record LifecycleRecord, requireCurrent bool) (LifecycleRecord, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	var saved LifecycleRecord
-	err := withRegistryFileLock(ctx, l.ledgerPath, func() error {
-		ledger, err := readLifecycleLedger(l.ledgerPath)
-		if err != nil {
-			return err
-		}
-		key := string(record.SessionID)
-		if requireCurrent {
-			current, ok := ledger.Records[key]
-			if !ok || current.TransitionID != record.TransitionID {
-				return ErrLifecycleSuperseded
-			}
-		}
-		record.UpdatedAt = l.now()
-		ledger.Records[key] = record
-		compactLifecycleLedger(ledger)
-		ledger.Revision++
-		if err := writeLifecycleLedger(l.ledgerPath, ledger); err != nil {
-			return err
-		}
-		saved = record
-		return nil
-	})
-	return saved, err
-}
-
-const maxConvergedRemovedLifecycleRecords = 256
-
-func compactLifecycleLedger(ledger *lifecycleLedger) {
-	type removedRecord struct {
-		key string
-		at  time.Time
-	}
-	var removed []removedRecord
-	for key, record := range ledger.Records {
-		if record.Desired == SessionDesiredRemoved && record.Phase == LifecycleConverged {
-			removed = append(removed, removedRecord{key: key, at: record.UpdatedAt})
-		}
-	}
-	if len(removed) <= maxConvergedRemovedLifecycleRecords {
-		return
-	}
-	sort.Slice(removed, func(i, j int) bool { return removed[i].at.Before(removed[j].at) })
-	for _, old := range removed[:len(removed)-maxConvergedRemovedLifecycleRecords] {
-		delete(ledger.Records, old.key)
-	}
-}
-
-const lifecycleLedgerVersion = 1
-
-type lifecycleLedger struct {
-	Schema   int                        `json:"schema"`
-	Revision uint64                     `json:"revision"`
-	Records  map[string]LifecycleRecord `json:"records"`
-}
-
-func readLifecycleLedger(path string) (*lifecycleLedger, error) {
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return &lifecycleLedger{Schema: lifecycleLedgerVersion, Records: map[string]LifecycleRecord{}}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var ledger lifecycleLedger
-	if err := json.Unmarshal(data, &ledger); err != nil {
-		return nil, fmt.Errorf("decode Session Lifecycle ledger: %w", err)
-	}
-	if ledger.Schema != lifecycleLedgerVersion {
-		return nil, fmt.Errorf("unsupported Session Lifecycle schema %d", ledger.Schema)
-	}
-	if ledger.Records == nil {
-		ledger.Records = map[string]LifecycleRecord{}
-	}
-	return &ledger, nil
-}
-
-func writeLifecycleLedger(path string, ledger *lifecycleLedger) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(ledger, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".lifecycle-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	keep := false
-	defer func() {
-		_ = tmp.Close()
-		if !keep {
-			_ = os.Remove(tmpPath)
-		}
-	}()
-	if err := tmp.Chmod(0o600); err != nil {
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return err
-	}
-	keep = true
-	if dir, err := os.Open(filepath.Dir(path)); err == nil {
-		_ = dir.Sync()
-		_ = dir.Close()
-	}
-	return nil
 }

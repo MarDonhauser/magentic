@@ -68,6 +68,18 @@ var sectionRe = regexp.MustCompile(`^#{2,3}\s+(.*)$`)
 
 // BuildBoard projects Specifications for one stable Registry Project. Session
 // start authority remains the opaque token resolved by Specifications.
+// boardSpecifications und boardRepositories sind die Seams, über die das Board
+// seine Abhängigkeiten entgegennimmt, statt sie selbst zu bauen. Vorher
+// konstruierte BuildBoard beide intern, weshalb die Branch-Zuordnung und ihre
+// Problemtexte von keinem Test erreichbar waren.
+type boardSpecifications interface {
+	Discover(context.Context, Project, SpecificationQuery) (SpecificationsDiscovery, error)
+}
+
+type boardRepositories interface {
+	BranchesForDirectories(context.Context, Project, []string) RepositoryBranchAssignments
+}
+
 func BuildBoard(state *State, projectID ProjectID) Board {
 	return BuildBoardWithQuery(state, projectID, SpecificationQuery{})
 }
@@ -75,6 +87,10 @@ func BuildBoard(state *State, projectID ProjectID) Board {
 // BuildBoardWithQuery lets archive consumers opt in explicitly; BuildBoard
 // itself remains current-only.
 func BuildBoardWithQuery(state *State, projectID ProjectID, query SpecificationQuery) Board {
+	return buildBoardUsing(state, projectID, query, NewSpecifications(), NewRepositories())
+}
+
+func buildBoardUsing(state *State, projectID ProjectID, query SpecificationQuery, specifications boardSpecifications, repositories boardRepositories) Board {
 	board := Board{ProjectID: projectID}
 	if state == nil || projectID == "" {
 		board.Err = "Projekt nicht gefunden"
@@ -89,14 +105,13 @@ func BuildBoardWithQuery(state *State, projectID ProjectID, query SpecificationQ
 	board.Project = project.Name
 
 	ctx := context.Background()
-	specifications := NewSpecifications()
 	discovery, err := specifications.Discover(ctx, project, query)
 	if err != nil {
 		board.Kind = "none"
 		board.Err = err.Error()
 		return board
 	}
-	agents, repositoryProblems := liveAgentContext(ctx, state, project)
+	agents, repositoryProblems := liveAgentContext(ctx, state, project, repositories)
 	problems := append(formatSpecificationProblems(discovery.Problems), repositoryProblems...)
 
 	itemsBySource := make(map[SpecificationSourceKind]int)
@@ -181,7 +196,7 @@ type agentCtx struct {
 	specificationRef SpecificationRef
 }
 
-func liveAgentContext(ctx context.Context, state *State, project Project) ([]agentCtx, []string) {
+func liveAgentContext(ctx context.Context, state *State, project Project, repositories boardRepositories) ([]agentCtx, []string) {
 	var sessions []Session
 	for _, session := range state.Agents {
 		if session.ProjectID != project.ID {
@@ -205,7 +220,7 @@ func liveAgentContext(ctx context.Context, state *State, project Project) ([]age
 	for _, session := range sessions {
 		directories = append(directories, session.Dir)
 	}
-	assignments := NewRepositories().BranchesForDirectories(ctx, project, directories)
+	assignments := repositories.BranchesForDirectories(ctx, project, directories)
 	if !assignments.Known() {
 		message := "Repository-Kenntnis nicht verfügbar"
 		if assignments.Problem != nil {

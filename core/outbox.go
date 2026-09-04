@@ -51,8 +51,8 @@ func (a *outboxAttempts) finish(messageID string) {
 // handoff delivery to the same runtime through its sendSlot. Readiness was
 // already decided by the dispatcher, so delivery never waits for it here.
 // Tests replace this function instead of driving a real tmux.
-var sendQueuedPrompt = func(runtimeName, text, tool string, validate promptTargetValidator, observe observationReader) error {
-	return enqueuePromptUsing(runtimeName, text, true, tool, false, false, true, validate, observe)
+var sendQueuedPrompt = func(target promptTarget, text, tool string, validate promptTargetValidator, observe observationReader) error {
+	return enqueuePromptUsing(target, text, true, tool, false, false, true, validate, observe)
 }
 
 // DispatchOutbox delivers the head of every Session Outbox that the given
@@ -116,7 +116,7 @@ func dispatchOutboxHead(ctx context.Context, session Session, target promptTarge
 		}
 		return
 	}
-	if err := sendQueuedPrompt(session.TmuxName(), head.Text, target.Tool, validate, observe); err != nil {
+	if err := sendQueuedPrompt(promptTargetForSession(session), head.Text, target.Tool, validate, observe); err != nil {
 		ownOutboxAttempts.finish(head.ID)
 		if _, resetErr := registry.Change(ctx, ResetQueuedMessageAttempt(session.ID, session.Name, head.ID)); resetErr != nil {
 			Logf("Outbox %s: Zustellversuch nicht zurückgesetzt: %v", session.Name, resetErr)
@@ -240,5 +240,5 @@ func kickOutboxForSession(ctx context.Context, sessionID SessionID, observe obse
 	if session == nil || len(session.Outbox) == 0 || !validRuntimeIdentity(session.TmuxName()) {
 		return
 	}
-	dispatchOutboxHead(ctx, *session, observePromptTarget(ctx, session.TmuxName(), observe), observe)
+	dispatchOutboxHead(ctx, *session, observeResolvedPromptTarget(ctx, *session, observe), observe)
 }

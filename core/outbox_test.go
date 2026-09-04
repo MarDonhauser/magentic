@@ -29,10 +29,10 @@ type outboxSendRecorder struct {
 func (r *outboxSendRecorder) install(t *testing.T) {
 	t.Helper()
 	previous := sendQueuedPrompt
-	sendQueuedPrompt = func(runtimeName, text, tool string, validate promptTargetValidator, observe observationReader) error {
+	sendQueuedPrompt = func(target promptTarget, text, tool string, validate promptTargetValidator, observe observationReader) error {
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		r.sends = append(r.sends, outboxSend{runtimeName: runtimeName, text: text, tool: tool, validated: validate != nil})
+		r.sends = append(r.sends, outboxSend{runtimeName: target.runtime, text: text, tool: tool, validated: validate != nil})
 		return r.err
 	}
 	t.Cleanup(func() { sendQueuedPrompt = previous })

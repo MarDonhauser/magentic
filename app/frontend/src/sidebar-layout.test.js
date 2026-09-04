@@ -9,17 +9,17 @@ function overview(sidebar) {
     projects: [
       {
         id: 'p1', name: 'navi', path: '/tmp/navi',
-        worktrees: [{ branch: 'main', agents: [{ id: 's1', name: 'navi', status: 'idle' }] }],
+        worktrees: [{ branch: 'main', agents: [{ id: 's1', name: 'navi', status: 'idle' , live: true }] }],
       },
       {
         id: 'p2', name: 'magentic', path: '/tmp/magentic',
         worktrees: [{
           branch: 'main',
           agents: [
-            { id: 's2', name: 'magentic', status: 'idle' },
-            { id: 's3', name: 'magentic-2', status: 'idle' },
-            { id: 's4', name: 'dock-term', status: 'idle', dock: true },
-            { id: 's5', name: 'altlast', status: 'dead' },
+            { id: 's2', name: 'magentic', status: 'idle' , live: true },
+            { id: 's3', name: 'magentic-2', status: 'idle' , live: true },
+            { id: 's4', name: 'dock-term', status: 'idle', dock: true , live: true },
+            { id: 's5', name: 'altlast', status: 'dead' , live: false },
           ],
         }],
       },

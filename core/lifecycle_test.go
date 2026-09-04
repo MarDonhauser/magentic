@@ -284,7 +284,7 @@ func TestLifecycleLedgerDoesNotReconstructEmptyRuntime(t *testing.T) {
 		Applied:        LifecycleAppliedState{WorktreeReady: true},
 		CreatedAt:      now, UpdatedAt: now,
 	}
-	if _, err := lifecycle.putRecord(context.Background(), record, false); err != nil {
+	if _, err := lifecycle.ledger.Put(context.Background(), record, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1454,7 +1454,7 @@ func plantResumeIntent(t *testing.T, lifecycle *SessionLifecycle, project Projec
 		MayHaveApplied: mayHaveApplied,
 		CreatedAt:      now, UpdatedAt: now,
 	}
-	if _, err := lifecycle.putRecord(context.Background(), record, false); err != nil {
+	if _, err := lifecycle.ledger.Put(context.Background(), record, false); err != nil {
 		t.Fatal(err)
 	}
 }
