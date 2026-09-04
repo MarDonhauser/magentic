@@ -212,59 +212,35 @@ func (a *App) storeInbox(inbox core.OvInbox) {
 	a.inboxMu.Unlock()
 }
 
+// Die drei Helfer laden den State und geben die Auflösung an core ab: die
+// Regel "ID ist Autorität, Name ist Legacy-Dock-Rückfall" steht in
+// core/state_resolve.go, nicht hier und nicht ein zweites Mal in remote/.
+
 func loadSessionByID(rawID string) (*core.State, core.Session, error) {
-	id := core.SessionID(strings.TrimSpace(rawID))
-	if id == "" {
-		return nil, core.Session{}, fmt.Errorf("SessionID fehlt")
-	}
 	st, err := core.LoadState()
 	if err != nil {
 		return nil, core.Session{}, err
 	}
-	session := st.SessionByID(id)
-	if session == nil {
-		return nil, core.Session{}, fmt.Errorf("unbekannte SessionID: %s", id)
-	}
-	return st, *session, nil
+	session, err := st.ResolveSession(rawID)
+	return st, session, err
 }
 
-// loadSessionTarget resolves every identified browser action exclusively by
-// SessionID. The name fallback exists only for persisted legacy Dock tabs,
-// which predate IDs in the browser state; a supplied but stale ID never falls
-// through to a newly-created Session that happens to reuse its old name.
 func loadSessionTarget(rawID, legacyDockName string) (*core.State, core.Session, error) {
-	if strings.TrimSpace(rawID) != "" {
-		return loadSessionByID(rawID)
-	}
-	name := strings.TrimSpace(legacyDockName)
-	if name == "" {
-		return nil, core.Session{}, fmt.Errorf("SessionID fehlt")
-	}
 	st, err := core.LoadState()
 	if err != nil {
 		return nil, core.Session{}, err
 	}
-	session := st.AgentByName(name)
-	if session == nil || !session.IsDock() {
-		return nil, core.Session{}, fmt.Errorf("unbekannter Legacy-Dock-Tab: %s", name)
-	}
-	return st, *session, nil
+	session, err := st.ResolveSessionTarget(rawID, legacyDockName)
+	return st, session, err
 }
 
 func loadProjectByID(rawID string) (*core.State, core.Project, error) {
-	id := core.ProjectID(strings.TrimSpace(rawID))
-	if id == "" {
-		return nil, core.Project{}, fmt.Errorf("ProjectID fehlt")
-	}
 	st, err := core.LoadState()
 	if err != nil {
 		return nil, core.Project{}, err
 	}
-	project := st.ProjectByID(id)
-	if project == nil {
-		return nil, core.Project{}, fmt.Errorf("unbekannte ProjectID: %s", id)
-	}
-	return st, *project, nil
+	project, err := st.ResolveProject(rawID)
+	return st, project, err
 }
 
 func (a *App) PickFolder() (string, error) {
@@ -964,10 +940,8 @@ func (a *App) OpenTerm(sessionID, legacyDockName string, cols, rows int) error {
 	if rows < 5 || rows > 999 {
 		rows = 50
 	}
-	core.Tmux("set-option", "-t", session, "status", "off")
-	core.Tmux("set-option", "-w", "-t", session+":", "window-size", "latest")
-	cmd := exec.Command("tmux", "attach-session", "-t", core.TargetSession(session))
-	cmd.Env = append(core.EnvWithout("TMUX"), "TERM=xterm-256color")
+	core.PrepareSessionPresentation(session)
+	cmd := core.AttachSessionCommand(session, "xterm-256color").Command()
 	startTerm := pty.StartWithSize
 	if a.startTerm != nil {
 		startTerm = a.startTerm

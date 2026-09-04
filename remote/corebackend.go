@@ -397,36 +397,26 @@ func (b *CoreBackend) loadState() (*core.State, error) {
 	return core.LoadState()
 }
 
+// Laden ist Sache dieses Adapters, Auflösen nicht: die Regel steht in
+// core/state_resolve.go, damit Desktop und Fernzugriff dieselbe Identität
+// verlangen.
+
 func (b *CoreBackend) loadSession(sessionID string) (*core.State, core.Session, error) {
-	id := core.SessionID(strings.TrimSpace(sessionID))
-	if id == "" {
-		return nil, core.Session{}, fmt.Errorf("SessionID fehlt")
-	}
 	st, err := b.loadState()
 	if err != nil {
 		return nil, core.Session{}, err
 	}
-	session := st.SessionByID(id)
-	if session == nil {
-		return nil, core.Session{}, fmt.Errorf("unbekannte SessionID: %s", id)
-	}
-	return st, *session, nil
+	session, err := st.ResolveSession(sessionID)
+	return st, session, err
 }
 
 func (b *CoreBackend) loadProject(projectID string) (*core.State, core.Project, error) {
-	id := core.ProjectID(strings.TrimSpace(projectID))
-	if id == "" {
-		return nil, core.Project{}, fmt.Errorf("ProjectID fehlt")
-	}
 	st, err := b.loadState()
 	if err != nil {
 		return nil, core.Project{}, err
 	}
-	project := st.ProjectByID(id)
-	if project == nil {
-		return nil, core.Project{}, fmt.Errorf("unbekannte ProjectID: %s", id)
-	}
-	return st, *project, nil
+	project, err := st.ResolveProject(projectID)
+	return st, project, err
 }
 
 func (b *CoreBackend) resolveWorktree(ctx context.Context, projectID, reference string) (*core.State, core.RepositoryWorktreeTarget, error) {

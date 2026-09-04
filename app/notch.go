@@ -242,7 +242,7 @@ func (a *App) answerPermissionEvent(event NotchEvent, optionID string) error {
 	if observed == nil || observed.Attention != core.AttentionNeedsInput || observed.Detail == "" {
 		return fmt.Errorf("Freigabe ist nicht mehr aktuell; Session wird nicht automatisch bedient")
 	}
-	keys := []string{"send-keys", "-t", core.TargetPane(session.TmuxName())}
+	var keys []string
 	if optionID == "deny" {
 		keys = append(keys, "Escape")
 	} else {
@@ -251,7 +251,7 @@ func (a *App) answerPermissionEvent(event NotchEvent, optionID string) error {
 		// moved after the Notch event was emitted.
 		keys = append(keys, "Up", "Up", "Up", "Up", "Up", "Up", "Enter")
 	}
-	if _, err := core.Tmux(keys...); err != nil {
+	if err := core.SendSessionKeys(session.TmuxName(), keys...); err != nil {
 		return fmt.Errorf("Antwort an %s fehlgeschlagen: %w", session.Name, err)
 	}
 	return nil

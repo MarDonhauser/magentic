@@ -430,18 +430,14 @@ func assertSingleAttentionKind(t *testing.T, plan AttentionPlan, kind AttentionI
 // Unterdrückung.
 func TestMutedQuietSignalSilencesEveryIntentAndSaysWhy(t *testing.T) {
 	planner := NewAttentionPlanner(AttentionPlannerConfig{})
-	now := time.Now()
-	labels := map[SessionID]string{"s1": "hera"}
-	// Der Planner bestätigt einen Übergang, bevor er ihn meldet: erst laufend,
-	// dann blockiert ergibt eine Absicht, die stumm unterdrückt werden kann.
-	planner.Plan(AttentionInput{
-		Observation: mutedTestSnapshot(StatusRunning), SessionLabels: labels,
-		Quiet: AttentionQuietMuted, Now: now,
-	})
-	plan := planner.Plan(AttentionInput{
-		Observation: mutedTestSnapshot(StatusBlocked), SessionLabels: labels,
-		Quiet: AttentionQuietMuted, Now: now.Add(time.Second),
-	})
+	planner.Plan(attentionTestInput(attentionTestStart,
+		attentionSnapshot(ObservationAvailable, attentionObserved("one", AttentionWorking))))
+
+	input := attentionTestInput(attentionTestStart.Add(time.Second),
+		attentionSnapshot(ObservationAvailable, attentionObserved("one", AttentionNeedsInput)))
+	input.Quiet = AttentionQuietMuted
+	plan := planner.Plan(input)
+
 	if len(plan.Notifications) != 0 {
 		t.Errorf("stummer Plan trägt %d Benachrichtigungen", len(plan.Notifications))
 	}
@@ -451,14 +447,7 @@ func TestMutedQuietSignalSilencesEveryIntentAndSaysWhy(t *testing.T) {
 	if plan.NativeAttention == NativeAttentionInformational || plan.NativeAttention == NativeAttentionCritical {
 		t.Errorf("stummer Plan fordert native Attention: %v", plan.NativeAttention)
 	}
-
-	var muted bool
-	for _, suppression := range plan.Suppressions {
-		if suppression.Reason == AttentionSuppressedMuted {
-			muted = true
-		}
-	}
-	if !muted {
+	if !hasAttentionSuppression(plan, AttentionSuppressedMuted) {
 		t.Errorf("keine Unterdrückung mit Grund %q verbucht: %+v", AttentionSuppressedMuted, plan.Suppressions)
 	}
 }
@@ -468,38 +457,27 @@ func TestMutedQuietSignalSilencesEveryIntentAndSaysWhy(t *testing.T) {
 func TestMutedQuietSignalKeepsBadgeAndInbox(t *testing.T) {
 	loud := NewAttentionPlanner(AttentionPlannerConfig{})
 	quiet := NewAttentionPlanner(AttentionPlannerConfig{})
-	now := time.Now()
-	labels := map[SessionID]string{"s1": "hera"}
-	running := mutedTestSnapshot(StatusRunning)
-	blocked := mutedTestSnapshot(StatusBlocked)
+	working := attentionSnapshot(ObservationAvailable, attentionObserved("one", AttentionWorking))
+	blocked := attentionSnapshot(ObservationAvailable, attentionObserved("one", AttentionNeedsInput))
 
-	loud.Plan(AttentionInput{Observation: running, SessionLabels: labels, Now: now})
-	quiet.Plan(AttentionInput{
-		Observation: running, SessionLabels: labels, Quiet: AttentionQuietMuted, Now: now,
-	})
-	loudPlan := loud.Plan(AttentionInput{
-		Observation: blocked, SessionLabels: labels, Now: now.Add(time.Second),
-	})
-	quietPlan := quiet.Plan(AttentionInput{
-		Observation: blocked, SessionLabels: labels, Quiet: AttentionQuietMuted, Now: now.Add(time.Second),
-	})
+	loud.Plan(attentionTestInput(attentionTestStart, working))
+	quietStart := attentionTestInput(attentionTestStart, working)
+	quietStart.Quiet = AttentionQuietMuted
+	quiet.Plan(quietStart)
 
+	loudPlan := loud.Plan(attentionTestInput(attentionTestStart.Add(time.Second), blocked))
+	quietInput := attentionTestInput(attentionTestStart.Add(time.Second), blocked)
+	quietInput.Quiet = AttentionQuietMuted
+	quietPlan := quiet.Plan(quietInput)
+
+	if len(loudPlan.Notifications) == 0 {
+		t.Fatal("lauter Plan meldet nichts — der Vergleich trüge nichts")
+	}
 	if quietPlan.DockBadge != loudPlan.DockBadge {
 		t.Errorf("Badge unterscheidet sich: stumm %+v, laut %+v", quietPlan.DockBadge, loudPlan.DockBadge)
 	}
 	if len(quietPlan.Inbox.Entries) != len(loudPlan.Inbox.Entries) {
 		t.Errorf("Posteingang unterscheidet sich: stumm %d, laut %d Einträge",
 			len(quietPlan.Inbox.Entries), len(loudPlan.Inbox.Entries))
-	}
-}
-
-// mutedTestSnapshot baut eine Beobachtung einer Session mit dem gegebenen Status.
-func mutedTestSnapshot(status AgentStatus) ObservationSnapshot {
-	return ObservationSnapshot{
-		Availability: ObservationAvailable,
-		Sessions: []SessionObservation{{
-			SessionID: "s1", Presence: SessionPresencePresent,
-			Availability: ObservationAvailable, ContentKnown: true, Status: status,
-		}},
 	}
 }

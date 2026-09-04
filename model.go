@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -1466,16 +1465,14 @@ func (m model) attach() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	sn := current.TmuxName()
-	if _, err := tmux("set-option", "-w", "-t", sn+":", "window-size", "latest"); err != nil {
-		m.setFlash("tmux set-option: "+err.Error(), true)
-		return m, nil
-	}
+	core.PrepareSessionPresentation(sn)
+	// Innerhalb eines angehängten Clients wird gewechselt, außerhalb angehängt.
 	if os.Getenv("TMUX") != "" {
-		if err := exec.Command("tmux", "switch-client", "-t", targetSession(sn)).Run(); err != nil {
+		if err := core.SwitchToSessionCommand(sn).Command().Run(); err != nil {
 			m.setFlash("tmux switch-client: "+err.Error(), true)
 		}
 		return m, nil
 	}
-	cmd := exec.Command("tmux", "attach-session", "-t", targetSession(sn))
+	cmd := core.AttachSessionCommand(sn, "").Command()
 	return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return attachDoneMsg{err} })
 }
