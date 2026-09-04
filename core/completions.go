@@ -2,10 +2,10 @@ package core
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -55,40 +55,14 @@ func cachedWorktreePaths(dir string) []string {
 	return paths
 }
 
+// worktreePaths fragt zuerst Repositories: dort gilt .gitignore, ohne sie
+// selbst zu deuten. Erst wenn das Verzeichnis nachweislich kein Repository ist
+// oder Git keine Kenntnis liefert, wird es abgelaufen.
 func worktreePaths(dir string) []string {
-	if paths, isRepository := gitWorktreePaths(dir); isRepository {
-		return paths
+	if fact := NewRepositories().WorktreePaths(context.Background(), dir); fact.Known() {
+		return fact.Value
 	}
 	return walkWorktreePaths(dir)
-}
-
-// gitWorktreePaths fragt Git nach versionierten und nach nicht ignorierten
-// unversionierten Dateien. Damit gilt .gitignore, ohne sie selbst zu deuten.
-func gitWorktreePaths(dir string) ([]string, bool) {
-	seen := map[string]struct{}{}
-	paths := []string{}
-	for _, args := range [][]string{
-		{"ls-files", "-z"},
-		{"ls-files", "-z", "--others", "--exclude-standard"},
-	} {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		raw, err := cmd.Output()
-		if err != nil {
-			return nil, false
-		}
-		for _, path := range strings.Split(string(raw), "\x00") {
-			if path == "" {
-				continue
-			}
-			if _, duplicate := seen[path]; duplicate {
-				continue
-			}
-			seen[path] = struct{}{}
-			paths = append(paths, path)
-		}
-	}
-	return paths, true
 }
 
 // walkWorktreePaths ist der Weg ohne Git. Er überspringt die Verzeichnisse, die

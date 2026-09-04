@@ -434,11 +434,16 @@ type statsRepositories interface {
 
 func statsCommitResult(project string, fact RepositoryFact[RepositoryOwnCommitSeries]) statsCommitRepositoryResult {
 	result := statsCommitRepositoryResult{Project: project, Days: map[string]int{}}
+	// Ein Projekt ohne Repository ist kein unlesbares Repository: es trägt
+	// keine Commits bei, weil keine zu erwarten sind, und darf die Deckung
+	// deshalb nicht wie ein Lesefehler einfärben.
 	switch fact.State {
 	case RepositoryKnown:
 		result.State = HistorySourceAvailable
 	case RepositoryPartial:
 		result.State = HistorySourcePartial
+	case RepositoryNotRepository:
+		result.State = HistorySourceAbsent
 	default:
 		result.State = HistorySourceUnavailable
 	}
@@ -680,12 +685,16 @@ func collectStatsCommitsWithRepositories(ctx context.Context, state *State, sinc
 	}
 
 	hasPartial := false
+	inapplicable := 0
 	for range repositories {
 		result := <-results
-		if result.State == HistorySourceAvailable {
+		switch result.State {
+		case HistorySourceAvailable:
 			collection.Coverage.AvailableRepositories++
-		} else if result.State == HistorySourcePartial {
+		case HistorySourcePartial:
 			hasPartial = true
+		case HistorySourceAbsent:
+			inapplicable++
 		}
 		if previous, ok := collection.ProjectStates[result.Project]; ok {
 			collection.ProjectStates[result.Project] = mergeStatsCommitStates(previous, result.State)
@@ -705,8 +714,14 @@ func collectStatsCommitsWithRepositories(ctx context.Context, state *State, sinc
 		collection.Coverage.Problems = append(collection.Coverage.Problems, result.Problems...)
 	}
 
+	// Projekte ohne Repository zählen nicht gegen die Deckung: sie sind nicht
+	// unlesbar, sondern nicht zuständig. Bleibt keines übrig, deckt die
+	// Statistik kein anwendbares Repository ab statt kein lesbares.
+	applicable := collection.Coverage.Repositories - inapplicable
 	switch {
-	case collection.Coverage.AvailableRepositories == collection.Coverage.Repositories:
+	case applicable == 0:
+		collection.Coverage.State = HistorySourceAbsent
+	case collection.Coverage.AvailableRepositories == applicable:
 		collection.Coverage.State = HistorySourceAvailable
 	case collection.Coverage.AvailableRepositories == 0 && !hasPartial:
 		collection.Coverage.State = HistorySourceUnavailable

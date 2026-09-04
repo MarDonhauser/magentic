@@ -199,34 +199,29 @@ func liveAgentContext(ctx context.Context, state *State, project Project) ([]age
 		return nil, observationProblems
 	}
 
-	survey, err := NewRepositories().Survey(ctx, []Project{project})
-	if err != nil {
-		return agentContextWithoutBranches(sessions), append(observationProblems, "Worktree-Zuordnung: "+err.Error())
+	// Die Branch-Zuordnung liegt bei Repositories; das Board formuliert die
+	// Probleme nicht mehr selbst, sondern gibt die gemeldeten weiter.
+	directories := make([]string, 0, len(sessions))
+	for _, session := range sessions {
+		directories = append(directories, session.Dir)
 	}
-	if len(survey.Projects) != 1 {
-		return agentContextWithoutBranches(sessions), append(observationProblems, "Worktree-Zuordnung: Repository-Ergebnis fehlt")
-	}
-	observed := survey.Projects[0]
-	if observed.Presence != RepositoryKnown || !observed.Worktrees.Known() {
+	assignments := NewRepositories().BranchesForDirectories(ctx, project, directories)
+	if !assignments.Known() {
 		message := "Repository-Kenntnis nicht verfügbar"
-		if observed.Problem != nil {
-			message = observed.Problem.Message
+		if assignments.Problem != nil {
+			message = assignments.Problem.Message
 		}
 		return agentContextWithoutBranches(sessions), append(observationProblems, "Worktree-Zuordnung: "+message)
 	}
 
 	var result []agentCtx
 	problems := observationProblems
-	for _, session := range sessions {
+	for index, session := range sessions {
 		agent := agentCtx{name: session.Name, dir: session.Dir, specificationRef: session.SpecificationRef}
-		if worktree, found := repositoryWorktreeForDirectory(observed.Worktrees.Value, session.Dir); found {
-			if worktree.Checkout.Known() && worktree.Checkout.Value.Kind == RepositoryBranchCheckout {
-				agent.branch = worktree.Checkout.Value.Branch
-			} else {
-				problems = append(problems, "Worktree-Zuordnung für "+session.Name+": Branch unbekannt")
-			}
-		} else {
-			problems = append(problems, "Worktree-Zuordnung für "+session.Name+": Worktree unbekannt")
+		assignment := assignments.Assignments[index]
+		agent.branch = assignment.Branch
+		if assignment.Branch == "" && assignment.Problem != nil {
+			problems = append(problems, "Worktree-Zuordnung für "+session.Name+": "+assignment.Problem.Message)
 		}
 		result = append(result, agent)
 	}

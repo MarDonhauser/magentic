@@ -164,7 +164,12 @@ func TestGitGraphDoesNotTurnMalformedHistoryIntoKnownEmptyGraph(t *testing.T) {
 
 	graph := buildGitGraphUsing(state, state.Projects[0].ID, 10, newRepositories(runner))
 	runner.assertDone()
-	if graph.Availability != RepositoryUnknown || graph.Err == "" || len(graph.Commits) != 0 || len(graph.Problems) == 0 {
+	if graph.HistoryAvailability != RepositoryUnknown || graph.Err == "" || len(graph.Commits) != 0 || len(graph.Problems) == 0 {
 		t.Fatalf("malformed history became a known empty Graph: %#v", graph)
+	}
+	// Der unlesbare Verlauf sagt nichts über das Repository selbst: die
+	// gelesene Presence bleibt stehen, statt zu Unkenntnis zu verfallen.
+	if graph.Availability != RepositoryKnown {
+		t.Fatalf("malformed history discarded the observed repository presence: %#v", graph)
 	}
 }

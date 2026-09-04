@@ -1485,6 +1485,212 @@ func (r *Repositories) divergence(ctx context.Context, wt RepositoryWorktree, ma
 	return r.compareRefs(ctx, wt.Path, main.Value, "HEAD", "divergence")
 }
 
+const repositoryProblemBranchAssignment = "branch_assignment"
+
+// RepositoryBranchAssignment answers, for one directory, which Worktree
+// contains it and which branch that Worktree has checked out. State keeps a
+// valid branch, a knowable checkout without a branch, and missing knowledge
+// apart; Problem carries the reason whenever Branch stays empty.
+type RepositoryBranchAssignment struct {
+	Directory     string                             `json:"directory"`
+	Branch        string                             `json:"branch,omitempty"`
+	Worktree      RepositoryWorktree                 `json:"worktree"`
+	WorktreeIndex int                                `json:"worktreeIndex"`
+	Checkout      RepositoryFact[RepositoryCheckout] `json:"checkout"`
+	State         RepositoryKnowledge                `json:"state"`
+	Problem       *RepositoryProblem                 `json:"problem,omitempty"`
+}
+
+func (a RepositoryBranchAssignment) Known() bool { return a.State == RepositoryKnown }
+
+// RepositoryBranchAssignments is the single place where a Project observation
+// is turned into "which branch belongs to this directory" and "which Worktree
+// has this branch checked out". Consumers derive neither of the two again.
+type RepositoryBranchAssignments struct {
+	State       RepositoryKnowledge                 `json:"state"`
+	Problem     *RepositoryProblem                  `json:"problem,omitempty"`
+	Worktrees   []RepositoryWorktree                `json:"worktrees,omitempty"`
+	Assignments []RepositoryBranchAssignment        `json:"assignments,omitempty"`
+	ByBranch    map[string]RepositoryWorktree       `json:"-"`
+}
+
+func (a RepositoryBranchAssignments) Known() bool { return a.State == RepositoryKnown }
+
+// For returns the assignment of one requested directory. An unrequested
+// directory yields an explicitly unknown assignment rather than an empty one.
+func (a RepositoryBranchAssignments) For(directory string) RepositoryBranchAssignment {
+	for _, assignment := range a.Assignments {
+		if assignment.Directory == directory {
+			return assignment
+		}
+	}
+	return RepositoryBranchAssignment{
+		Directory: directory, WorktreeIndex: -1, State: RepositoryUnknown,
+		Problem: &RepositoryProblem{Operation: repositoryProblemBranchAssignment, Message: "directory was not asked for"},
+	}
+}
+
+// WorktreeForBranch reports the Worktree that has the branch checked out.
+func (a RepositoryBranchAssignments) WorktreeForBranch(branch string) (RepositoryWorktree, bool) {
+	worktree, found := a.ByBranch[branch]
+	return worktree, found
+}
+
+// BranchesForDirectories observes the Project once and answers the branch
+// question for every given directory. Observation failure stays explicit
+// knowledge instead of an empty assignment, so there is no error to return.
+func (r *Repositories) BranchesForDirectories(ctx context.Context, project Project, directories []string) RepositoryBranchAssignments {
+	if r == nil {
+		return repositoryBranchAssignments(RepositoryProjectSurvey{
+			Presence: RepositoryUnknown,
+			Problem:  &RepositoryProblem{Operation: repositoryProblemBranchAssignment, Message: "Repositories is unavailable"},
+		}, directories)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	survey, err := r.Survey(ctx, []Project{project})
+	if err != nil {
+		return repositoryBranchAssignments(RepositoryProjectSurvey{
+			ID: project.ID, Name: project.Name, Path: project.Path,
+			Presence: RepositoryUnknown,
+			Problem:  repositoryProblem("survey", err),
+		}, directories)
+	}
+	if len(survey.Projects) != 1 {
+		return repositoryBranchAssignments(RepositoryProjectSurvey{
+			ID: project.ID, Name: project.Name, Path: project.Path,
+			Presence: RepositoryUnknown,
+			Problem:  &RepositoryProblem{Operation: "survey", Message: "Project is missing from repository Survey"},
+		}, directories)
+	}
+	return repositoryBranchAssignments(survey.Projects[0], directories)
+}
+
+func repositoryBranchAssignments(repository RepositoryProjectSurvey, directories []string) RepositoryBranchAssignments {
+	result := RepositoryBranchAssignments{State: RepositoryKnown, ByBranch: map[string]RepositoryWorktree{}}
+	presence := repository.Presence
+	if presence == "" {
+		presence = RepositoryUnknown
+	}
+	switch {
+	case presence == RepositoryNotRepository:
+		result.State = RepositoryNotRepository
+		result.Problem = repository.Problem
+	case presence != RepositoryKnown:
+		result.State = RepositoryUnknown
+		result.Problem = repository.Problem
+	case !repository.Worktrees.Known():
+		result.State = RepositoryUnknown
+		if repository.Worktrees.State == RepositoryNotRepository {
+			result.State = RepositoryNotRepository
+		}
+		result.Problem = repository.Worktrees.Problem
+	}
+	if result.State != RepositoryKnown {
+		if result.Problem == nil {
+			result.Problem = &RepositoryProblem{
+				Operation: repositoryProblemBranchAssignment,
+				Message:   "repository knowledge is unavailable",
+			}
+		}
+		for _, directory := range directories {
+			result.Assignments = append(result.Assignments, RepositoryBranchAssignment{
+				Directory: directory, WorktreeIndex: -1, State: result.State, Problem: result.Problem,
+			})
+		}
+		return result
+	}
+
+	result.Worktrees = repository.Worktrees.Value
+	for _, worktree := range result.Worktrees {
+		checkout := worktree.Checkout
+		if checkout.Known() && checkout.Value.Kind == RepositoryBranchCheckout && checkout.Value.Branch != "" {
+			result.ByBranch[checkout.Value.Branch] = worktree
+		}
+	}
+	for _, directory := range directories {
+		result.Assignments = append(result.Assignments, repositoryBranchAssignmentFor(result.Worktrees, directory))
+	}
+	return result
+}
+
+func repositoryBranchAssignmentFor(worktrees []RepositoryWorktree, directory string) RepositoryBranchAssignment {
+	assignment := RepositoryBranchAssignment{Directory: directory, WorktreeIndex: -1, State: RepositoryUnknown}
+	index := repositoryWorktreeIndexForDirectory(worktrees, directory)
+	if index < 0 {
+		assignment.Problem = &RepositoryProblem{
+			Operation: repositoryProblemBranchAssignment,
+			Message:   "no Worktree of this Project contains the directory",
+		}
+		return assignment
+	}
+	assignment.WorktreeIndex = index
+	assignment.Worktree = worktrees[index]
+	assignment.Checkout = assignment.Worktree.Checkout
+	if !assignment.Checkout.Known() {
+		assignment.State = assignment.Checkout.State
+		if assignment.State == "" {
+			assignment.State = RepositoryUnknown
+		}
+		assignment.Problem = assignment.Checkout.Problem
+		if assignment.Problem == nil {
+			assignment.Problem = &RepositoryProblem{
+				Operation: repositoryProblemBranchAssignment,
+				Message:   "checkout of the Worktree is unavailable",
+			}
+		}
+		return assignment
+	}
+	assignment.State = RepositoryKnown
+	if assignment.Checkout.Value.Kind == RepositoryBranchCheckout && assignment.Checkout.Value.Branch != "" {
+		assignment.Branch = assignment.Checkout.Value.Branch
+		return assignment
+	}
+	assignment.Problem = &RepositoryProblem{
+		Operation: repositoryProblemBranchAssignment,
+		Message:   "checkout of the Worktree is " + string(assignment.Checkout.Value.Kind) + ", not a branch",
+	}
+	return assignment
+}
+
+// WorktreePaths reports the tracked and the not-ignored untracked paths of a
+// working directory as explicit knowledge. A directory that is no repository
+// is a negative fact, not an unreadable one, and neither is an empty listing.
+func (r *Repositories) WorktreePaths(ctx context.Context, dir string) RepositoryFact[[]string] {
+	if r == nil || r.runner == nil {
+		return repositoryUnknownFact[[]string]("worktree_paths", errors.New("Repositories is unavailable"))
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(dir) == "" {
+		return repositoryUnknownFact[[]string]("worktree_paths", errors.New("repository directory is required"))
+	}
+	seen := map[string]struct{}{}
+	paths := []string{}
+	for _, args := range [][]string{
+		{"ls-files", "-z"},
+		{"ls-files", "-z", "--others", "--exclude-standard"},
+	} {
+		out, err := r.runner.Run(ctx, dir, args...)
+		if err != nil {
+			return repositoryFactForError[[]string]("worktree_paths", err)
+		}
+		for _, path := range strings.Split(out, "\x00") {
+			if path == "" {
+				continue
+			}
+			if _, duplicate := seen[path]; duplicate {
+				continue
+			}
+			seen[path] = struct{}{}
+			paths = append(paths, path)
+		}
+	}
+	return repositoryKnownFact(paths)
+}
+
 func sameRepositoryPath(a, b string) bool {
 	if a == "" || b == "" {
 		return false
@@ -1493,8 +1699,16 @@ func sameRepositoryPath(a, b string) bool {
 }
 
 func repositoryWorktreeForDirectory(worktrees []RepositoryWorktree, directory string) (RepositoryWorktree, bool) {
-	if strings.TrimSpace(directory) == "" {
+	index := repositoryWorktreeIndexForDirectory(worktrees, directory)
+	if index < 0 {
 		return RepositoryWorktree{}, false
+	}
+	return worktrees[index], true
+}
+
+func repositoryWorktreeIndexForDirectory(worktrees []RepositoryWorktree, directory string) int {
+	if strings.TrimSpace(directory) == "" {
+		return -1
 	}
 	directory = repositoryComparablePath(directory)
 	best := -1
@@ -1513,10 +1727,7 @@ func repositoryWorktreeForDirectory(worktrees []RepositoryWorktree, directory st
 			bestRootLength = len(root)
 		}
 	}
-	if best < 0 {
-		return RepositoryWorktree{}, false
-	}
-	return worktrees[best], true
+	return best
 }
 
 func repositoryComparablePath(path string) string {

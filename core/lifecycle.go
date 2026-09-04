@@ -2,12 +2,10 @@ package core
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -219,13 +217,13 @@ type SessionLifecycle struct {
 	registry     lifecycleRegistry
 	runtime      lifecycleRuntime
 	repositories lifecycleRepositories
-	projects     projectTransitionCoordinator
-	worktrees    worktreeTransitionCoordinator
-	runtimes     runtimeTransitionCoordinator
-	observe      func(context.Context, []Session) ObservationSnapshot
-	discover     func(context.Context, *State) RegistryDiscovery
-	ledgerPath   string
-	now          func() time.Time
+	// transitions serialisiert Project-, Worktree-, Session- und
+	// Runtime-Übergänge über einen Koordinator, der ihre Reihenfolge kennt.
+	transitions transitionCoordinator
+	observe     func(context.Context, []Session) ObservationSnapshot
+	discover    func(context.Context, *State) RegistryDiscovery
+	ledgerPath  string
+	now         func() time.Time
 }
 
 func OpenSessionLifecycle(config SessionLifecycleConfig) *SessionLifecycle {
@@ -235,24 +233,26 @@ func OpenSessionLifecycle(config SessionLifecycleConfig) *SessionLifecycle {
 	if config.LedgerPath == "" {
 		config.LedgerPath = SessionLifecyclePath()
 	}
-	lifecycle := newSessionLifecycle(
+	// Die Sperrwurzel hängt an der Registry, nicht am Ledger: MAGENTIC_LIFECYCLE
+	// darf den Ledger verschieben, ohne dass zwei Prozesse anschließend auf
+	// verschiedenen Wurzeln koordinieren und einander nicht mehr sehen.
+	return newSessionLifecycle(
 		OpenRegistry(config.RegistryPath),
 		tmuxLifecycleRuntime{},
 		NewRepositories(),
 		config.LedgerPath,
+		config.RegistryPath,
 	)
-	lifecycle.worktrees = newWorktreeTransitionCoordinator(config.RegistryPath)
-	lifecycle.projects = newProjectTransitionCoordinator(config.RegistryPath)
-	lifecycle.runtimes = newRuntimeTransitionCoordinator(config.RegistryPath)
-	return lifecycle
 }
 
-func newSessionLifecycle(registry lifecycleRegistry, runtime lifecycleRuntime, repositories lifecycleRepositories, ledgerPath string) *SessionLifecycle {
+// newSessionLifecycle nimmt die Sperrwurzel ausdrücklich entgegen. Sie war
+// vorher an zwei Stellen verschieden gesetzt und an keiner benannt, weshalb
+// kein Test je die Pfade der Produktion benutzte.
+func newSessionLifecycle(registry lifecycleRegistry, runtime lifecycleRuntime, repositories lifecycleRepositories, ledgerPath, lockRoot string) *SessionLifecycle {
 	return &SessionLifecycle{
 		registry: registry, runtime: exactLifecycleRuntime{delegate: runtime}, repositories: repositories,
-		projects: newProjectTransitionCoordinator(ledgerPath), worktrees: newWorktreeTransitionCoordinator(ledgerPath),
-		runtimes: newRuntimeTransitionCoordinator(ledgerPath),
-		observe:  Observe, discover: DiscoverNew,
+		transitions: newTransitionCoordinator(lockRoot),
+		observe:     Observe, discover: DiscoverNew,
 		ledgerPath: ledgerPath, now: time.Now,
 	}
 }
@@ -373,7 +373,7 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 		record.Applied.WorktreeReady = true
 	}
 	advanced := record
-	provision := func() error {
+	provision := func(ctx context.Context) error {
 		// The Project transition lock makes the fresh ProjectID resolution and
 		// every later Worktree/runtime/Registry crossing one indivisible scoped
 		// transition relative to Project removal.
@@ -390,8 +390,8 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 			freshSession.Dir = filepath.Clean(freshProject.Path)
 		}
 		target, managed := l.provisionWorktreeTarget(freshProject, request, freshSession)
-		run := func() error {
-			return l.withSessionTransition(ctx, session.ID, session.Name, func() error {
+		run := func(ctx context.Context) error {
+			return l.withSessionTransition(ctx, session.ID, session.Name, func(ctx context.Context) error {
 				// Re-resolve under Project -> Worktree -> Session coordination.
 				// The RuntimeName lock below then covers the final availability
 				// revalidation through runtime and Registry convergence.
@@ -413,7 +413,7 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 				record.Project = resolved
 				record.Session = freshSession
 				advanced = record
-				return l.runtimes.with(ctx, []string{freshSession.RuntimeName}, func() error {
+				return l.transitions.with(ctx, transitionScopeRuntime, []string{freshSession.RuntimeName}, func(ctx context.Context) error {
 					if availabilityErr := l.requireProvisionTargetAvailable(ctx, freshSession); availabilityErr != nil {
 						return availabilityErr
 					}
@@ -427,11 +427,11 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 			})
 		}
 		if managed {
-			return l.worktrees.with(ctx, freshProject, target, run)
+			return l.transitions.with(ctx, transitionScopeWorktree, worktreeTransitionKeys(freshProject, target), run)
 		}
-		return run()
+		return run(ctx)
 	}
-	err = l.projects.with(ctx, request.ProjectID, provision)
+	err = l.transitions.with(ctx, transitionScopeProject, projectTransitionKeys(request.ProjectID), provision)
 	return SessionLifecycleResult{Session: advanced.Session, Record: advanced}, err
 }
 
@@ -523,7 +523,7 @@ func (l *SessionLifecycle) SwitchVendor(ctx context.Context, sessionID SessionID
 		return current, nil
 	}
 	var switched Session
-	err = l.withSessionTransition(ctx, current.ID, current.Name, func() error {
+	err = l.withSessionTransition(ctx, current.ID, current.Name, func(ctx context.Context) error {
 		fresh, err := l.registry.Snapshot(ctx)
 		if err != nil {
 			return err
@@ -582,7 +582,7 @@ func (l *SessionLifecycle) RemoveProject(ctx context.Context, projectID ProjectI
 	if projectID == "" {
 		return errors.New("ProjectID is required")
 	}
-	return l.projects.with(ctx, projectID, func() error {
+	return l.transitions.with(ctx, transitionScopeProject, projectTransitionKeys(projectID), func(ctx context.Context) error {
 		project, err := l.resolveProject(ctx, projectID)
 		if err != nil {
 			return err
@@ -601,7 +601,7 @@ func (l *SessionLifecycle) RemoveManagedWorktree(ctx context.Context, projectID 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return l.projects.with(ctx, projectID, func() error {
+	return l.transitions.with(ctx, transitionScopeProject, projectTransitionKeys(projectID), func(ctx context.Context) error {
 		project, resolveErr := l.resolveProject(ctx, projectID)
 		if resolveErr != nil {
 			return resolveErr
@@ -611,7 +611,7 @@ func (l *SessionLifecycle) RemoveManagedWorktree(ctx context.Context, projectID 
 			return errors.New("Worktree path is not managed by the Project")
 		}
 		target = canonicalWorktreeTransitionPath(target)
-		return l.worktrees.with(ctx, project, target, func() error {
+		return l.transitions.with(ctx, transitionScopeWorktree, worktreeTransitionKeys(project, target), func(ctx context.Context) error {
 			freshProject, resolveErr := l.resolveProject(ctx, projectID)
 			if resolveErr != nil {
 				return resolveErr
@@ -789,7 +789,7 @@ func (l *SessionLifecycle) resumeAfterRestartWithProvider(ctx context.Context, i
 	}
 	advanced := LifecycleRecord{SessionID: session.ID, Session: session, Desired: SessionDesiredRunning}
 	run := func() error {
-		return l.withSessionTransition(ctx, session.ID, session.Name, func() error {
+		return l.withSessionTransition(ctx, session.ID, session.Name, func(ctx context.Context) error {
 			if settleErr := l.settleCrossedRename(ctx, session.ID); settleErr != nil {
 				return settleErr
 			}
@@ -813,7 +813,7 @@ func (l *SessionLifecycle) resumeAfterRestartWithProvider(ctx context.Context, i
 			if recordErr != nil {
 				return recordErr
 			}
-			return l.withRecordRuntimeTransition(ctx, record, func() error {
+			return l.withRecordRuntimeTransition(ctx, record, func(ctx context.Context) error {
 				if _, putErr := l.putRecord(ctx, record, false); putErr != nil {
 					return putErr
 				}
@@ -917,7 +917,7 @@ func (l *SessionLifecycle) Rename(ctx context.Context, id SessionID, name, newNa
 		SessionID: session.ID, Session: session, TransitionKind: LifecycleTransitionRename,
 		RenameTo: newName, RenameRuntimeTo: SessionName(newName),
 	}
-	err = l.withSessionTransition(ctx, session.ID, session.Name, func() error {
+	err = l.withSessionTransition(ctx, session.ID, session.Name, func(ctx context.Context) error {
 		if settleErr := l.settleCrossedRename(ctx, session.ID); settleErr != nil {
 			return settleErr
 		}
@@ -938,7 +938,7 @@ func (l *SessionLifecycle) Rename(ctx context.Context, id SessionID, name, newNa
 			}
 			if ok && latest.TransitionKind == LifecycleTransitionRename && latest.RenameTo == newName {
 				if latest.Phase != LifecycleConverged {
-					return l.withRecordRuntimeTransition(ctx, latest, func() error {
+					return l.withRecordRuntimeTransition(ctx, latest, func(ctx context.Context) error {
 						advanced, readErr = l.advanceRename(ctx, latest)
 						return readErr
 					})
@@ -966,7 +966,7 @@ func (l *SessionLifecycle) Rename(ctx context.Context, id SessionID, name, newNa
 			Applied:        LifecycleAppliedState{WorktreeReady: true},
 			CreatedAt:      now, UpdatedAt: now,
 		}
-		return l.withRecordRuntimeTransition(ctx, record, func() error {
+		return l.withRecordRuntimeTransition(ctx, record, func(ctx context.Context) error {
 			if _, putErr := l.putRecord(ctx, record, false); putErr != nil {
 				return putErr
 			}
@@ -1011,7 +1011,7 @@ func (l *SessionLifecycle) planExisting(ctx context.Context, id SessionID, name 
 	session := state.Agents[idx]
 	advanced := LifecycleRecord{SessionID: session.ID, Session: session, Desired: desired}
 	run := func() error {
-		return l.withSessionTransition(ctx, session.ID, session.Name, func() error {
+		return l.withSessionTransition(ctx, session.ID, session.Name, func(ctx context.Context) error {
 			if settleErr := l.settleCrossedRename(ctx, session.ID); settleErr != nil {
 				return settleErr
 			}
@@ -1055,7 +1055,7 @@ func (l *SessionLifecycle) settleCrossedRename(ctx context.Context, id SessionID
 	if !latest.MayHaveApplied && !latest.Applied.RuntimeRenameSettled {
 		return nil
 	}
-	err = l.withRecordRuntimeTransition(ctx, latest, func() error {
+	err = l.withRecordRuntimeTransition(ctx, latest, func(ctx context.Context) error {
 		_, advanceErr := l.advanceRename(ctx, latest)
 		return advanceErr
 	})
@@ -1073,7 +1073,7 @@ func (l *SessionLifecycle) planSessionLocked(ctx context.Context, state State, s
 		return record, err
 	}
 	advanced := record
-	err = l.withRecordRuntimeTransition(ctx, record, func() error {
+	err = l.withRecordRuntimeTransition(ctx, record, func(ctx context.Context) error {
 		var advanceErr error
 		advanced, advanceErr = l.persistAndAdvanceStateTransition(ctx, record)
 		return advanceErr
@@ -1122,12 +1122,12 @@ func (l *SessionLifecycle) persistAndAdvanceStateTransition(ctx context.Context,
 	return l.advanceStopped(ctx, record)
 }
 
-func (l *SessionLifecycle) withRecordRuntimeTransition(ctx context.Context, record LifecycleRecord, fn func() error) error {
+func (l *SessionLifecycle) withRecordRuntimeTransition(ctx context.Context, record LifecycleRecord, fn func(context.Context) error) error {
 	runtimeNames := []string{record.Session.RuntimeName}
 	if record.TransitionKind == LifecycleTransitionRename {
 		runtimeNames = append(runtimeNames, record.RenameRuntimeTo)
 	}
-	return l.runtimes.with(ctx, runtimeNames, fn)
+	return l.transitions.with(ctx, transitionScopeRuntime, runtimeNames, fn)
 }
 
 func lifecycleProjectForSession(state State, session Session) (Project, error) {
@@ -1148,7 +1148,7 @@ func (l *SessionLifecycle) withRunningWorktreeTransition(
 	createWorktree bool,
 	fn func() error,
 ) error {
-	return l.projects.with(ctx, session.ProjectID, func() error {
+	return l.transitions.with(ctx, transitionScopeProject, projectTransitionKeys(session.ProjectID), func(ctx context.Context) error {
 		freshProject, err := l.resolveProject(ctx, session.ProjectID)
 		if err != nil {
 			return err
@@ -1160,7 +1160,7 @@ func (l *SessionLifecycle) withRunningWorktreeTransition(
 		if !managed {
 			return fn()
 		}
-		return l.worktrees.with(ctx, freshProject, target, func() error {
+		return l.transitions.with(ctx, transitionScopeWorktree, worktreeTransitionKeys(freshProject, target), func(ctx context.Context) error {
 			resolved, resolveErr := l.resolveProject(ctx, session.ProjectID)
 			if resolveErr != nil {
 				return resolveErr
@@ -1241,7 +1241,7 @@ func (l *SessionLifecycle) Reconcile(ctx context.Context) (LifecycleReconcileRes
 func (l *SessionLifecycle) advanceSerialized(ctx context.Context, expected LifecycleRecord) (LifecycleRecord, error) {
 	advanced := expected
 	run := func() error {
-		return l.withSessionTransition(ctx, expected.SessionID, expected.Session.Name, func() error {
+		return l.withSessionTransition(ctx, expected.SessionID, expected.Session.Name, func(ctx context.Context) error {
 			latest, ok, readErr := l.recordForSession(ctx, expected.SessionID)
 			if readErr != nil {
 				return readErr
@@ -1253,7 +1253,7 @@ func (l *SessionLifecycle) advanceSerialized(ctx context.Context, expected Lifec
 				advanced = latest
 				return nil
 			}
-			return l.withRecordRuntimeTransition(ctx, latest, func() error {
+			return l.withRecordRuntimeTransition(ctx, latest, func(ctx context.Context) error {
 				var advanceErr error
 				if latest.TransitionKind == LifecycleTransitionRename {
 					advanced, advanceErr = l.advanceRename(ctx, latest)
@@ -1300,7 +1300,7 @@ func (l *SessionLifecycle) reconcileRegisteredSession(ctx context.Context, id Se
 		return false, false, err
 	}
 	run := func() error {
-		return l.withSessionTransition(ctx, id, name, func() error {
+		return l.withSessionTransition(ctx, id, name, func(ctx context.Context) error {
 			registrySnapshot, snapshotErr := l.registry.Snapshot(ctx)
 			if snapshotErr != nil {
 				return snapshotErr
@@ -1311,7 +1311,7 @@ func (l *SessionLifecycle) reconcileRegisteredSession(ctx context.Context, id Se
 				return nil
 			}
 			session := state.Agents[idx]
-			return l.runtimes.with(ctx, []string{session.RuntimeName}, func() error {
+			return l.transitions.with(ctx, transitionScopeRuntime, []string{session.RuntimeName}, func(ctx context.Context) error {
 				// Registry identity is revalidated after waiting for RuntimeName
 				// coordination so the observation and any repair share one fact.
 				freshSnapshot, freshErr := l.registry.Snapshot(ctx)
@@ -1365,14 +1365,8 @@ func (l *SessionLifecycle) reconcileRegisteredSession(ctx context.Context, id Se
 	return examined, restored, err
 }
 
-func (l *SessionLifecycle) withSessionTransition(ctx context.Context, id SessionID, name string, fn func() error) error {
-	key := string(id)
-	if key == "" {
-		key = "name:" + name
-	}
-	digest := sha256.Sum256([]byte(key))
-	lockPath := filepath.Join(filepath.Dir(l.ledgerPath), ".lifecycle-session-locks", fmt.Sprintf("%x", digest[:]))
-	return withRegistryFileLock(ctx, lockPath, fn)
+func (l *SessionLifecycle) withSessionTransition(ctx context.Context, id SessionID, name string, fn func(context.Context) error) error {
+	return l.transitions.with(ctx, transitionScopeSession, sessionTransitionKeys(id, name), fn)
 }
 
 func (l *SessionLifecycle) advanceRename(ctx context.Context, expected LifecycleRecord) (LifecycleRecord, error) {
@@ -2041,148 +2035,4 @@ func writeLifecycleLedger(path string, ledger *lifecycleLedger) error {
 		_ = dir.Close()
 	}
 	return nil
-}
-
-type lifecycleCommandRunner func(context.Context, string, ...string) ([]byte, error)
-
-type tmuxLifecycleRuntime struct {
-	command lifecycleCommandRunner
-}
-
-func (r tmuxLifecycleRuntime) combinedOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
-	if r.command != nil {
-		return r.command(ctx, name, args...)
-	}
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
-}
-
-func (r tmuxLifecycleRuntime) Exists(ctx context.Context, session Session) (bool, error) {
-	out, err := r.combinedOutput(ctx, "tmux", "has-session", "-t", TargetSession(session.TmuxName()))
-	if err == nil {
-		return true, nil
-	}
-	if ctx.Err() != nil {
-		return false, ctx.Err()
-	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) && tmuxTargetKnownAbsent(out) {
-		return false, nil
-	}
-	message := strings.TrimSpace(string(out))
-	if message == "" {
-		return false, fmt.Errorf("observe tmux Session %q: %w", session.TmuxName(), err)
-	}
-	return false, fmt.Errorf("observe tmux Session %q: %w: %s", session.TmuxName(), err, message)
-}
-
-func tmuxTargetKnownAbsent(output []byte) bool {
-	message := strings.TrimSuffix(string(output), "\n")
-	if !singleLineTmuxDiagnostic(message) {
-		return false
-	}
-	if tmuxServerKnownAbsent(message) {
-		return true
-	}
-	detail, found := strings.CutPrefix(message, "can't find session: ")
-	return found && detail != "" && strings.TrimSpace(detail) == detail
-}
-
-// tmux meldet einen fehlenden Server je nach errno verschieden: bei ECONNREFUSED
-// (Socket-Datei ohne Server) "no server running on …", bei ENOENT (Socket-Datei
-// weg, etwa nach einem Reboot) "error connecting to … (No such file or directory)".
-func tmuxServerKnownAbsent(output string) bool {
-	message := strings.TrimSuffix(output, "\n")
-	if !singleLineTmuxDiagnostic(message) {
-		return false
-	}
-	if socket, found := strings.CutPrefix(message, "no server running on "); found {
-		return socket != "" && strings.TrimSpace(socket) == socket
-	}
-	if detail, found := strings.CutPrefix(message, "error connecting to "); found {
-		socket, found := strings.CutSuffix(detail, " (No such file or directory)")
-		return found && socket != "" && strings.TrimSpace(socket) == socket
-	}
-	return false
-}
-
-func singleLineTmuxDiagnostic(message string) bool {
-	return message != "" && !strings.ContainsAny(message, "\r\n") && strings.TrimSpace(message) == message
-}
-
-func (tmuxLifecycleRuntime) Start(ctx context.Context, session Session, mode string) error {
-	if info, err := os.Stat(session.Dir); err != nil || !info.IsDir() {
-		return fmt.Errorf("Session directory %q is unavailable", session.Dir)
-	}
-	if !session.IsTerm() {
-		// The binary check happens before the tmux Session exists, so a
-		// missing program leaves nothing behind to clean up.
-		provider, err := resolveSessionProvider(session)
-		if err != nil {
-			return err
-		}
-		if !providerBinaryAvailable(provider) {
-			return fmt.Errorf("%s ist nicht installiert (%s nicht im PATH)", provider.Vendor(), provider.Binary())
-		}
-	}
-	args := tmuxNewSessionArgs(session)
-	if out, err := exec.CommandContext(ctx, "tmux", args...).CombinedOutput(); err != nil {
-		return fmt.Errorf("tmux new-session: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	TmuxConfigureUX()
-	if session.IsTerm() {
-		return nil
-	}
-	command, err := startCommandForSession(session, mode)
-	if err != nil {
-		return err
-	}
-	if _, err := exec.CommandContext(ctx, "tmux", "send-keys", "-t", TargetPane(session.TmuxName()), "-l", command).CombinedOutput(); err != nil {
-		return fmt.Errorf("start coding agent: %w", err)
-	}
-	if _, err := exec.CommandContext(ctx, "tmux", "send-keys", "-t", TargetPane(session.TmuxName()), "Enter").CombinedOutput(); err != nil {
-		return fmt.Errorf("submit coding-agent command: %w", err)
-	}
-	return nil
-}
-
-// tmuxNewSessionArgs builds the command that creates a Session runtime. Every
-// provisioned runtime carries the Magentic environment marker.
-func tmuxNewSessionArgs(session Session) []string {
-	args := []string{"new-session", "-d", "-s", session.TmuxName(), "-c", session.Dir, "-x", "220", "-y", "50"}
-	return append(args, controlEnvironmentArgs(session)...)
-}
-
-func (tmuxLifecycleRuntime) Stop(ctx context.Context, session Session) error {
-	out, err := exec.CommandContext(ctx, "tmux", "kill-session", "-t", TargetSession(session.TmuxName())).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("tmux kill-session: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-func (tmuxLifecycleRuntime) Rename(ctx context.Context, session Session, targetRuntime string) error {
-	out, err := exec.CommandContext(
-		ctx, "tmux", "rename-session", "-t", TargetSession(session.TmuxName()), targetRuntime,
-	).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("tmux rename-session: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-func (tmuxLifecycleRuntime) DeliverInitial(_ context.Context, session Session, prompt string) (bool, error) {
-	if session.IsTerm() {
-		return false, errors.New("initial coding prompt cannot be delivered to a terminal Session")
-	}
-	provider, err := resolveSessionProvider(session)
-	if err != nil {
-		return false, err
-	}
-	// enqueuePrompt confirms only in-process scheduling. The durable state
-	// therefore remains delivery_unknown until a future observation can prove
-	// acceptance; reconciliation intentionally does not submit it again.
-	if err := enqueuePrompt(session.TmuxName(), prompt, true, provider.Tool(), true, true, false, nil); err != nil {
-		return false, err
-	}
-	return false, nil
 }

@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -11,58 +10,30 @@ import (
 	"strings"
 )
 
-// worktreeTransitionCoordinator serializes every transition that can make a
-// managed Worktree newly occupied with the transition that can destroy it.
-// The lock is process-coordinated and keyed by canonical Worktree identity,
-// not by a SessionID: different Sessions in the same Worktree must contend.
-type worktreeTransitionCoordinator struct {
-	root          string
-	beforeAcquire func(Project, string)
+// projectTransitionKeys und worktreeTransitionKeys nennen die Schlüssel, unter
+// denen eine Ebene koordiniert. Der Worktree-Schlüssel ist die kanonische
+// Worktree-Identität, nicht eine SessionID: verschiedene Sessions im selben
+// Worktree müssen einander begegnen.
+
+func projectTransitionKeys(projectID ProjectID) []string {
+	return []string{strings.TrimSpace(string(projectID))}
 }
 
-type projectTransitionCoordinator struct {
-	root          string
-	beforeAcquire func(ProjectID)
-}
-
-func newWorktreeTransitionCoordinator(registryPath string) worktreeTransitionCoordinator {
-	return worktreeTransitionCoordinator{root: filepath.Dir(registryPath)}
-}
-
-func newProjectTransitionCoordinator(registryPath string) projectTransitionCoordinator {
-	return projectTransitionCoordinator{root: filepath.Dir(registryPath)}
-}
-
-func (c projectTransitionCoordinator) with(ctx context.Context, projectID ProjectID, fn func() error) error {
-	if projectID == "" {
-		return fn()
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if c.beforeAcquire != nil {
-		c.beforeAcquire(projectID)
-	}
-	digest := sha256.Sum256([]byte(projectID))
-	lockPath := filepath.Join(c.root, ".project-transition-locks", fmt.Sprintf("%x", digest[:]))
-	return withRegistryFileLock(ctx, lockPath, fn)
-}
-
-func (c worktreeTransitionCoordinator) with(ctx context.Context, project Project, target string, fn func() error) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+func worktreeTransitionKeys(project Project, target string) []string {
 	canonical := canonicalWorktreeTransitionPath(target)
-	if c.beforeAcquire != nil {
-		c.beforeAcquire(project, canonical)
-	}
 	identity := strings.TrimSpace(string(project.ID))
 	if identity == "" {
 		identity = canonicalWorktreeTransitionPath(project.Path)
 	}
-	digest := sha256.Sum256([]byte(identity + "\x00" + canonical))
-	lockPath := filepath.Join(c.root, ".worktree-transition-locks", fmt.Sprintf("%x", digest[:]))
-	return withRegistryFileLock(ctx, lockPath, fn)
+	return []string{identity + "\x00" + canonical}
+}
+
+func sessionTransitionKeys(id SessionID, name string) []string {
+	key := string(id)
+	if key == "" {
+		key = "name:" + name
+	}
+	return []string{key}
 }
 
 // canonicalWorktreeTransitionPath resolves the longest existing ancestor, then
@@ -160,10 +131,9 @@ func (r *Registry) AdoptDiscoveredSessions(ctx context.Context, sessions []Sessi
 	if err != nil {
 		return RegistryChangeResult{}, err
 	}
-	projects := newProjectTransitionCoordinator(r.path)
-	worktreeCoordinator := newWorktreeTransitionCoordinator(r.path)
+	transitions := newTransitionCoordinator(r.path)
 	var result RegistryChangeResult
-	commit := func() error {
+	commit := func(ctx context.Context) error {
 		freshSnapshot, snapshotErr := r.Snapshot(ctx)
 		if snapshotErr != nil {
 			return snapshotErr
@@ -188,25 +158,22 @@ func (r *Registry) AdoptDiscoveredSessions(ctx context.Context, sessions []Sessi
 		result, err = r.Change(ctx, addDiscoveredSessionsChange(sessions))
 		return err
 	}
-	commitWorktrees := func(index int) func() error {
-		var acquire func(int) error
-		acquire = func(i int) error {
-			if i == len(worktrees) {
-				return commit()
-			}
-			entry := worktrees[i]
-			return worktreeCoordinator.with(ctx, entry.project, entry.target, func() error { return acquire(i + 1) })
-		}
-		return func() error { return acquire(index) }
+
+	// Alle Projekt-Schlüssel, dann alle Worktree-Schlüssel: der Koordinator
+	// sortiert und entdoppelt sie, sodass zwei gleichzeitige Adoptionen über
+	// denselben Schlüsselsatz einander nicht verklemmen.
+	projectKeys := make([]string, 0, len(projectIDs))
+	for _, id := range projectIDs {
+		projectKeys = append(projectKeys, projectTransitionKeys(id)...)
 	}
-	var acquireProjects func(int) error
-	acquireProjects = func(index int) error {
-		if index == len(projectIDs) {
-			return commitWorktrees(0)()
-		}
-		return projects.with(ctx, projectIDs[index], func() error { return acquireProjects(index + 1) })
+	worktreeKeys := make([]string, 0, len(worktrees))
+	for _, entry := range worktrees {
+		worktreeKeys = append(worktreeKeys, worktreeTransitionKeys(entry.project, entry.target)...)
 	}
-	if err := acquireProjects(0); err != nil {
+
+	if err := transitions.with(ctx, transitionScopeProject, projectKeys, func(ctx context.Context) error {
+		return transitions.with(ctx, transitionScopeWorktree, worktreeKeys, commit)
+	}); err != nil {
 		return RegistryChangeResult{}, err
 	}
 	return result, nil

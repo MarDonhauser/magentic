@@ -331,13 +331,23 @@ func buildOverviewFromSurvey(s *State, snapshot ObservationSnapshot, survey Repo
 			repository = unavailableOverviewRepositoryProject(p, surveyErr)
 		}
 		proj, repositoryWorktrees := projectOverviewFromRepository(p, repository)
-		for i, worktree := range repositoryWorktrees {
+		// Eine Branch-Zuordnung je Projekt statt einer Suche je Worktree und
+		// Sitzung: Repositories entscheidet, welcher Worktree ein
+		// Verzeichnis enthält, die Übersicht nur noch, wie sie ihn beschriftet.
+		if len(repositoryWorktrees) > 0 {
+			var candidates []Agent
+			var directories []string
 			for _, a := range s.Agents {
 				if assigned[a.ID] || !overviewSessionMayBelongToProject(a, p) {
 					continue
 				}
-				matched, matchedWorktree := repositoryWorktreeForDirectory(repositoryWorktrees, a.Dir)
-				if !matchedWorktree || !sameRepositoryPath(matched.Path, worktree.Path) {
+				candidates = append(candidates, a)
+				directories = append(directories, a.Dir)
+			}
+			assignments := repositoryBranchAssignments(repository, directories)
+			for index, a := range candidates {
+				i := assignments.Assignments[index].WorktreeIndex
+				if i < 0 {
 					continue
 				}
 				assigned[a.ID] = true
@@ -454,15 +464,24 @@ func unavailableOverviewRepositoryProject(project Project, surveyErr error) Repo
 }
 
 func projectOverviewFromRepository(project Project, repository RepositoryProjectSurvey) (OvProject, []RepositoryWorktree) {
+	// Eine leere Presence ist keine Beobachtung, sondern ein fehlendes
+	// Ergebnis. Sie wird als unbekannt gelesen und sagt das auch, statt
+	// stillschweigend für eine gelesene Unkenntnis einzustehen.
 	knowledge := repository.Presence
+	var missingPresence *RepositoryProblem
 	if knowledge == "" {
 		knowledge = RepositoryUnknown
+		missingPresence = &RepositoryProblem{
+			Operation: "survey",
+			Message:   "repository Survey carries no presence for the Project",
+		}
 	}
 	overview := OvProject{
 		ID: project.ID, Name: project.Name, Path: project.Path,
 		MainConfigured:      strings.TrimSpace(project.MainBranch) != "",
 		RepositoryKnowledge: knowledge,
 	}
+	overview.Problems = appendOverviewProblem(overview.Problems, missingPresence)
 	overview.Problems = appendOverviewProblem(overview.Problems, repository.Problem)
 	if repository.MainBranch.Known() {
 		overview.MainBranch = repository.MainBranch.Value

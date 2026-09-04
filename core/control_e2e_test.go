@@ -54,7 +54,7 @@ func newControlE2E(t *testing.T) *controlE2E {
 		t.Fatal(err)
 	}
 	runtime := &fakeLifecycleRuntime{present: map[SessionID]bool{}, runtimeNames: map[string]bool{}}
-	lifecycle := newSessionLifecycle(registry, runtime, NewRepositories(), filepath.Join(root, "lifecycle.json"))
+	lifecycle := newSessionLifecycle(registry, runtime, NewRepositories(), filepath.Join(root, "lifecycle.json"), root)
 
 	harness := &controlE2E{t: t, readings: map[SessionID]SessionObservation{}}
 	service := &ControlService{

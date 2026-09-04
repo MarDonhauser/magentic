@@ -31,10 +31,6 @@ const (
 var (
 	sessionPrefix = core.SessionPrefix
 
-	tmux          = core.Tmux
-	targetSession = core.TargetSession
-	targetPane    = core.TargetPane
-
 	LoadState       = core.LoadState
 	StatePath       = core.StatePath
 	OpenRegistry    = core.OpenRegistry

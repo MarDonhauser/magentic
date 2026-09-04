@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"sort"
-	"strings"
 	"time"
 )
 
@@ -52,8 +51,12 @@ type GitGraph struct {
 	Lanes        int                 `json:"lanes"`
 	Commits      []GraphCommit       `json:"commits"`
 	Branches     []GraphBranch       `json:"branches"`
-	Truncate     bool                `json:"truncated"`
-	Availability RepositoryKnowledge `json:"availability"`
+	Truncate bool `json:"truncated"`
+	// Availability trägt die Kenntnis über das Repository selbst,
+	// HistoryAvailability die über den gelesenen Verlauf. Ein unlesbarer
+	// Verlauf macht ein vorhandenes Repository nicht unbekannt.
+	Availability        RepositoryKnowledge `json:"availability"`
+	HistoryAvailability RepositoryKnowledge `json:"historyAvailability"`
 	Problems     []RepositoryProblem `json:"problems,omitempty"`
 	Err          string              `json:"err,omitempty"`
 }
@@ -63,7 +66,7 @@ func BuildGitGraph(s *State, projectID ProjectID, limit int) GitGraph {
 }
 
 func buildGitGraphUsing(s *State, projectID ProjectID, limit int, repositories *Repositories) GitGraph {
-	g := GitGraph{ProjectID: projectID, Availability: RepositoryUnknown}
+	g := GitGraph{ProjectID: projectID, Availability: RepositoryUnknown, HistoryAvailability: RepositoryUnknown}
 	if s == nil || projectID == "" {
 		g.Err = "Projekt nicht gefunden"
 		return g
@@ -109,16 +112,13 @@ func buildGitGraphUsing(s *State, projectID ProjectID, limit int, repositories *
 	}
 	g.Main = main
 
+	// Die Branch-Zuordnung kommt aus Repositories; der Graph leitet sie nicht
+	// noch einmal aus den Worktrees ab.
+	assignments := repositoryBranchAssignments(repository, nil)
+	worktreeByBranch := assignments.ByBranch
 	wtByBranch := map[string]string{}
-	worktreeByBranch := map[string]RepositoryWorktree{}
-	divergenceByBranch := map[string]RepositoryFact[RepositoryDivergence]{}
-	for _, wt := range repository.Worktrees.Value {
-		if wt.Checkout.Known() && wt.Checkout.Value.Kind == RepositoryBranchCheckout && wt.Checkout.Value.Branch != "" {
-			branch := wt.Checkout.Value.Branch
-			wtByBranch[branch] = wt.Path
-			worktreeByBranch[branch] = wt
-			divergenceByBranch[branch] = wt.Divergence
-		}
+	for branch, worktree := range worktreeByBranch {
+		wtByBranch[branch] = worktree.Path
 	}
 	agentsByDir := map[string][]string{}
 	for _, a := range s.Agents {
@@ -131,16 +131,18 @@ func buildGitGraphUsing(s *State, projectID ProjectID, limit int, repositories *
 		agentsByDir[a.Dir] = append(agentsByDir[a.Dir], a.Name)
 	}
 
-	history := repositories.CommitHistory(ctx, project.Path, limit+1)
-	if !history.Known() {
-		g.Availability = RepositoryUnknown
+	facts := repositories.GraphFacts(ctx, repository, limit)
+	g.HistoryAvailability = facts.Commits.State
+	if !facts.Commits.Known() {
+		// Die gelesene Presence bleibt stehen: dass der Verlauf fehlt, sagt
+		// nichts darüber, ob das Verzeichnis ein Repository ist.
 		g.Err = "Git-Verlauf konnte nicht gelesen werden"
-		if history.Problem != nil {
-			g.Problems = append(g.Problems, *history.Problem)
+		if facts.Commits.Problem != nil {
+			g.Problems = append(g.Problems, *facts.Commits.Problem)
 		}
 		return g
 	}
-	commits := graphCommits(history.Value, wtByBranch, agentsByDir)
+	commits := graphCommits(facts.Commits.Value, wtByBranch, agentsByDir)
 	for i := range commits {
 		for j := range commits[i].Refs {
 			worktree, known := worktreeByBranch[commits[i].Refs[j].Name]
@@ -151,10 +153,7 @@ func buildGitGraphUsing(s *State, projectID ProjectID, limit int, repositories *
 			commits[i].Refs[j].WorktreeLocation = worktree.Location
 		}
 	}
-	if len(commits) > limit {
-		commits = commits[:limit]
-		g.Truncate = true
-	}
+	g.Truncate = facts.Truncated
 	assignLanes(commits)
 	g.Commits = commits
 	for _, c := range commits {
@@ -162,16 +161,14 @@ func buildGitGraphUsing(s *State, projectID ProjectID, limit int, repositories *
 			g.Lanes = c.Lane + 1
 		}
 	}
-	var branchProblems []RepositoryProblem
-	g.Branches, branchProblems = collectGraphBranches(ctx, repositories, project.Path, main, commits, wtByBranch, agentsByDir, divergenceByBranch)
-	g.Problems = append(g.Problems, branchProblems...)
+	g.Branches = collectGraphBranches(facts, commits, wtByBranch, agentsByDir)
+	g.Problems = append(g.Problems, facts.Problems...)
 	for i := range g.Branches {
 		if worktree, known := worktreeByBranch[g.Branches[i].Name]; known {
 			g.Branches[i].WorktreeRef = worktree.Reference
 			g.Branches[i].WorktreeLocation = worktree.Location
 		}
 	}
-	g.Availability = RepositoryKnown
 	return g
 }
 
@@ -206,32 +203,12 @@ func graphCommits(history []RepositoryCommit, wtByBranch map[string]string, agen
 	return commits
 }
 
+// parseRefs übernimmt die von Repositories zerlegte Dekoration; der Graph
+// gibt ihr nur seine eigene Darstellung.
 func parseRefs(raw string) []GraphRef {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
 	var refs []GraphRef
-	for _, part := range strings.Split(raw, ", ") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		current := false
-		if idx := strings.Index(part, " -> "); idx >= 0 {
-			current = strings.HasPrefix(part, "HEAD")
-			part = part[idx+4:]
-		}
-		switch {
-		case part == "HEAD":
-			refs = append(refs, GraphRef{Name: "HEAD", Kind: "head", Current: true})
-		case strings.HasPrefix(part, "tag: "):
-			refs = append(refs, GraphRef{Name: strings.TrimPrefix(part, "tag: "), Kind: "tag"})
-		case strings.HasPrefix(part, "origin/"):
-			refs = append(refs, GraphRef{Name: part, Kind: "remote"})
-		default:
-			refs = append(refs, GraphRef{Name: part, Kind: "branch", Current: current})
-		}
+	for _, ref := range parseRepositoryDecorations(raw) {
+		refs = append(refs, GraphRef{Name: ref.Name, Kind: ref.Kind, Current: ref.Current})
 	}
 	return refs
 }
@@ -280,7 +257,8 @@ func assignLanes(commits []GraphCommit) {
 	}
 }
 
-func collectGraphBranches(ctx context.Context, repositories *Repositories, projPath, main string, commits []GraphCommit, wtByBranch map[string]string, agentsByDir map[string][]string, divergenceByBranch map[string]RepositoryFact[RepositoryDivergence]) ([]GraphBranch, []RepositoryProblem) {
+func collectGraphBranches(facts RepositoryGraphFacts, commits []GraphCommit, wtByBranch map[string]string, agentsByDir map[string][]string) []GraphBranch {
+	main := facts.Main
 	laneOf := map[string]int{}
 	for _, c := range commits {
 		for _, r := range c.Refs {
@@ -291,14 +269,7 @@ func collectGraphBranches(ctx context.Context, repositories *Repositories, projP
 			}
 		}
 	}
-	merged := RepositoryFact[map[string]bool]{State: RepositoryUnknown}
-	if main != "" {
-		merged = repositories.MergedBranches(ctx, projPath, main)
-	}
-	var problems []RepositoryProblem
-	if merged.Problem != nil {
-		problems = append(problems, *merged.Problem)
-	}
+	merged := facts.Merged
 	var out []GraphBranch
 	for name, lane := range laneOf {
 		b := GraphBranch{Name: name, Lane: lane, IsMain: name == main, MergedKnown: merged.Known()}
@@ -310,23 +281,10 @@ func collectGraphBranches(ctx context.Context, repositories *Repositories, projP
 			b.Agents = agentsByDir[wt]
 		}
 		if !b.IsMain && main != "" {
-			if divergence, exists := divergenceByBranch[name]; exists {
-				if divergence.Known() {
-					b.Ahead = divergence.Value.Ahead
-					b.Behind = divergence.Value.Behind
-					b.DivergenceKnown = true
-				} else if divergence.Problem != nil {
-					problems = append(problems, *divergence.Problem)
-				}
-			} else {
-				divergence := repositories.CompareRefs(ctx, projPath, main, name)
-				if divergence.Known() {
-					b.Ahead = divergence.Value.Ahead
-					b.Behind = divergence.Value.Behind
-					b.DivergenceKnown = true
-				} else if divergence.Problem != nil {
-					problems = append(problems, *divergence.Problem)
-				}
+			if divergence := facts.Divergence[name]; divergence.Known() {
+				b.Ahead = divergence.Value.Ahead
+				b.Behind = divergence.Value.Behind
+				b.DivergenceKnown = true
 			}
 		} else if b.IsMain {
 			b.DivergenceKnown = true
@@ -343,5 +301,5 @@ func collectGraphBranches(ctx context.Context, repositories *Repositories, projP
 		}
 		return out[i].Name < out[j].Name
 	})
-	return out, problems
+	return out
 }

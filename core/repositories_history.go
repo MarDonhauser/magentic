@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -23,9 +24,9 @@ type RepositoryCommit struct {
 	Decorations string
 }
 
-// CommitHistory returns either a wholly validated bounded history or unknown
+// commitHistory returns either a wholly validated bounded history or unknown
 // knowledge. A successful command with malformed output is not an empty log.
-func (r *Repositories) CommitHistory(ctx context.Context, dir string, limit int) RepositoryFact[[]RepositoryCommit] {
+func (r *Repositories) commitHistory(ctx context.Context, dir string, limit int) RepositoryFact[[]RepositoryCommit] {
 	if r == nil || r.runner == nil {
 		return repositoryUnknownFact[[]RepositoryCommit]("commit_history", errors.New("Repositories is unavailable"))
 	}
@@ -153,9 +154,9 @@ func repositoryDecimal(value string) bool {
 	return true
 }
 
-// MergedBranches reports the complete set of local branches Git proves are
+// mergedBranches reports the complete set of local branches Git proves are
 // merged into base. Command failure remains unknown instead of "none merged".
-func (r *Repositories) MergedBranches(ctx context.Context, dir, base string) RepositoryFact[map[string]bool] {
+func (r *Repositories) mergedBranches(ctx context.Context, dir, base string) RepositoryFact[map[string]bool] {
 	if r == nil || r.runner == nil {
 		return repositoryUnknownFact[map[string]bool]("merged_branches", errors.New("Repositories is unavailable"))
 	}
@@ -198,8 +199,8 @@ func parseRepositoryMergedBranches(out string) (map[string]bool, error) {
 	return merged, nil
 }
 
-// CompareRefs reports ahead/behind counts with validated numeric output.
-func (r *Repositories) CompareRefs(ctx context.Context, dir, base, ref string) RepositoryFact[RepositoryDivergence] {
+// compareRefsFact reports ahead/behind counts with validated numeric output.
+func (r *Repositories) compareRefsFact(ctx context.Context, dir, base, ref string) RepositoryFact[RepositoryDivergence] {
 	if r == nil || r.runner == nil {
 		return repositoryUnknownFact[RepositoryDivergence]("compare_refs", errors.New("Repositories is unavailable"))
 	}
@@ -239,4 +240,134 @@ func parseRepositoryDivergence(out string) (behind, ahead int, err error) {
 		return 0, 0, err
 	}
 	return behind, ahead, nil
+}
+
+// Decoration kinds are raw Git facts; a consumer maps them to its own visual
+// classification but never re-parses the decoration itself.
+const (
+	repositoryDecorationHead   = "head"
+	repositoryDecorationTag    = "tag"
+	repositoryDecorationRemote = "remote"
+	repositoryDecorationBranch = "branch"
+)
+
+type repositoryDecorationRef struct {
+	Name    string
+	Kind    string
+	Current bool
+}
+
+// parseRepositoryDecorations splits the raw decoration of one commit into its
+// individual refs. It is the only reading of that field in the codebase.
+func parseRepositoryDecorations(raw string) []repositoryDecorationRef {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var refs []repositoryDecorationRef
+	for _, part := range strings.Split(raw, ", ") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		current := false
+		if index := strings.Index(part, " -> "); index >= 0 {
+			current = strings.HasPrefix(part, "HEAD")
+			part = part[index+4:]
+		}
+		switch {
+		case part == "HEAD":
+			refs = append(refs, repositoryDecorationRef{Name: "HEAD", Kind: repositoryDecorationHead, Current: true})
+		case strings.HasPrefix(part, "tag: "):
+			refs = append(refs, repositoryDecorationRef{Name: strings.TrimPrefix(part, "tag: "), Kind: repositoryDecorationTag})
+		case strings.HasPrefix(part, "origin/"):
+			refs = append(refs, repositoryDecorationRef{Name: part, Kind: repositoryDecorationRemote})
+		default:
+			refs = append(refs, repositoryDecorationRef{Name: part, Kind: repositoryDecorationBranch, Current: current})
+		}
+	}
+	return refs
+}
+
+// RepositoryGraphFacts is the one history fact a graph needs: the bounded
+// history, whether it was cut short, the branches Git proves merged into the
+// main branch, and the divergence of every branch visible in that history.
+type RepositoryGraphFacts struct {
+	Main       string                                          `json:"main"`
+	Commits    RepositoryFact[[]RepositoryCommit]              `json:"commits"`
+	Truncated  bool                                            `json:"truncated"`
+	Merged     RepositoryFact[map[string]bool]                 `json:"merged"`
+	Divergence map[string]RepositoryFact[RepositoryDivergence] `json:"divergence,omitempty"`
+	Problems   []RepositoryProblem                             `json:"problems,omitempty"`
+}
+
+// GraphFacts reads the three graph facts of one already observed Project in a
+// single pass. It takes the observation rather than the Project so it shares
+// the caller's Survey instead of observing the repository a second time.
+func (r *Repositories) GraphFacts(ctx context.Context, repository RepositoryProjectSurvey, limit int) RepositoryGraphFacts {
+	facts := RepositoryGraphFacts{
+		Merged:     RepositoryFact[map[string]bool]{State: RepositoryUnknown},
+		Divergence: map[string]RepositoryFact[RepositoryDivergence]{},
+	}
+	if r == nil || r.runner == nil {
+		facts.Commits = repositoryUnknownFact[[]RepositoryCommit]("graph_facts", errors.New("Repositories is unavailable"))
+		return facts
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	if repository.MainBranch.Known() {
+		facts.Main = repository.MainBranch.Value
+	}
+
+	// Ein Commit mehr als verlangt lesen: nur so ist bewiesen, dass der
+	// Verlauf abgeschnitten ist, statt es aus der Trefferzahl zu raten.
+	facts.Commits = r.commitHistory(ctx, repository.Path, limit+1)
+	if !facts.Commits.Known() {
+		return facts
+	}
+	if len(facts.Commits.Value) > limit {
+		facts.Commits.Value = facts.Commits.Value[:limit]
+		facts.Truncated = true
+	}
+	if facts.Main == "" {
+		return facts
+	}
+
+	facts.Merged = r.mergedBranches(ctx, repository.Path, facts.Main)
+	if facts.Merged.Problem != nil {
+		facts.Problems = append(facts.Problems, *facts.Merged.Problem)
+	}
+
+	assignments := repositoryBranchAssignments(repository, nil)
+	var branches []string
+	for _, commit := range facts.Commits.Value {
+		for _, ref := range parseRepositoryDecorations(commit.Decorations) {
+			if ref.Kind != repositoryDecorationBranch || ref.Name == facts.Main {
+				continue
+			}
+			if _, seen := facts.Divergence[ref.Name]; seen {
+				continue
+			}
+			facts.Divergence[ref.Name] = RepositoryFact[RepositoryDivergence]{}
+			branches = append(branches, ref.Name)
+		}
+	}
+	for _, branch := range branches {
+		if worktree, checkedOut := assignments.WorktreeForBranch(branch); checkedOut {
+			facts.Divergence[branch] = worktree.Divergence
+			continue
+		}
+		facts.Divergence[branch] = r.compareRefsFact(ctx, repository.Path, facts.Main, branch)
+	}
+	sort.Strings(branches)
+	for _, branch := range branches {
+		if divergence := facts.Divergence[branch]; !divergence.Known() && divergence.Problem != nil {
+			facts.Problems = append(facts.Problems, *divergence.Problem)
+		}
+	}
+	return facts
 }

@@ -130,7 +130,7 @@ func lifecycleHarness(t *testing.T) (*SessionLifecycle, *fakeLifecycleRuntime, *
 	registry := OpenRegistry(filepath.Join(dir, "state.json"))
 	runtime := &fakeLifecycleRuntime{present: map[SessionID]bool{}, runtimeNames: map[string]bool{}}
 	ledgerPath := filepath.Join(dir, "lifecycle.json")
-	lifecycle := newSessionLifecycle(registry, runtime, fakeLifecycleRepositories{worktreePath: filepath.Join(dir, "project-agents", "hera")}, ledgerPath)
+	lifecycle := newSessionLifecycle(registry, runtime, fakeLifecycleRepositories{worktreePath: filepath.Join(dir, "project-agents", "hera")}, ledgerPath, filepath.Dir(ledgerPath))
 	return lifecycle, runtime, registry, ledgerPath
 }
 
@@ -608,6 +608,7 @@ func TestLifecycleResumePersistsCapturedBaselineForLegacySession(t *testing.T) {
 		runtime,
 		fakeLifecycleRepositories{worktreePath: filepath.Join(filepath.Dir(ledgerPath), "project-agents", "legacy")},
 		ledgerPath,
+		filepath.Dir(ledgerPath),
 	)
 	reconciled, err := reloadedLifecycle.Reconcile(context.Background())
 	if err != nil || len(reconciled.Problems) != 0 {
@@ -649,6 +650,7 @@ func TestLifecycleResumeRetriesLostAtomicBaselineReopenResponse(t *testing.T) {
 		runtime,
 		fakeLifecycleRepositories{worktreePath: filepath.Join(filepath.Dir(ledgerPath), "project-agents", "legacy")},
 		ledgerPath,
+		filepath.Dir(ledgerPath),
 	)
 
 	if _, err := lifecycle.Resume(context.Background(), legacy.ID, legacy.Name); err == nil ||
@@ -701,6 +703,7 @@ func TestLifecycleSerializesParkAndResumeAcrossInstances(t *testing.T) {
 		runtime,
 		fakeLifecycleRepositories{worktreePath: filepath.Join(filepath.Dir(ledgerPath), "project-agents", "rhea")},
 		ledgerPath,
+		filepath.Dir(ledgerPath),
 	)
 
 	stopEntered := make(chan struct{})

@@ -45,7 +45,7 @@ func TestRepositoriesCommitHistoryRejectsSuccessfulMalformedOutput(t *testing.T)
 				}
 				return "", errors.New("unexpected command")
 			}))
-			fact := repositories.CommitHistory(context.Background(), "/repo", 10)
+			fact := repositories.commitHistory(context.Background(), "/repo", 10)
 			if fact.State != RepositoryUnknown || fact.Problem == nil || !strings.Contains(fact.Problem.Message, "malformed") {
 				t.Fatalf("malformed successful log = %#v", fact)
 			}
@@ -69,15 +69,15 @@ func TestRepositoriesCommitHistoryAndRefFactsAreValidated(t *testing.T) {
 		}
 	})
 	repositories := newRepositories(runner)
-	history := repositories.CommitHistory(context.Background(), "/repo", 10)
+	history := repositories.commitHistory(context.Background(), "/repo", 10)
 	if !history.Known() || len(history.Value) != 1 || history.Value[0].Timestamp != 1700000000 {
 		t.Fatalf("history = %#v", history)
 	}
-	merged := repositories.MergedBranches(context.Background(), "/repo", "main")
+	merged := repositories.mergedBranches(context.Background(), "/repo", "main")
 	if !merged.Known() || !merged.Value["topic"] {
 		t.Fatalf("merged branches = %#v", merged)
 	}
-	divergence := repositories.CompareRefs(context.Background(), "/repo", "main", "topic")
+	divergence := repositories.compareRefsFact(context.Background(), "/repo", "main", "topic")
 	if !divergence.Known() || divergence.Value.Ahead != 3 || divergence.Value.Behind != 2 {
 		t.Fatalf("divergence = %#v", divergence)
 	}
@@ -120,7 +120,7 @@ func TestRepositoriesMergedBranchesRejectsMalformedSuccessfulOutput(t *testing.T
 				}
 				return "", errors.New("unexpected command")
 			}))
-			fact := repositories.MergedBranches(context.Background(), "/repo", "main")
+			fact := repositories.mergedBranches(context.Background(), "/repo", "main")
 			if fact.State != RepositoryUnknown || fact.Problem == nil || fact.Problem.Operation != "merged_branches" {
 				t.Fatalf("malformed successful branch list became known: %#v", fact)
 			}

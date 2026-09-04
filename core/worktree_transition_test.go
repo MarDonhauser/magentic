@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -170,12 +171,14 @@ func TestConcurrentProvisionWinsBeforeManagedWorktreeRemoval(t *testing.T) {
 	runtime := &transitionTestRuntime{
 		present: make(map[SessionID]bool), startEntered: make(chan struct{}), startRelease: make(chan struct{}),
 	}
-	provisioning := newSessionLifecycle(registry, runtime, repositories, ledgerPath)
-	removing := newSessionLifecycle(registry, runtime, repositories, ledgerPath)
+	provisioning := newSessionLifecycle(registry, runtime, repositories, ledgerPath, filepath.Dir(ledgerPath))
+	removing := newSessionLifecycle(registry, runtime, repositories, ledgerPath, filepath.Dir(ledgerPath))
 	// Isolate the assertion to Worktree coordination. Production instances also
 	// share the outer Project lock; this test deliberately gives removal a
 	// different Project-lock root so it must contend on the Worktree lock.
-	removing.projects = newProjectTransitionCoordinator(filepath.Join(dir, "other", "state.json"))
+	removing.transitions.rootOverrides = map[transitionScope]string{
+		transitionScopeProject: filepath.Join(dir, "other"),
+	}
 	provisioning.discover = func(context.Context, *State) RegistryDiscovery { return availableDiscovery() }
 	removing.discover = provisioning.discover
 	removing.observe = func(_ context.Context, sessions []Session) ObservationSnapshot {
@@ -184,13 +187,16 @@ func TestConcurrentProvisionWinsBeforeManagedWorktreeRemoval(t *testing.T) {
 
 	var worktreeAttempts atomic.Int32
 	removalQueued := make(chan struct{})
-	hook := func(Project, string) {
+	hook := func(scope transitionScope, _ string) {
+		if scope != transitionScopeWorktree {
+			return
+		}
 		if worktreeAttempts.Add(1) == 2 {
 			close(removalQueued)
 		}
 	}
-	provisioning.worktrees.beforeAcquire = hook
-	removing.worktrees.beforeAcquire = hook
+	provisioning.transitions.beforeAcquire = hook
+	removing.transitions.beforeAcquire = hook
 
 	provisionResult := make(chan error, 1)
 	go func() {
@@ -235,11 +241,14 @@ func TestRuntimeNameLockSerializesProvisionAcrossProjects(t *testing.T) {
 	runtime := &transitionTestRuntime{
 		present: make(map[SessionID]bool), startEntered: make(chan struct{}), startRelease: make(chan struct{}),
 	}
-	lifecycleA := newSessionLifecycle(registry, runtime, repositories, ledgerPath)
-	lifecycleB := newSessionLifecycle(registry, runtime, repositories, ledgerPath)
+	lifecycleA := newSessionLifecycle(registry, runtime, repositories, ledgerPath, filepath.Dir(ledgerPath))
+	lifecycleB := newSessionLifecycle(registry, runtime, repositories, ledgerPath, filepath.Dir(ledgerPath))
 	var acquisitions atomic.Int32
 	secondQueued := make(chan struct{})
-	hook := func(runtimeName string) {
+	hook := func(scope transitionScope, runtimeName string) {
+		if scope != transitionScopeRuntime {
+			return
+		}
 		if runtimeName != SessionName("topic") {
 			t.Errorf("RuntimeName lock used %q, want %q", runtimeName, SessionName("topic"))
 		}
@@ -247,8 +256,8 @@ func TestRuntimeNameLockSerializesProvisionAcrossProjects(t *testing.T) {
 			close(secondQueued)
 		}
 	}
-	lifecycleA.runtimes.beforeAcquire = hook
-	lifecycleB.runtimes.beforeAcquire = hook
+	lifecycleA.transitions.beforeAcquire = hook
+	lifecycleB.transitions.beforeAcquire = hook
 
 	type provisionOutcome struct {
 		result SessionLifecycleResult
@@ -316,7 +325,8 @@ func TestExternalNestedRuntimeVetoesManagedWorktreeRemoval(t *testing.T) {
 	}
 	repositories := &transitionTestRepositories{target: target}
 	lifecycle := newSessionLifecycle(
-		registry, &transitionTestRuntime{present: make(map[SessionID]bool)}, repositories, filepath.Join(dir, "lifecycle.json"),
+		registry, &transitionTestRuntime{present: make(map[SessionID]bool)}, repositories,
+		filepath.Join(dir, "lifecycle.json"), dir,
 	)
 	lifecycle.discover = func(context.Context, *State) RegistryDiscovery {
 		discovery := availableDiscovery()
@@ -359,7 +369,7 @@ func TestNestedIdleSessionIsRemovedBeforeManagedWorktree(t *testing.T) {
 	}
 	repositories := &transitionTestRepositories{target: target}
 	runtime := &transitionTestRuntime{present: map[SessionID]bool{session.ID: true}}
-	lifecycle := newSessionLifecycle(registry, runtime, repositories, filepath.Join(dir, "lifecycle.json"))
+	lifecycle := newSessionLifecycle(registry, runtime, repositories, filepath.Join(dir, "lifecycle.json"), dir)
 	lifecycle.discover = func(context.Context, *State) RegistryDiscovery { return availableDiscovery() }
 	lifecycle.observe = func(_ context.Context, sessions []Session) ObservationSnapshot {
 		return observationWithStatus(sessions, StatusIdle)
@@ -388,12 +398,12 @@ func TestDiscoveredAdoptionWaitsForManagedWorktreeTransition(t *testing.T) {
 	if err := os.MkdirAll(target, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	coordinator := newWorktreeTransitionCoordinator(registry.path)
+	coordinator := newTransitionCoordinator(registry.path)
 	held := make(chan struct{})
 	release := make(chan struct{})
 	holderDone := make(chan error, 1)
 	go func() {
-		holderDone <- coordinator.with(context.Background(), project, target, func() error {
+		holderDone <- coordinator.with(context.Background(), transitionScopeWorktree, worktreeTransitionKeys(project, target), func(context.Context) error {
 			close(held)
 			<-release
 			return nil
@@ -428,7 +438,7 @@ func TestProvisionRejectsStaleProjectIDBeforeAdapterCalls(t *testing.T) {
 	_ = transitionProject(t, registry, filepath.Join(dir, "project"))
 	repositories := &transitionTestRepositories{}
 	runtime := &transitionTestRuntime{present: make(map[SessionID]bool)}
-	lifecycle := newSessionLifecycle(registry, runtime, repositories, filepath.Join(dir, "lifecycle.json"))
+	lifecycle := newSessionLifecycle(registry, runtime, repositories, filepath.Join(dir, "lifecycle.json"), dir)
 
 	_, err := lifecycle.Provision(context.Background(), SessionProvision{
 		ProjectID: "stale-project-id", Name: "topic", CreateWorktree: true,
@@ -450,10 +460,13 @@ func TestProjectRemovalWaitsForProvisionRegistryCommit(t *testing.T) {
 	runtime := &transitionTestRuntime{
 		present: make(map[SessionID]bool), startEntered: make(chan struct{}), startRelease: make(chan struct{}),
 	}
-	lifecycle := newSessionLifecycle(registry, runtime, repositories, filepath.Join(dir, "lifecycle.json"))
+	lifecycle := newSessionLifecycle(registry, runtime, repositories, filepath.Join(dir, "lifecycle.json"), dir)
 	var attempts atomic.Int32
 	removalQueued := make(chan struct{})
-	lifecycle.projects.beforeAcquire = func(ProjectID) {
+	lifecycle.transitions.beforeAcquire = func(scope transitionScope, _ string) {
+		if scope != transitionScopeProject {
+			return
+		}
 		if attempts.Add(1) == 2 {
 			close(removalQueued)
 		}
@@ -526,5 +539,57 @@ func TestDiscoveredNameConflictIsNotAnIdempotentRegistryNoop(t *testing.T) {
 	}
 	if after.Revision() != before.Revision() || len(after.State().Agents) != 1 {
 		t.Fatalf("conflicting discovery mutated Registry: before=%#v after=%#v", before.State(), after.State())
+	}
+}
+
+// TestTransitionCoordinatorRefusesAcquisitionOutOfOrder hält die Invariante
+// fest, die vorher in keinem der vier Koordinatoren stand: Sperren werden in
+// der Reihenfolge Project, Worktree, Session, Runtime genommen. Eine
+// Verletzung scheitert ausdrücklich, statt sich erst als Verklemmung im
+// Betrieb zu zeigen.
+func TestTransitionCoordinatorRefusesAcquisitionOutOfOrder(t *testing.T) {
+	coordinator := newTransitionCoordinator(filepath.Join(t.TempDir(), "state.json"))
+	ctx := context.Background()
+
+	inOrder := coordinator.with(ctx, transitionScopeProject, []string{"p1"}, func(ctx context.Context) error {
+		return coordinator.with(ctx, transitionScopeWorktree, []string{"w1"}, func(ctx context.Context) error {
+			return coordinator.with(ctx, transitionScopeSession, []string{"s1"}, func(ctx context.Context) error {
+				return coordinator.with(ctx, transitionScopeRuntime, []string{"r1"}, func(context.Context) error { return nil })
+			})
+		})
+	})
+	if inOrder != nil {
+		t.Fatalf("Reihenfolge Project→Worktree→Session→Runtime scheiterte: %v", inOrder)
+	}
+
+	// Der Kontext trägt die zuletzt genommene Ebene, deshalb sieht der innere
+	// Aufruf die äußere Sperre.
+	violation := coordinator.with(ctx, transitionScopeRuntime, []string{"r1"}, func(ctx context.Context) error {
+		return coordinator.with(ctx, transitionScopeSession, []string{"s1"}, func(context.Context) error { return nil })
+	})
+	if violation == nil {
+		t.Error("Runtime vor Session wurde zugelassen")
+	}
+}
+
+// TestTransitionCoordinatorSortsKeysAgainstDeadlock hält fest, dass zwei
+// Übergänge über denselben Schlüsselsatz ihn in derselben Reihenfolge nehmen,
+// unabhängig davon, in welcher Reihenfolge der Aufrufer ihn übergibt.
+func TestTransitionCoordinatorSortsKeysAgainstDeadlock(t *testing.T) {
+	coordinator := newTransitionCoordinator(filepath.Join(t.TempDir(), "state.json"))
+	var forward, backward []string
+	coordinator.beforeAcquire = func(_ transitionScope, key string) { forward = append(forward, key) }
+	if err := coordinator.with(context.Background(), transitionScopeRuntime, []string{"b", "a", "b"}, func(context.Context) error { return nil }); err != nil {
+		t.Fatalf("with: %v", err)
+	}
+	coordinator.beforeAcquire = func(_ transitionScope, key string) { backward = append(backward, key) }
+	if err := coordinator.with(context.Background(), transitionScopeRuntime, []string{"a", "b"}, func(context.Context) error { return nil }); err != nil {
+		t.Fatalf("with: %v", err)
+	}
+	if !slices.Equal(forward, []string{"a", "b"}) {
+		t.Errorf("Schlüssel wurden nicht sortiert und entdoppelt: %v", forward)
+	}
+	if !slices.Equal(forward, backward) {
+		t.Errorf("Reihenfolge hängt an der Eingabe: %v gegen %v", forward, backward)
 	}
 }
