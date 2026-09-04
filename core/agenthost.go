@@ -55,7 +55,10 @@ var ErrAgentHostServedElsewhere = errors.New("für diese Session läuft bereits 
 // AgentHost owns one managed Session's vendor process and answers the
 // identity handshake over a unix socket, so a daemon can confirm it and
 // reconnect after its own restart without a second process ever being
-// started.
+// started. Past the handshake the same socket serves the host RPC (see
+// agenthost_rpc.go): turn delivery, interrupt, permission requests and
+// observation. The host holds the Session's turn and its open permission
+// requests, so both survive every interface disconnecting.
 type AgentHost struct {
 	sessionID SessionID
 	token     AgentHostToken
@@ -65,6 +68,15 @@ type AgentHost struct {
 	mu        sync.Mutex
 	process   *agentHostProcess
 	closeOnce sync.Once
+	// turns tracks the Session's turn, its in-flight prompt and its
+	// streamed conversation from the vendor protocol events this host sees.
+	turns *ManagedTurnTracker
+	// permissions holds the Session's open permission requests. A request
+	// with nobody to answer it waits here rather than being decided.
+	permissions *PermissionStore
+	// interruptVendor stops the running turn while leaving the process
+	// alive. It is a Seam so tests never signal a real process.
+	interruptVendor func(pid int) error
 }
 
 // StartAgentHost claims the socket for sessionID and begins accepting
@@ -99,7 +111,11 @@ func StartAgentHost(sessionID SessionID, token AgentHostToken) (*AgentHost, erro
 		listener.Close()
 		return nil, err
 	}
-	host := &AgentHost{sessionID: sessionID, token: token, path: path, listener: listener}
+	host := &AgentHost{
+		sessionID: sessionID, token: token, path: path, listener: listener,
+		turns: NewManagedTurnTracker(), permissions: NewPermissionStore(),
+		interruptVendor: interruptVendorTurn,
+	}
 	go host.accept()
 	return host, nil
 }
@@ -116,30 +132,35 @@ func (h *AgentHost) accept() {
 		if err != nil {
 			return
 		}
-		go h.serveHandshake(conn)
+		go h.serveRPC(conn)
 	}
 }
 
-// serveHandshake answers exactly one connect request per connection. Every
+// serveRPC answers exactly one host-RPC request per connection. Every
 // connection is served independently: a connection closing, or the daemon
 // disconnecting, never stops this host from accepting the next one — that is
-// what lets a daemon restart reconnect instead of losing the process.
-func (h *AgentHost) serveHandshake(conn *net.UnixConn) {
+// what lets a daemon restart reconnect instead of losing the process. A
+// permission request holds its own connection open until a decision arrives,
+// which is what keeps the agent blocked rather than decided for.
+func (h *AgentHost) serveRPC(conn *net.UnixConn) {
 	defer conn.Close()
-	var request AgentHostConnectRequest
+	var request AgentHostRPCRequest
 	if err := json.NewDecoder(conn).Decode(&request); err != nil {
-		writeAgentHostConnectResponse(conn, AgentHostConnectResponse{Reason: "malformed connect request"})
+		writeAgentHostRPCResponse(conn, AgentHostRPCResponse{Reason: "malformed connect request"})
 		return
 	}
 	if request.Token != h.token {
-		writeAgentHostConnectResponse(conn, AgentHostConnectResponse{Reason: "token mismatch"})
+		writeAgentHostRPCResponse(conn, AgentHostRPCResponse{Reason: "token mismatch"})
 		return
 	}
-	writeAgentHostConnectResponse(conn, AgentHostConnectResponse{Confirmed: true})
+	h.dispatchRPC(conn, request)
 }
 
-func writeAgentHostConnectResponse(conn *net.UnixConn, response AgentHostConnectResponse) {
-	_ = json.NewEncoder(conn).Encode(response)
+// serveHandshake answers exactly one connect request per connection. It is
+// kept as the name the handshake path is known by; the wire shape is the
+// host RPC with an empty method.
+func (h *AgentHost) serveHandshake(conn *net.UnixConn) {
+	h.serveRPC(conn)
 }
 
 // ConnectAgentHost dials an agent host's socket and performs the identity

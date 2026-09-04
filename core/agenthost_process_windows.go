@@ -16,3 +16,7 @@ func startAgentHostProcess(string, []string, string) (*agentHostProcess, error) 
 func (p *agentHostProcess) stop() error { return nil }
 func (p *agentHostProcess) alive() bool { return false }
 func (p *agentHostProcess) pid() int    { return 0 }
+func (p *agentHostProcess) send([]byte) error {
+	return errors.New("der managed Runtime wird unter Windows nicht unterstützt")
+}
+func (p *agentHostProcess) exitReason() string { return "" }
