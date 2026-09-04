@@ -91,6 +91,12 @@ type ObservationSnapshot struct {
 	Availability ObservationAvailability `json:"availability"`
 	Sessions     []SessionObservation    `json:"sessions"`
 	Problems     []ObservationProblem    `json:"problems,omitempty"`
+	// Transport nennt, woher der Snapshot stammt. Leer heißt lokal erzeugt.
+	// Ein Client, der über das Netz liest, setzt remote (siehe
+	// observation_transport.go): „Host konnte tmux nicht beobachten" bleibt
+	// damit unterscheidbar von „Client erreicht den Host nicht".
+	Transport         ObservationTransport `json:"transport,omitempty"`
+	TransportProblem  string               `json:"transportProblem,omitempty"`
 }
 
 // promptInputState is the provider-aware input fact consumed by prompt

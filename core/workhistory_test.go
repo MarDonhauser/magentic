@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWorkHistoryNormalizesAllProviderAdapters(t *testing.T) {
@@ -246,6 +247,82 @@ func TestWorkHistorySummaryPreservesUnknownUsage(t *testing.T) {
 	}
 	if summary.Totals.Outputs != 2 || len(summary.Models) != 2 {
 		t.Fatalf("summary did not retain provider/model facts: %#v", summary)
+	}
+}
+
+func TestWorkHistoryMetadataTouchSkipsIndexRewrite(t *testing.T) {
+	history, home, indexDir, _ := openTestWorkHistory(t)
+	source := filepath.Join(home, ".claude", "projects", "demo", "conversation.jsonl")
+	writeHistoryTestFile(t, source, `{"type":"user","timestamp":"2026-08-19T10:00:00Z","sessionId":"conversation","message":{"content":"prompt"}}`+"\n")
+
+	before, err := history.Events(context.Background(), HistoryAssociations{}, HistoryEventQuery{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexPath := filepath.Join(indexDir, "index.json")
+	written, err := os.Stat(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Nur die mtime berühren, Inhalt und Größe bleiben gleich: kein
+	// inhaltlicher Wandel, also darf der Lauf weder parsen noch schreiben.
+	touchAt := time.Now().Add(2 * time.Hour)
+	if err := os.Chtimes(source, touchAt, touchAt); err != nil {
+		t.Fatal(err)
+	}
+	after, err := history.Events(context.Background(), HistoryAssociations{}, HistoryEventQuery{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cov := historyTestCoverage(t, after.Meta, HistoryProviderClaude)
+	if after.Meta.Revision != before.Meta.Revision || cov.ParsedFiles != 0 || cov.ReusedFiles != 1 {
+		t.Fatalf("metadata touch reparsed source: revision %d -> %d, coverage %#v", before.Meta.Revision, after.Meta.Revision, cov)
+	}
+	rewritten, err := os.Stat(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rewritten.ModTime().Equal(written.ModTime()) || rewritten.Size() != written.Size() {
+		t.Fatal("metadata touch rewrote the whole index file")
+	}
+}
+
+// countingHistoryFS zählt Transkript-Lesezugriffe. Der Index selbst wird über
+// os direkt gelesen, sodass jeder gezählte Zugriff ein Transkript ist.
+type countingHistoryFS struct {
+	workHistoryFS
+	reads *int
+}
+
+func (f countingHistoryFS) ReadFile(path string) ([]byte, error) {
+	*f.reads++
+	return f.workHistoryFS.ReadFile(path)
+}
+
+func TestWorkHistoryUnchangedRefreshReadsNoTranscripts(t *testing.T) {
+	history, home, _, _ := openTestWorkHistory(t)
+	source := filepath.Join(home, ".claude", "projects", "demo", "conversation.jsonl")
+	writeHistoryTestFile(t, source, `{"type":"user","timestamp":"2026-08-19T10:00:00Z","sessionId":"conversation","message":{"content":"prompt"}}`+"\n")
+
+	var reads int
+	history.files = countingHistoryFS{workHistoryFS: history.files, reads: &reads}
+	if _, err := history.Events(context.Background(), HistoryAssociations{}, HistoryEventQuery{Limit: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if reads == 0 {
+		t.Fatal("initial refresh read no transcript")
+	}
+	reads = 0
+	page, err := history.Events(context.Background(), HistoryAssociations{}, HistoryEventQuery{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reads != 0 {
+		t.Fatalf("unchanged refresh reread %d transcript files", reads)
+	}
+	cov := historyTestCoverage(t, page.Meta, HistoryProviderClaude)
+	if cov.ParsedFiles != 0 || cov.ReusedFiles != 1 {
+		t.Fatalf("unchanged refresh reparsed source: coverage %#v", cov)
 	}
 }
 

@@ -597,7 +597,11 @@ func (h *WorkHistory) refreshIndex(ctx context.Context) (*historyIndex, HistoryM
 	if err != nil {
 		return nil, HistoryMeta{}, err
 	}
-	dirty := !existed
+	// contentDirty steuert den einzigen teuren Schritt des Laufs: das
+	// Zurückschreiben des gesamten Index. Reine Metadatenberührungen (Größe,
+	// mtime) bleiben im Speicher; sie beim nächsten inhaltsändernden Lauf
+	// mit zu persistieren genügt, weil sie aus den Dateien rekonstruierbar sind.
+	contentDirty := !existed
 	observedAt := h.now().UTC()
 	coverage := make([]HistoryProviderCoverage, 0, len(h.adapters))
 
@@ -614,6 +618,21 @@ func (h *WorkHistory) refreshIndex(ctx context.Context) (*historyIndex, HistoryM
 			}
 			sourceID := historySourceID(adapter.Provider(), path)
 			seen[sourceID] = true
+			info, statErr := h.files.Stat(path)
+			if statErr != nil {
+				cov.Problems = append(cov.Problems, HistoryProblem{Provider: adapter.Provider(), SourceID: sourceID, Kind: "file-unavailable", Message: statErr.Error()})
+				continue
+			}
+			old, ok := index.Files[sourceID]
+			if ok && old.Provider == adapter.Provider() && old.AdapterVersion == adapter.Version() &&
+				old.Size == info.Size() && old.ModTime == info.ModTime().UnixNano() {
+				// Unveränderte Datei: Inhalt weder lesen noch parsen. Größe
+				// plus Nanosekunden-mtime tragen die Änderungserkennung; der
+				// gespeicherte Digest wurde aus genau diesem Inhalt gebildet.
+				cov.ReusedFiles++
+				cov.Problems = append(cov.Problems, old.Problems...)
+				continue
+			}
 			data, err := h.files.ReadFile(path)
 			if err != nil {
 				cov.Problems = append(cov.Problems, HistoryProblem{Provider: adapter.Provider(), SourceID: sourceID, Kind: "file-unreadable", Message: err.Error()})
@@ -624,19 +643,12 @@ func (h *WorkHistory) refreshIndex(ctx context.Context) (*historyIndex, HistoryM
 				cov.Problems = append(cov.Problems, HistoryProblem{Provider: adapter.Provider(), SourceID: sourceID, Kind: "dependency-unreadable", Message: err.Error()})
 				continue
 			}
-			info, statErr := h.files.Stat(path)
-			if statErr != nil {
-				cov.Problems = append(cov.Problems, HistoryProblem{Provider: adapter.Provider(), SourceID: sourceID, Kind: "file-unavailable", Message: statErr.Error()})
-				continue
-			}
-			old, ok := index.Files[sourceID]
 			if ok && old.Provider == adapter.Provider() && old.AdapterVersion == adapter.Version() && old.Digest == digest {
 				cov.ReusedFiles++
-				if old.Size != info.Size() || old.ModTime != info.ModTime().UnixNano() {
-					old.Size, old.ModTime = info.Size(), info.ModTime().UnixNano()
-					index.Files[sourceID] = old
-					dirty = true
-				}
+				// Gleicher Inhalt, neue Metadaten: Zeile im Speicher
+				// nachführen, aber nichts schreiben.
+				old.Size, old.ModTime = info.Size(), info.ModTime().UnixNano()
+				index.Files[sourceID] = old
 				cov.Problems = append(cov.Problems, old.Problems...)
 				continue
 			}
@@ -660,13 +672,13 @@ func (h *WorkHistory) refreshIndex(ctx context.Context) (*historyIndex, HistoryM
 			}
 			cov.ParsedFiles++
 			cov.Problems = append(cov.Problems, problems...)
-			dirty = true
+			contentDirty = true
 		}
 		if cov.State == HistorySourceAvailable || cov.State == HistorySourceAbsent {
 			for sourceID, file := range index.Files {
 				if file.Provider == adapter.Provider() && !seen[sourceID] {
 					delete(index.Files, sourceID)
-					dirty = true
+					contentDirty = true
 				}
 			}
 		}
@@ -684,7 +696,7 @@ func (h *WorkHistory) refreshIndex(ctx context.Context) (*historyIndex, HistoryM
 		}
 		coverage = append(coverage, cov)
 	}
-	if dirty {
+	if contentDirty {
 		index.Revision++
 		if err := saveHistoryIndex(h.indexPath(), index); err != nil {
 			return nil, HistoryMeta{}, err
