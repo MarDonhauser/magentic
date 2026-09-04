@@ -384,3 +384,50 @@ func TestRenameSessionKeepsOpenReviewAttached(t *testing.T) {
 		t.Fatalf("open Review after rename = %+v", got.Review)
 	}
 }
+
+// TestReviewCommentsForReadingRendersAnchorsWithoutStoringThem hält fest, dass
+// der Ankertext beim Lesen entsteht und nicht gespeichert wird: die Regel lebt
+// allein in ReviewLineRef, und keine zweite Kopie kann daneben altern.
+func TestReviewCommentsForReadingRendersAnchorsWithoutStoringThem(t *testing.T) {
+	stored := []ReviewComment{
+		{ID: "a", Path: "core/state.go", NewStart: 12, NewEnd: 12},
+		{ID: "b", Path: "core/state.go", NewStart: 30, NewEnd: 34},
+		{ID: "c", Path: "core/review.go", OldStart: 7, OldEnd: 7},
+		{ID: "d", Path: "core/review.go", OldStart: 40, OldEnd: 42},
+	}
+	want := []string{
+		"Zeile 12",
+		"Zeilen 30–34",
+		"Zeile 7 (entfernte Zeile)",
+		"Zeilen 40–42 (entfernte Zeilen)",
+	}
+
+	read := ReviewCommentsForReading(stored)
+	if len(read) != len(want) {
+		t.Fatalf("ReviewCommentsForReading: %d Kommentare, erwartet %d", len(read), len(want))
+	}
+	for i := range read {
+		if read[i].LineRef != want[i] {
+			t.Errorf("Kommentar %s: LineRef %q, erwartet %q", read[i].ID, read[i].LineRef, want[i])
+		}
+		if read[i].LineRef != ReviewLineRef(stored[i]) {
+			t.Errorf("Kommentar %s: gelesener Anker weicht von ReviewLineRef ab", read[i].ID)
+		}
+	}
+	for i := range stored {
+		if stored[i].LineRef != "" {
+			t.Errorf("Kommentar %s: Eingabe wurde verändert", stored[i].ID)
+		}
+	}
+}
+
+// TestAddReviewCommentDropsRenderedAnchor hält fest, dass ein gelesener
+// Kommentar seinen Ankertext nicht zurück auf die Platte trägt.
+func TestAddReviewCommentDropsRenderedAnchor(t *testing.T) {
+	change := AddReviewComment(SessionID("s1"), "hera", ReviewComment{
+		ID: "a", Path: "core/state.go", NewStart: 12, NewEnd: 12, LineRef: "Zeile 12",
+	})
+	if change.reviewComment.LineRef != "" {
+		t.Fatalf("LineRef %q wurde zum Speichern durchgereicht", change.reviewComment.LineRef)
+	}
+}

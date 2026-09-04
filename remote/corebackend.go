@@ -929,6 +929,7 @@ func (b *CoreBackend) review(ctx context.Context, method string, args reviewArgs
 		}
 		comment.Path = strings.TrimSpace(comment.Path)
 		comment.Text = strings.TrimSpace(comment.Text)
+		comment.LineRef = core.ReviewLineRef(comment)
 		return comment, nil
 	case "EditReviewComment":
 		_, err = registry().Change(ctx, core.EditReviewComment(session.ID, session.Name, args.CommentID, args.Text))
@@ -950,11 +951,14 @@ func (b *CoreBackend) review(ctx context.Context, method string, args reviewArgs
 		if session.Review == nil {
 			return nil, nil
 		}
-		review := *session.Review
-		review.Comments = append([]core.ReviewComment(nil), session.Review.Comments...)
+		review := core.ReviewForReading(*session.Review)
 		return &review, nil
 	default:
-		return append([]core.SessionReview(nil), session.SentReviews...), nil
+		sent := make([]core.SessionReview, 0, len(session.SentReviews))
+		for _, review := range session.SentReviews {
+			sent = append(sent, core.ReviewForReading(review))
+		}
+		return sent, nil
 	}
 }
 

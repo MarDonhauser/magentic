@@ -3,15 +3,6 @@
 
 const AVAILABLE = 'available';
 
-const TOOL_KINDS = new Set([
-  'command-execution', 'file-change', 'file-read', 'tool-call',
-  'web-search', 'delegated-task', 'plan', 'context-compaction',
-  'reasoning', 'error', 'unknown',
-]);
-
-// Prose belongs to the developer and is never hidden behind a toggle.
-const PROSE_KINDS = new Set(['agent-message', 'developer-prompt']);
-
 export function emptyConversationState() {
   return { availability: '', vendor: '', reason: '', itemsKnown: false, items: [] };
 }
@@ -57,8 +48,11 @@ export function applyUpdate(state, event) {
   return { ...base, availability: AVAILABLE, itemsKnown: true, items: next };
 }
 
+// isCollapsible reads what the vendor's normalizer decided in Go. This module
+// no longer keeps a table of kinds: a new kind is one change in Go, not four
+// tables in two languages.
 export function isCollapsible(item) {
-  return !PROSE_KINDS.has(item?.kind) && TOOL_KINDS.has(item?.kind);
+  return item?.collapsible === true;
 }
 
 function toRow(item) {
@@ -67,6 +61,9 @@ function toRow(item) {
   return {
     id: item.id,
     kind: item.kind,
+    // label is the wording Go decided for this kind; the surface never
+    // re-derives it from the kind name.
+    label: item.label || '',
     role: item.role,
     title: item.title || '',
     detail,

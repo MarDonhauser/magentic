@@ -23,7 +23,6 @@ func TestItemKindLabelsAreStableAndRoundTrip(t *testing.T) {
 		{ItemKindWebSearch, "web-search"},
 		{ItemKindDelegatedTask, "delegated-task"},
 		{ItemKindContextCompaction, "context-compaction"},
-		{ItemKindError, "error"},
 		{ItemKindPermissionRequest, "permission-request"},
 		{ItemKindPermissionDecision, "permission-decision"},
 		{ItemKindUnknown, "unknown"},
@@ -130,5 +129,53 @@ func TestUnavailableConversationAlwaysStatesAReason(t *testing.T) {
 	reading := UnavailableConversation(ConversationRecordNotFound, ConversationRef{}, "")
 	if reading.Reason == "" {
 		t.Error("eine Lesung ohne übergebenen Grund muss trotzdem einen nennen")
+	}
+}
+
+// TestEveryItemKindCarriesItsPresentation hält fest, dass jede Art der
+// geschlossenen Menge eine Beschriftung und eine Einklappbarkeit hat. Genau
+// das konnte die frühere Aufteilung auf vier Tabellen in zwei Sprachen nicht:
+// permission-request und permission-decision fehlten in beiden JS-Tabellen und
+// wären ohne Beschriftung und nicht einklappbar dargestellt worden.
+func TestEveryItemKindCarriesItsPresentation(t *testing.T) {
+	prose := map[ItemKind]bool{ItemKindDeveloperPrompt: true, ItemKindAgentMessage: true}
+	seen := map[string]ItemKind{}
+	for _, kind := range ItemKinds() {
+		label := ItemLabel(kind)
+		if label == "" {
+			t.Errorf("Art %q hat keine Beschriftung", kind)
+		}
+		if kind != ItemKindUnknown && label == ItemLabel(ItemKindUnknown) {
+			t.Errorf("Art %q fällt auf die Beschriftung der unbekannten Art zurück", kind)
+		}
+		if other, doubled := seen[label]; doubled {
+			t.Errorf("Arten %q und %q teilen die Beschriftung %q", other, kind, label)
+		}
+		seen[label] = kind
+
+		if want := !prose[kind]; ItemCollapsible(kind) != want {
+			t.Errorf("Art %q: Einklappbarkeit %v, erwartet %v", kind, ItemCollapsible(kind), want)
+		}
+	}
+}
+
+// TestConversationFillsPresentationOnEntry hält fest, dass die Darstellung am
+// Eintritt in eine Conversation entsteht. Kein Erzeuger kann sie vergessen,
+// und eine Ersetzung trägt sie genauso.
+func TestConversationFillsPresentationOnEntry(t *testing.T) {
+	var conversation Conversation
+	conversation.Append(Item{ID: "t1", Kind: ItemKindCommandExecution, Title: "go build"})
+	conversation.Append(Item{ID: "m1", Kind: ItemKindAgentMessage, Title: "fertig"})
+
+	if got := conversation.Items[0]; got.Label != "Befehl" || !got.Collapsible {
+		t.Errorf("Werkzeugarbeit: Label %q, Collapsible %v", got.Label, got.Collapsible)
+	}
+	if got := conversation.Items[1]; got.Label != "Antwort" || got.Collapsible {
+		t.Errorf("Prosa: Label %q, Collapsible %v", got.Label, got.Collapsible)
+	}
+
+	conversation.Apply(Item{ID: "t1", Kind: ItemKindCommandExecution, Title: "go build", Detail: "ok"})
+	if got := conversation.Items[0]; got.Label != "Befehl" || !got.Collapsible {
+		t.Errorf("ersetztes Item verlor seine Darstellung: Label %q, Collapsible %v", got.Label, got.Collapsible)
 	}
 }

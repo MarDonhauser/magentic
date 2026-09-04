@@ -4,21 +4,27 @@
     "occurredAt": "2026-09-01T09:18:49.527Z",
     "role": "developer",
     "kind": "developer-prompt",
-    "title": "wir wollen split view erlauben. Per Drag and drop oder rechtsklcik. Und dann kann man es teilen."
+    "title": "wir wollen split view erlauben. Per Drag and drop oder rechtsklcik. Und dann kann man es teilen.",
+    "label": "Eingabe",
+    "collapsible": false
   },
   {
     "id": "ec999251-f780-4e9b-b7ce-2a3ba3c9fad1#0",
     "occurredAt": "2026-08-09T18:09:15.766Z",
     "role": "agent",
     "kind": "reasoning",
-    "title": "Erst die vorhandenen Adapter lesen, dann entscheiden, wo die Normalisierung hingehört."
+    "title": "Erst die vorhandenen Adapter lesen, dann entscheiden, wo die Normalisierung hingehört.",
+    "label": "Überlegung",
+    "collapsible": true
   },
   {
     "id": "0ada9288-a282-422f-9bed-7db09fbde3eb#0",
     "occurredAt": "2026-09-01T09:18:56.742Z",
     "role": "agent",
     "kind": "agent-message",
-    "title": "Using superpowers:brainstorming, um Anforderungen für Split View zu klären, bevor ich etwas baue."
+    "title": "Using superpowers:brainstorming, um Anforderungen für Split View zu klären, bevor ich etwas baue.",
+    "label": "Antwort",
+    "collapsible": false
   },
   {
     "id": "0e6c3cbf-3907-4689-8e20-c91ab37443dd#0",
@@ -26,7 +32,9 @@
     "role": "agent",
     "kind": "command-execution",
     "title": "wc -l app/frontend/src/dock.js app/frontend/src/main.js app/frontend/src/style.css",
-    "detail": "603 app/frontend/src/dock.js\n    2759 app/frontend/src/main.js\n    1924 app/frontend/src/style.css\n    5286 total"
+    "detail": "603 app/frontend/src/dock.js\n    2759 app/frontend/src/main.js\n    1924 app/frontend/src/style.css\n    5286 total",
+    "label": "Befehl",
+    "collapsible": true
   },
   {
     "id": "15a40266-71ca-4c96-84e2-19fb1b0359d5#0",
@@ -34,7 +42,9 @@
     "role": "agent",
     "kind": "file-change",
     "title": "/Users/U751725/magentic/docs/superpowers/specs/2026-09-01-dock-split-view-design.md",
-    "detail": "File created successfully at: /Users/U751725/magentic/docs/superpowers/specs/2026-09-01-dock-split-view-design.md (file state is current in your context — no need to Read it back)"
+    "detail": "File created successfully at: /Users/U751725/magentic/docs/superpowers/specs/2026-09-01-dock-split-view-design.md (file state is current in your context — no need to Read it back)",
+    "label": "Datei geändert",
+    "collapsible": true
   },
   {
     "id": "0d4a7fc6-7286-46ae-b078-69eab6f029e1#0",
@@ -42,7 +52,9 @@
     "role": "agent",
     "kind": "delegated-task",
     "title": "Scoped re-review of final fix wave",
-    "detail": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)\nagentId: a51ce6814aefb18b5 (internal ID - do not mention to user. Use SendMessage with to: 'a51ce6814aefb18b5', summary: '\u003c5-10 word recap\u003e' to continue this agent.)\nThe agent is working in the background. You will be notified auto […gekürzt]"
+    "detail": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)\nagentId: a51ce6814aefb18b5 (internal ID - do not mention to user. Use SendMessage with to: 'a51ce6814aefb18b5', summary: '\u003c5-10 word recap\u003e' to continue this agent.)\nThe agent is working in the background. You will be notified auto […gekürzt]",
+    "label": "Delegiert",
+    "collapsible": true
   },
   {
     "id": "4696a7cf-68eb-4506-8294-dba0e77bd236#0",
@@ -52,7 +64,9 @@
     "title": "You are re-reviewing a fix round. A final whole-branch review of the \"Split View\" terminal dock feature produced 5 Impor…",
     "detail": "You are re-reviewing a fix round. A final whole-branch review of the \"Split View\" terminal dock feature produced 5 Important findings; an implementer has attempted to fix all 5 in one combined pass. Your job is to verdict each finding and inspect the fix diff — nothing else.\n\n## The Task\n\nThis is the fix wave after the final whole-branch review for a 3-task plan implementing split-pane terminals i […gekürzt]",
     "delegated": true,
-    "parentTaskId": "0d4a7fc6-7286-46ae-b078-69eab6f029e1#0"
+    "parentTaskId": "0d4a7fc6-7286-46ae-b078-69eab6f029e1#0",
+    "label": "Eingabe",
+    "collapsible": false
   },
   {
     "id": "757da314-1308-4255-b03f-950dfccbaaa5#0",
@@ -61,7 +75,9 @@
     "kind": "reasoning",
     "title": "Überlegung",
     "delegated": true,
-    "parentTaskId": "0d4a7fc6-7286-46ae-b078-69eab6f029e1#0"
+    "parentTaskId": "0d4a7fc6-7286-46ae-b078-69eab6f029e1#0",
+    "label": "Überlegung",
+    "collapsible": true
   },
   {
     "id": "efdf8a59-bfff-42a3-84df-adff6003015b#0",
@@ -71,7 +87,9 @@
     "title": "/Users/U751725/magentic/.claude/worktrees/dock-split-view/.superpowers/sdd/2026-09-01-dock-split-view/final-fix-report.m…",
     "delegated": true,
     "parentTaskId": "0d4a7fc6-7286-46ae-b078-69eab6f029e1#0",
-    "awaitingResult": true
+    "awaitingResult": true,
+    "label": "Gelesen",
+    "collapsible": true
   },
   {
     "id": "c89aca67-3dfc-434c-915a-0206ce082613#0",
@@ -81,6 +99,8 @@
     "title": "/Users/U751725/magentic/.claude/worktrees/dock-split-view/.superpowers/sdd/2026-09-01-dock-split-view/review-65e5b86..11…",
     "delegated": true,
     "parentTaskId": "0d4a7fc6-7286-46ae-b078-69eab6f029e1#0",
-    "awaitingResult": true
+    "awaitingResult": true,
+    "label": "Gelesen",
+    "collapsible": true
   }
 ]

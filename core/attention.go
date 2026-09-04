@@ -30,7 +30,25 @@ const (
 	AttentionQuietNone    AttentionQuietSignal = "none"
 	AttentionQuietMeeting AttentionQuietSignal = "meeting"
 	AttentionQuietAll     AttentionQuietSignal = "quiet"
+	// AttentionQuietMuted ist die ausgeschaltete Benachrichtigung. Sie kommt
+	// als Signal in den Plan, statt ihn danach im Adapter zu beschneiden:
+	// sonst hat jede Oberfläche ihre eigene Policy, und die Unterdrückung
+	// wird nirgends verbucht.
+	AttentionQuietMuted AttentionQuietSignal = "muted"
 )
+
+// silences sagt, ob ein Ruhesignal jede Absicht unterdrückt.
+func (q AttentionQuietSignal) silences() bool {
+	return q == AttentionQuietAll || q == AttentionQuietMuted
+}
+
+// suppressionReason nennt, warum ein Ruhesignal unterdrückt hat.
+func (q AttentionQuietSignal) suppressionReason() AttentionSuppressionReason {
+	if q == AttentionQuietMuted {
+		return AttentionSuppressedMuted
+	}
+	return AttentionSuppressedQuiet
+}
 
 type AttentionIntentKind string
 
@@ -68,6 +86,7 @@ const (
 	AttentionSuppressedBadMoment         AttentionSuppressionReason = "break-bad-moment"
 	AttentionSuppressedMeeting           AttentionSuppressionReason = "meeting"
 	AttentionSuppressedQuiet             AttentionSuppressionReason = "quiet"
+	AttentionSuppressedMuted             AttentionSuppressionReason = "notifications-muted"
 	AttentionSuppressedCadence           AttentionSuppressionReason = "cadence"
 	AttentionSuppressedDuplicate         AttentionSuppressionReason = "duplicate"
 	AttentionSuppressedLowerPriority     AttentionSuppressionReason = "lower-priority"
@@ -283,10 +302,12 @@ func (p *AttentionPlanner) Plan(input AttentionInput) AttentionPlan {
 	}
 	candidates = append(candidates, p.deploymentCandidates(input.Deployments, &plan)...)
 
-	if input.Quiet == AttentionQuietAll {
+	if input.Quiet.silences() {
+		reason := input.Quiet.suppressionReason()
 		for _, candidate := range candidates {
-			plan.Suppressions = append(plan.Suppressions, attentionCandidateSuppression(candidate, AttentionSuppressedQuiet))
+			plan.Suppressions = append(plan.Suppressions, attentionCandidateSuppression(candidate, reason))
 		}
+		plan.BringToFront = false
 		if p.breakState.nativeActive {
 			plan.NativeAttention = NativeAttentionCancel
 			p.breakState.nativeActive = false

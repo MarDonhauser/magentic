@@ -5,22 +5,6 @@ import {
   applyReading, applyUpdate, emptyConversationState, renderModel, rowSignature, fnv1a, scrollDecision,
 } from './conversation-state.js';
 
-const KIND_LABELS = {
-  'developer-prompt': 'Eingabe',
-  'agent-message': 'Antwort',
-  reasoning: 'Überlegung',
-  plan: 'Plan',
-  'command-execution': 'Befehl',
-  'file-change': 'Datei geändert',
-  'file-read': 'Gelesen',
-  'tool-call': 'Werkzeug',
-  'web-search': 'Web',
-  'delegated-task': 'Delegiert',
-  'context-compaction': 'Kontext',
-  error: 'Fehler',
-  unknown: 'Unbekannt',
-};
-
 function esc(text) {
   return String(text ?? '')
     .replace(/&/g, '&amp;')
@@ -40,7 +24,7 @@ function rowElement(row, expanded, toggle) {
   if (!row.collapsed) {
     const head = document.createElement('div');
     head.className = 'cv-kind';
-    head.textContent = KIND_LABELS[row.kind] || row.kind;
+    head.textContent = row.label || row.kind;
     const body = document.createElement('div');
     body.className = 'cv-prose';
     body.innerHTML = renderMarkdown(row.detail || row.title);
@@ -53,7 +37,7 @@ function rowElement(row, expanded, toggle) {
   line.type = 'button';
   const state = row.failed ? 'fehlgeschlagen' : row.awaiting ? 'läuft noch' : '';
   line.innerHTML =
-    `<span class="cv-kind">${esc(KIND_LABELS[row.kind] || row.kind)}</span>` +
+    `<span class="cv-kind">${esc(row.label || row.kind)}</span>` +
     `<span class="cv-title">${esc(row.title)}</span>` +
     (state ? `<span class="cv-state">${esc(state)}</span>` : '');
   if (row.expandable) {

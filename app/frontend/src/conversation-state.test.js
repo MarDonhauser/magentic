@@ -5,8 +5,21 @@ import {
   applyReading, applyUpdate, emptyConversationState, fnv1a, renderModel, rowSignature, scrollDecision,
 } from './conversation-state.js';
 
+// item baut die Nutzlast nach, die Go liefert: Label und Einklappbarkeit
+// entscheidet dort der Normalizer. Diese Fixture bildet sie nur ab — die
+// Policy selbst wird in core/timeline_test.go geprüft, nicht hier.
+const PROSE = new Set(['agent-message', 'developer-prompt']);
+
 function item(id, kind, extra = {}) {
-  return { id, kind, role: 'agent', title: id, ...extra };
+  return {
+    id,
+    kind,
+    role: 'agent',
+    title: id,
+    label: kind,
+    collapsible: !PROSE.has(kind),
+    ...extra,
+  };
 }
 
 function available(items) {

@@ -199,6 +199,11 @@ func (a *App) watchLoop() {
 		if micInUse() {
 			quiet = core.AttentionQuietMeeting
 		}
+		// Ausgeschaltete Benachrichtigungen sind das stärkere Signal: sie
+		// gehen in den Plan, statt ihn danach zu beschneiden.
+		if !core.NotificationsEnabled() {
+			quiet = core.AttentionQuietMuted
+		}
 		plan := a.attentionPlanner().Plan(core.AttentionInput{
 			Observation:   snapshot,
 			ActiveSession: activeID,
@@ -209,7 +214,6 @@ func (a *App) watchLoop() {
 			Quiet:         quiet,
 			Now:           time.Now(),
 		})
-		plan = mutedAttentionPlan(plan)
 		a.storeInbox(core.BuildInbox(st, plan.Inbox))
 		a.syncNotch(plan, snapshot)
 		executeAttentionPlan(plan)
@@ -251,65 +255,11 @@ func breakFinishedAttentionEvent(at time.Time) core.AttentionEvent {
 	return core.AttentionEvent{Key: "break-finished:" + episode, Kind: core.AttentionEventBreakFinished}
 }
 
-type attentionPlanExecutor struct {
-	badge   func(string)
-	notify  func(string, string, string)
-	request func(bool)
-	cancel  func()
-	front   func()
-}
-
-var platformAttentionExecutor = attentionPlanExecutor{
-	badge: setDockBadge, notify: core.NotifyDesktop,
-	request: requestAttention, cancel: cancelAttention, front: bringToFront,
-}
-
-// mutedAttentionPlan schaltet nur das Aufdringliche stumm: Popups, Notch-
-// Hinweise, Dock-Hüpfen und In-den-Vordergrund-Holen. Badge, Inbox und Cancel
-// räumen weiter auf. Muss VOR syncNotch angewendet werden — das Notch liest
-// dieselben Notifications.
-func mutedAttentionPlan(plan core.AttentionPlan) core.AttentionPlan {
-	if core.NotificationsEnabled() {
-		return plan
-	}
-	plan.Notifications = nil
-	plan.BringToFront = false
-	if plan.NativeAttention == core.NativeAttentionInformational || plan.NativeAttention == core.NativeAttentionCritical {
-		plan.NativeAttention = core.NativeAttentionUnchanged
-	}
-	return plan
+var platformAttentionExecutor = core.AttentionExecutor{
+	Badge: setDockBadge, Notify: core.NotifyDesktop,
+	Request: requestAttention, Cancel: cancelAttention, Front: bringToFront,
 }
 
 func executeAttentionPlan(plan core.AttentionPlan) {
-	platformAttentionExecutor.execute(mutedAttentionPlan(plan))
-}
-
-func (executor attentionPlanExecutor) execute(plan core.AttentionPlan) {
-	if plan.DockBadge.Update {
-		if executor.badge != nil {
-			executor.badge(plan.DockBadge.Label)
-		}
-	}
-	for _, notification := range plan.Notifications {
-		if executor.notify != nil {
-			executor.notify(notification.Title, notification.Message, notification.Sound)
-		}
-	}
-	switch plan.NativeAttention {
-	case core.NativeAttentionCancel:
-		if executor.cancel != nil {
-			executor.cancel()
-		}
-	case core.NativeAttentionInformational:
-		if executor.request != nil {
-			executor.request(false)
-		}
-	case core.NativeAttentionCritical:
-		if executor.request != nil {
-			executor.request(true)
-		}
-	}
-	if plan.BringToFront && executor.front != nil {
-		executor.front()
-	}
+	core.ExecuteAttentionPlan(plan, platformAttentionExecutor)
 }

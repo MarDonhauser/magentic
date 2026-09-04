@@ -79,6 +79,7 @@ func (a *App) AddReviewComment(sessionID, path string, oldStart, oldEnd, newStar
 	}
 	comment.Path = strings.TrimSpace(comment.Path)
 	comment.Text = strings.TrimSpace(comment.Text)
+	comment.LineRef = core.ReviewLineRef(comment)
 	return comment, nil
 }
 

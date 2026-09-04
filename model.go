@@ -192,17 +192,24 @@ func (m *model) executeAttentionPlan() {
 			labels[observed.SessionID] = session.Name
 		}
 	}
+	// Ausgeschaltete Benachrichtigungen sind ein Signal an den Planner, keine
+	// Regel der Oberfläche: sonst schweigt der Desktop und die TUI meldet sich
+	// weiter, obwohl beide denselben Planner benutzen.
+	quiet := core.AttentionQuietNone
+	if !core.NotificationsEnabled() {
+		quiet = core.AttentionQuietMuted
+	}
 	plan := m.attention.Plan(core.AttentionInput{
-		Observation: m.poll.observation, SessionLabels: labels, Now: time.Now(),
+		Observation: m.poll.observation, SessionLabels: labels, Quiet: quiet, Now: time.Now(),
 	})
 	// Der Posteingang kommt aus genau diesem Plan; die TUI leitet nichts eigenes ab.
 	m.inbox = plan.Inbox
 	if m.inboxCursor >= len(m.inbox.Entries) {
 		m.inboxCursor = 0
 	}
-	for _, notification := range plan.Notifications {
-		notifyDesktop(notification.Title, notification.Message, notification.Sound)
-	}
+	// Die TUI kann nur benachrichtigen; Badge, native Attention und
+	// In-den-Vordergrund-Holen sind Absichten, die sie nicht bedient.
+	core.ExecuteAttentionPlan(plan, core.AttentionExecutor{Notify: notifyDesktop})
 }
 
 // inboxRow joins one planned entry with the Session the TUI knows it by. The

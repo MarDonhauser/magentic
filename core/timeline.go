@@ -20,7 +20,6 @@ const (
 	ItemKindWebSearch         ItemKind = "web-search"
 	ItemKindDelegatedTask     ItemKind = "delegated-task"
 	ItemKindContextCompaction ItemKind = "context-compaction"
-	ItemKindError             ItemKind = "error"
 	// ItemKindPermissionRequest und ItemKindPermissionDecision halten eine
 	// managed Session offen: Die Frage, die der Agent stellte, und die
 	// Antwort, die eine Person darauf gab — in der Reihenfolge, in der sie
@@ -45,7 +44,6 @@ func ItemKinds() []ItemKind {
 		ItemKindWebSearch,
 		ItemKindDelegatedTask,
 		ItemKindContextCompaction,
-		ItemKindError,
 		ItemKindPermissionRequest,
 		ItemKindPermissionDecision,
 		ItemKindUnknown,
@@ -78,12 +76,12 @@ const (
 type Item struct {
 	// ID is stable within its Conversation and derived from the vendor's own
 	// record identity, so re-reading the same records is idempotent.
-	ID          string    `json:"id"`
-	OccurredAt  time.Time `json:"occurredAt,omitzero"`
-	Role        ItemRole  `json:"role"`
-	Kind        ItemKind  `json:"kind"`
-	Title       string    `json:"title"`
-	Detail      string    `json:"detail,omitempty"`
+	ID         string    `json:"id"`
+	OccurredAt time.Time `json:"occurredAt,omitzero"`
+	Role       ItemRole  `json:"role"`
+	Kind       ItemKind  `json:"kind"`
+	Title      string    `json:"title"`
+	Detail     string    `json:"detail,omitempty"`
 	// VendorLabel carries the vendor's own name for an activity Magentic has
 	// no kind for. It is set only for ItemKindUnknown.
 	VendorLabel string `json:"vendorLabel,omitempty"`
@@ -103,6 +101,58 @@ type Item struct {
 	// (see Conversation.Apply), so a streamed message is never presented as
 	// finished and never appears twice.
 	InProgress bool `json:"inProgress,omitempty"`
+	// Label und Collapsible tragen die Darstellung des Items. Sie werden beim
+	// Eintritt in eine Conversation aus der Art gefüllt, damit eine Oberfläche
+	// Titel, Detail und Einklappbarkeit rendert, ohne die Art zu kennen: eine
+	// neue Art ist damit eine Änderung in Go statt in vier Tabellen.
+	Label       string `json:"label"`
+	Collapsible bool   `json:"collapsible"`
+}
+
+// itemLabels ist die einzige Zuordnung von Art zu Beschriftung. Eine Art ohne
+// Eintrag fällt auf die Beschriftung der unbekannten Art zurück, damit ein
+// vergessener Eintrag eine sichtbare Zeile bleibt und keine Lücke.
+var itemLabels = map[ItemKind]string{
+	ItemKindDeveloperPrompt:    "Eingabe",
+	ItemKindAgentMessage:       "Antwort",
+	ItemKindReasoning:          "Überlegung",
+	ItemKindPlan:               "Plan",
+	ItemKindCommandExecution:   "Befehl",
+	ItemKindFileChange:         "Datei geändert",
+	ItemKindFileRead:           "Gelesen",
+	ItemKindToolCall:           "Werkzeug",
+	ItemKindWebSearch:          "Web",
+	ItemKindDelegatedTask:      "Delegiert",
+	ItemKindContextCompaction:  "Kontext",
+	ItemKindPermissionRequest:  "Freigabe erbeten",
+	ItemKindPermissionDecision: "Freigabe entschieden",
+	ItemKindUnknown:            "Unbekannt",
+}
+
+// proseKinds sind die Arten, die dem Entwickler gehören. Sie werden nie hinter
+// einen Schalter geklappt; alles andere ist Werkzeugarbeit und einklappbar.
+var proseKinds = map[ItemKind]bool{
+	ItemKindDeveloperPrompt: true,
+	ItemKindAgentMessage:    true,
+}
+
+// ItemLabel nennt die Beschriftung einer Art.
+func ItemLabel(kind ItemKind) string {
+	if label, known := itemLabels[kind]; known {
+		return label
+	}
+	return itemLabels[ItemKindUnknown]
+}
+
+// ItemCollapsible sagt, ob eine Art hinter einen Schalter geklappt werden darf.
+func ItemCollapsible(kind ItemKind) bool { return !proseKinds[kind] }
+
+// withPresentation füllt die Darstellung eines Items. Es läuft am Eintritt in
+// eine Conversation, damit kein Erzeuger sie vergessen kann.
+func (i Item) withPresentation() Item {
+	i.Label = ItemLabel(i.Kind)
+	i.Collapsible = ItemCollapsible(i.Kind)
+	return i
 }
 
 // ConversationRef is the vendor-qualified handle of one coding-agent run's
@@ -144,7 +194,7 @@ func (c *Conversation) Append(items ...Item) {
 	for _, item := range items {
 		if c.indexOf(item.ID) < 0 {
 			c.index[item.ID] = len(c.Items)
-			c.Items = append(c.Items, item)
+			c.Items = append(c.Items, item.withPresentation())
 		}
 	}
 }
@@ -155,11 +205,11 @@ func (c *Conversation) Append(items ...Item) {
 func (c *Conversation) Apply(items ...Item) {
 	for _, item := range items {
 		if at := c.indexOf(item.ID); at >= 0 {
-			c.Items[at] = item
+			c.Items[at] = item.withPresentation()
 			continue
 		}
 		c.index[item.ID] = len(c.Items)
-		c.Items = append(c.Items, item)
+		c.Items = append(c.Items, item.withPresentation())
 	}
 }
 

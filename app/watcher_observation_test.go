@@ -84,36 +84,36 @@ func TestObservationCacheRefreshesAfterRuntimeRename(t *testing.T) {
 
 func TestAttentionExecutorAppliesPlanWithoutPolicy(t *testing.T) {
 	var calls []string
-	executor := attentionPlanExecutor{
-		badge: func(label string) { calls = append(calls, "badge:"+label) },
-		notify: func(title, message, sound string) {
+	executor := core.AttentionExecutor{
+		Badge: func(label string) { calls = append(calls, "badge:"+label) },
+		Notify: func(title, message, sound string) {
 			calls = append(calls, "notify:"+title+":"+message+":"+sound)
 		},
-		request: func(critical bool) {
+		Request: func(critical bool) {
 			if critical {
 				calls = append(calls, "request:critical")
 			} else {
 				calls = append(calls, "request:informational")
 			}
 		},
-		cancel: func() { calls = append(calls, "cancel") },
-		front:  func() { calls = append(calls, "front") },
+		Cancel: func() { calls = append(calls, "cancel") },
+		Front:  func() { calls = append(calls, "front") },
 	}
-	executor.execute(core.AttentionPlan{
+	core.ExecuteAttentionPlan(core.AttentionPlan{
 		DockBadge: core.AttentionDockBadge{Update: true, Label: "2+"},
 		Notifications: []core.AttentionNotificationIntent{{
 			Title: "title", Message: "message", Sound: "sound",
 		}},
 		NativeAttention: core.NativeAttentionCritical,
 		BringToFront:    true,
-	})
+	}, executor)
 	want := []string{"badge:2+", "notify:title:message:sound", "request:critical", "front"}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("executor calls = %v, want %v", calls, want)
 	}
 
 	calls = nil
-	executor.execute(core.AttentionPlan{NativeAttention: core.NativeAttentionCancel})
+	core.ExecuteAttentionPlan(core.AttentionPlan{NativeAttention: core.NativeAttentionCancel}, executor)
 	if !reflect.DeepEqual(calls, []string{"cancel"}) {
 		t.Fatalf("cancel execution = %v", calls)
 	}

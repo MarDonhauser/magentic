@@ -422,3 +422,84 @@ func assertSingleAttentionKind(t *testing.T, plan AttentionPlan, kind AttentionI
 		t.Fatalf("notifications = %#v, want one %s", plan.Notifications, kind)
 	}
 }
+
+// TestMutedQuietSignalSilencesEveryIntentAndSaysWhy hält fest, dass
+// ausgeschaltete Benachrichtigungen im Plan wirken und als AttentionSuppression
+// verbucht werden. Vorher beschnitt der Desktop-Adapter den fertigen Plan, die
+// TUI tat es nicht, und keine der beiden Oberflächen verbuchte die
+// Unterdrückung.
+func TestMutedQuietSignalSilencesEveryIntentAndSaysWhy(t *testing.T) {
+	planner := NewAttentionPlanner(AttentionPlannerConfig{})
+	now := time.Now()
+	labels := map[SessionID]string{"s1": "hera"}
+	// Der Planner bestätigt einen Übergang, bevor er ihn meldet: erst laufend,
+	// dann blockiert ergibt eine Absicht, die stumm unterdrückt werden kann.
+	planner.Plan(AttentionInput{
+		Observation: mutedTestSnapshot(StatusRunning), SessionLabels: labels,
+		Quiet: AttentionQuietMuted, Now: now,
+	})
+	plan := planner.Plan(AttentionInput{
+		Observation: mutedTestSnapshot(StatusBlocked), SessionLabels: labels,
+		Quiet: AttentionQuietMuted, Now: now.Add(time.Second),
+	})
+	if len(plan.Notifications) != 0 {
+		t.Errorf("stummer Plan trägt %d Benachrichtigungen", len(plan.Notifications))
+	}
+	if plan.BringToFront {
+		t.Error("stummer Plan holt das Fenster nach vorn")
+	}
+	if plan.NativeAttention == NativeAttentionInformational || plan.NativeAttention == NativeAttentionCritical {
+		t.Errorf("stummer Plan fordert native Attention: %v", plan.NativeAttention)
+	}
+
+	var muted bool
+	for _, suppression := range plan.Suppressions {
+		if suppression.Reason == AttentionSuppressedMuted {
+			muted = true
+		}
+	}
+	if !muted {
+		t.Errorf("keine Unterdrückung mit Grund %q verbucht: %+v", AttentionSuppressedMuted, plan.Suppressions)
+	}
+}
+
+// TestMutedQuietSignalKeepsBadgeAndInbox hält die andere Hälfte fest: stumm
+// heißt nicht blind. Badge und Posteingang räumen weiter auf.
+func TestMutedQuietSignalKeepsBadgeAndInbox(t *testing.T) {
+	loud := NewAttentionPlanner(AttentionPlannerConfig{})
+	quiet := NewAttentionPlanner(AttentionPlannerConfig{})
+	now := time.Now()
+	labels := map[SessionID]string{"s1": "hera"}
+	running := mutedTestSnapshot(StatusRunning)
+	blocked := mutedTestSnapshot(StatusBlocked)
+
+	loud.Plan(AttentionInput{Observation: running, SessionLabels: labels, Now: now})
+	quiet.Plan(AttentionInput{
+		Observation: running, SessionLabels: labels, Quiet: AttentionQuietMuted, Now: now,
+	})
+	loudPlan := loud.Plan(AttentionInput{
+		Observation: blocked, SessionLabels: labels, Now: now.Add(time.Second),
+	})
+	quietPlan := quiet.Plan(AttentionInput{
+		Observation: blocked, SessionLabels: labels, Quiet: AttentionQuietMuted, Now: now.Add(time.Second),
+	})
+
+	if quietPlan.DockBadge != loudPlan.DockBadge {
+		t.Errorf("Badge unterscheidet sich: stumm %+v, laut %+v", quietPlan.DockBadge, loudPlan.DockBadge)
+	}
+	if len(quietPlan.Inbox.Entries) != len(loudPlan.Inbox.Entries) {
+		t.Errorf("Posteingang unterscheidet sich: stumm %d, laut %d Einträge",
+			len(quietPlan.Inbox.Entries), len(loudPlan.Inbox.Entries))
+	}
+}
+
+// mutedTestSnapshot baut eine Beobachtung einer Session mit dem gegebenen Status.
+func mutedTestSnapshot(status AgentStatus) ObservationSnapshot {
+	return ObservationSnapshot{
+		Availability: ObservationAvailable,
+		Sessions: []SessionObservation{{
+			SessionID: "s1", Presence: SessionPresencePresent,
+			Availability: ObservationAvailable, ContentKnown: true, Status: status,
+		}},
+	}
+}
