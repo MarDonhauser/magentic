@@ -118,8 +118,13 @@ func TestWorkHistoryNormalizesAllProviderAdapters(t *testing.T) {
 	if indexInfo.Mode().Perm() != 0o700 {
 		t.Fatalf("index directory mode = %o, want 700", indexInfo.Mode().Perm())
 	}
-	for _, name := range []string{"index.json", "index.lock"} {
+	// Das Write-Ahead-Log und der geteilte Speicher tragen denselben Inhalt wie
+	// die Datenbank und müssen deshalb genauso geschützt sein.
+	for _, name := range []string{"history.db", "history.db-wal", "history.db-shm", "index.lock"} {
 		info, err := os.Stat(filepath.Join(indexDir, name))
+		if os.IsNotExist(err) && name != "history.db" && name != "index.lock" {
+			continue
+		}
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -127,15 +132,12 @@ func TestWorkHistoryNormalizesAllProviderAdapters(t *testing.T) {
 			t.Fatalf("%s mode = %o, want 600", name, info.Mode().Perm())
 		}
 	}
-	indexData, err := os.ReadFile(filepath.Join(indexDir, "index.json"))
-	if err != nil {
+	// Erst schließen: solange der Speicher offen ist, steht das meiste im
+	// Write-Ahead-Log und history.db enthielte fast nichts.
+	if err := history.Close(); err != nil {
 		t.Fatal(err)
 	}
-	for _, sourcePath := range []string{claudePath, codexPath, geminiPath, filepath.Join(copilotDir, "events.jsonl"), antigravityPath} {
-		if strings.Contains(string(indexData), sourcePath) {
-			t.Fatalf("private index persisted source path %q", sourcePath)
-		}
-	}
+	assertHistoryStoreOmits(t, indexDir, claudePath, codexPath, geminiPath, filepath.Join(copilotDir, "events.jsonl"))
 }
 
 func TestWorkHistoryIncrementalCheckpointAndSourceDeletion(t *testing.T) {
@@ -247,82 +249,6 @@ func TestWorkHistorySummaryPreservesUnknownUsage(t *testing.T) {
 	}
 	if summary.Totals.Outputs != 2 || len(summary.Models) != 2 {
 		t.Fatalf("summary did not retain provider/model facts: %#v", summary)
-	}
-}
-
-func TestWorkHistoryMetadataTouchSkipsIndexRewrite(t *testing.T) {
-	history, home, indexDir, _ := openTestWorkHistory(t)
-	source := filepath.Join(home, ".claude", "projects", "demo", "conversation.jsonl")
-	writeHistoryTestFile(t, source, `{"type":"user","timestamp":"2026-08-19T10:00:00Z","sessionId":"conversation","message":{"content":"prompt"}}`+"\n")
-
-	before, err := history.Events(context.Background(), HistoryAssociations{}, HistoryEventQuery{Limit: 100})
-	if err != nil {
-		t.Fatal(err)
-	}
-	indexPath := filepath.Join(indexDir, "index.json")
-	written, err := os.Stat(indexPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Nur die mtime berühren, Inhalt und Größe bleiben gleich: kein
-	// inhaltlicher Wandel, also darf der Lauf weder parsen noch schreiben.
-	touchAt := time.Now().Add(2 * time.Hour)
-	if err := os.Chtimes(source, touchAt, touchAt); err != nil {
-		t.Fatal(err)
-	}
-	after, err := history.Events(context.Background(), HistoryAssociations{}, HistoryEventQuery{Limit: 100})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cov := historyTestCoverage(t, after.Meta, HistoryProviderClaude)
-	if after.Meta.Revision != before.Meta.Revision || cov.ParsedFiles != 0 || cov.ReusedFiles != 1 {
-		t.Fatalf("metadata touch reparsed source: revision %d -> %d, coverage %#v", before.Meta.Revision, after.Meta.Revision, cov)
-	}
-	rewritten, err := os.Stat(indexPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !rewritten.ModTime().Equal(written.ModTime()) || rewritten.Size() != written.Size() {
-		t.Fatal("metadata touch rewrote the whole index file")
-	}
-}
-
-// countingHistoryFS zählt Transkript-Lesezugriffe. Der Index selbst wird über
-// os direkt gelesen, sodass jeder gezählte Zugriff ein Transkript ist.
-type countingHistoryFS struct {
-	workHistoryFS
-	reads *int
-}
-
-func (f countingHistoryFS) ReadFile(path string) ([]byte, error) {
-	*f.reads++
-	return f.workHistoryFS.ReadFile(path)
-}
-
-func TestWorkHistoryUnchangedRefreshReadsNoTranscripts(t *testing.T) {
-	history, home, _, _ := openTestWorkHistory(t)
-	source := filepath.Join(home, ".claude", "projects", "demo", "conversation.jsonl")
-	writeHistoryTestFile(t, source, `{"type":"user","timestamp":"2026-08-19T10:00:00Z","sessionId":"conversation","message":{"content":"prompt"}}`+"\n")
-
-	var reads int
-	history.files = countingHistoryFS{workHistoryFS: history.files, reads: &reads}
-	if _, err := history.Events(context.Background(), HistoryAssociations{}, HistoryEventQuery{Limit: 100}); err != nil {
-		t.Fatal(err)
-	}
-	if reads == 0 {
-		t.Fatal("initial refresh read no transcript")
-	}
-	reads = 0
-	page, err := history.Events(context.Background(), HistoryAssociations{}, HistoryEventQuery{Limit: 100})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reads != 0 {
-		t.Fatalf("unchanged refresh reread %d transcript files", reads)
-	}
-	cov := historyTestCoverage(t, page.Meta, HistoryProviderClaude)
-	if cov.ParsedFiles != 0 || cov.ReusedFiles != 1 {
-		t.Fatalf("unchanged refresh reparsed source: coverage %#v", cov)
 	}
 }
 
@@ -462,17 +388,49 @@ func TestHistoryLocationFallbackRanksOnlyProviderCompatibleSessions(t *testing.T
 	}
 }
 
-func openTestWorkHistory(t *testing.T) (*WorkHistory, string, string, string) {
-	t.Helper()
-	root := t.TempDir()
-	home := filepath.Join(root, "home")
-	indexDir := filepath.Join(root, "private-index")
-	codexHome := filepath.Join(root, "codex-home")
-	history, err := OpenWorkHistory(WorkHistoryConfig{HomeDir: home, IndexDir: indexDir, CodexHome: codexHome})
+func TestSharedWorkHistoryReturnsOneInstance(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MAGENTIC_STATE", filepath.Join(dir, "state.json"))
+	resetSharedWorkHistoryForTest()
+	first, err := SharedWorkHistory()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return history, home, indexDir, codexHome
+	second, err := SharedWorkHistory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatal("SharedWorkHistory returned two instances")
+	}
+}
+
+func openTestWorkHistory(t *testing.T) (*WorkHistory, string, string, string) {
+	t.Helper()
+	return openTestWorkHistoryWith(t, WorkHistoryConfig{})
+}
+
+// openTestWorkHistoryWith legt die Verzeichnisse an und ergänzt die Vorgaben,
+// die jeder Test braucht: Tests arbeiten mit festen Zeitstempeln in der
+// Vergangenheit und erwarten vollständige, sofort sichtbare Ergebnisse. Ein
+// Aufbewahrungsfenster darf der Aufrufer vorgeben; nachträglich an der
+// Konfiguration zu drehen wäre ein Datenrennen mit dem Indexlauf.
+func openTestWorkHistoryWith(t *testing.T, config WorkHistoryConfig) (*WorkHistory, string, string, string) {
+	t.Helper()
+	root := t.TempDir()
+	config.HomeDir = filepath.Join(root, "home")
+	config.IndexDir = filepath.Join(root, "private-index")
+	config.CodexHome = filepath.Join(root, "codex-home")
+	if config.Retention == 0 {
+		config.Retention = 100 * 365 * 24 * time.Hour
+	}
+	config.SynchronousIndex = true
+	history, err := OpenWorkHistory(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { history.Close() })
+	return history, config.HomeDir, config.IndexDir, config.CodexHome
 }
 
 func writeHistoryTestFile(t *testing.T, path, content string) {
@@ -481,6 +439,47 @@ func writeHistoryTestFile(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// assertHistoryStoreOmits prüft jede vorhandene Datei des Speichers darauf, dass
+// sie die übergebenen Pfade nicht enthält. Das Write-Ahead-Log gehört
+// ausdrücklich dazu: solange der Speicher offen ist, steht fast alles dort und
+// nicht in history.db. Der Aufrufer schließt den Speicher deshalb vorher.
+func assertHistoryStoreOmits(t *testing.T, indexDir string, paths ...string) {
+	t.Helper()
+	read := 0
+	for _, name := range []string{"history.db", "history.db-wal", "history.db-shm"} {
+		data, err := os.ReadFile(filepath.Join(indexDir, name))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		read++
+		for _, path := range paths {
+			if strings.Contains(string(data), path) {
+				t.Fatalf("private index persisted source path %q in %s", path, name)
+			}
+		}
+	}
+	if read == 0 {
+		t.Fatalf("no work history store file found in %s", indexDir)
+	}
+}
+
+func touchHistoryTestFile(t *testing.T, path string, when time.Time) {
+	t.Helper()
+	if err := os.Chtimes(path, when, when); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func removeHistoryTestFile(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
 }

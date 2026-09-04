@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -297,6 +296,7 @@ type HistoryMeta struct {
 	AssociationRevision string                    `json:"associationRevision,omitempty"`
 	ObservedAt          time.Time                 `json:"observedAt"`
 	Coverage            []HistoryProviderCoverage `json:"coverage"`
+	Progress            HistoryIndexProgress      `json:"progress"`
 }
 
 type HistoryEventPage struct {
@@ -397,6 +397,12 @@ type WorkHistoryConfig struct {
 	IndexDir  string
 	HomeDir   string
 	CodexHome string
+	// Retention begrenzt, wie weit Roh-Events zurückreichen. Null bedeutet
+	// historyRetentionWindow.
+	Retention time.Duration
+	// SynchronousIndex lässt Abfragen auf einen vollständigen Lauf warten.
+	// Nur für Tests und einmalige Werkzeuge gedacht.
+	SynchronousIndex bool
 }
 
 type workHistoryFS interface {
@@ -423,7 +429,13 @@ type WorkHistory struct {
 	files    workHistoryFS
 	adapters []historyProviderAdapter
 	now      func() time.Time
-	mu       sync.Mutex
+	store    *historyStore
+
+	mu        sync.Mutex
+	indexing  bool
+	lastRunAt time.Time
+	progress  HistoryIndexProgress
+	counters  map[HistoryProvider]*historyRunCounters
 }
 
 func OpenWorkHistory(config WorkHistoryConfig) (*WorkHistory, error) {
@@ -455,7 +467,33 @@ func OpenWorkHistory(config WorkHistoryConfig) (*WorkHistory, error) {
 		now:    time.Now,
 	}
 	h.adapters = builtinHistoryAdapters(config)
+	store, err := openHistoryStore(h.dbPath())
+	if err != nil {
+		return nil, err
+	}
+	h.store = store
 	return h, nil
+}
+
+var (
+	sharedWorkHistoryOnce sync.Once
+	sharedWorkHistory     *WorkHistory
+	sharedWorkHistoryErr  error
+)
+
+// SharedWorkHistory hält eine Instanz je Prozess. Der Index ist eine
+// gemeinsame Datenbank; jede Abfrage eine eigene Instanz zu öffnen würde
+// Verbindungen und Hintergrundläufe vervielfachen.
+func SharedWorkHistory() (*WorkHistory, error) {
+	sharedWorkHistoryOnce.Do(func() {
+		sharedWorkHistory, sharedWorkHistoryErr = OpenWorkHistory(WorkHistoryConfig{})
+	})
+	return sharedWorkHistory, sharedWorkHistoryErr
+}
+
+func resetSharedWorkHistoryForTest() {
+	sharedWorkHistoryOnce = sync.Once{}
+	sharedWorkHistory, sharedWorkHistoryErr = nil, nil
 }
 
 func ensurePrivateHistoryDir(path string) error {
@@ -469,12 +507,12 @@ func ensurePrivateHistoryDir(path string) error {
 }
 
 func (h *WorkHistory) Events(ctx context.Context, associations HistoryAssociations, query HistoryEventQuery) (HistoryEventPage, error) {
-	index, meta, err := h.refresh(ctx)
+	records, meta, err := h.read(ctx, query)
 	if err != nil {
 		return HistoryEventPage{}, err
 	}
 	meta.AssociationRevision = associations.Revision
-	events, total := queryHistoryEvents(index, associations, query, true)
+	events, total := queryHistoryRecords(records, associations, query, true)
 	if events == nil {
 		events = []HistoryEvent{}
 	}
@@ -482,14 +520,14 @@ func (h *WorkHistory) Events(ctx context.Context, associations HistoryAssociatio
 }
 
 func (h *WorkHistory) Links(ctx context.Context, associations HistoryAssociations, query HistoryLinkQuery) (HistoryLinkPage, error) {
-	index, meta, err := h.refresh(ctx)
+	eventQuery := query.Events
+	eventQuery.Limit, eventQuery.Offset = 0, 0
+	records, meta, err := h.read(ctx, eventQuery)
 	if err != nil {
 		return HistoryLinkPage{}, err
 	}
 	meta.AssociationRevision = associations.Revision
-	eventQuery := query.Events
-	eventQuery.Limit, eventQuery.Offset = 0, 0
-	events, _ := queryHistoryEvents(index, associations, eventQuery, false)
+	events, _ := queryHistoryRecords(records, associations, eventQuery, false)
 	seen := map[string]bool{}
 	var links []HistoryLink
 	for _, event := range events {
@@ -517,33 +555,223 @@ func (h *WorkHistory) Links(ctx context.Context, associations HistoryAssociation
 }
 
 func (h *WorkHistory) Summarize(ctx context.Context, associations HistoryAssociations, query HistorySummaryQuery) (HistorySummary, error) {
-	index, meta, err := h.refresh(ctx)
+	eventQuery := query.Events
+	eventQuery.Limit, eventQuery.Offset = 0, 0
+	records, meta, err := h.read(ctx, eventQuery)
 	if err != nil {
 		return HistorySummary{}, err
 	}
 	meta.AssociationRevision = associations.Revision
-	eventQuery := query.Events
-	eventQuery.Limit, eventQuery.Offset = 0, 0
-	events, _ := queryHistoryEvents(index, associations, eventQuery, false)
+	events, _ := queryHistoryRecords(records, associations, eventQuery, false)
 	return summarizeHistory(events, query.Location, meta, eventQuery.Providers), nil
 }
 
-const workHistoryIndexVersion = 1
-
-type historyIndex struct {
-	Version  int                         `json:"version"`
-	Revision uint64                      `json:"revision"`
-	Files    map[string]historyIndexFile `json:"files"`
+type HistoryConversationQuery struct {
+	Since, Before time.Time
+	Providers     []HistoryProvider
+	ProjectKeys   []string
+	SessionKeys   []string
+	Limit, Offset int
 }
 
-type historyIndexFile struct {
-	Provider       HistoryProvider  `json:"provider"`
-	AdapterVersion int              `json:"adapterVersion"`
-	Digest         string           `json:"digest"`
-	Size           int64            `json:"size"`
-	ModTime        int64            `json:"modTime"`
-	Records        []historyRecord  `json:"records"`
-	Problems       []HistoryProblem `json:"problems,omitempty"`
+type HistoryConversation struct {
+	Provider       HistoryProvider        `json:"provider"`
+	ConversationID string                 `json:"conversationId"`
+	StartedAt      HistoryFact[time.Time] `json:"startedAt"`
+	LastActivityAt HistoryFact[time.Time] `json:"lastActivityAt"`
+	Turns          int                    `json:"turns"`
+	LastPrompt     HistoryFact[string]    `json:"lastPrompt"`
+	Attribution    HistoryAttribution     `json:"attribution"`
+}
+
+type HistoryConversationPage struct {
+	Conversations []HistoryConversation `json:"conversations"`
+	Total         int                   `json:"total"`
+	Meta          HistoryMeta           `json:"meta"`
+}
+
+// Conversations fasst die Roh-Events des Aufbewahrungsfensters zu Chats
+// zusammen. Ältere Chats erscheinen hier nicht mehr; ihre Kennzahlen leben in
+// Activity weiter.
+func (h *WorkHistory) Conversations(ctx context.Context, associations HistoryAssociations, query HistoryConversationQuery) (HistoryConversationPage, error) {
+	eventQuery := HistoryEventQuery{
+		Since: query.Since, Before: query.Before, Providers: query.Providers,
+		ProjectKeys: query.ProjectKeys, SessionKeys: query.SessionKeys,
+		Lineages: []HistoryLineage{HistoryLineagePrimary},
+	}
+	records, meta, err := h.read(ctx, eventQuery)
+	if err != nil {
+		return HistoryConversationPage{}, err
+	}
+	meta.AssociationRevision = associations.Revision
+	events, _ := queryHistoryRecords(records, associations, eventQuery, false)
+
+	type key struct {
+		provider       HistoryProvider
+		conversationID string
+	}
+	byKey := map[key]*HistoryConversation{}
+	var order []key
+	for _, event := range events {
+		if event.ConversationID.State != HistoryFactKnown || event.ConversationID.Value == "" {
+			continue
+		}
+		id := key{provider: event.Provider, conversationID: event.ConversationID.Value}
+		conversation := byKey[id]
+		if conversation == nil {
+			conversation = &HistoryConversation{
+				Provider: event.Provider, ConversationID: event.ConversationID.Value,
+				StartedAt:      historyUnknown[time.Time]("kein bekannter Zeitpunkt"),
+				LastActivityAt: historyUnknown[time.Time]("kein bekannter Zeitpunkt"),
+				LastPrompt:     historyUnknown[string]("kein Prompt im Fenster"),
+				Attribution:    event.Attribution,
+			}
+			byKey[id] = conversation
+			order = append(order, id)
+		}
+		if event.Kind == HistoryEventOutput {
+			conversation.Turns++
+		}
+		if event.OccurredAt.State != HistoryFactKnown {
+			continue
+		}
+		when := event.OccurredAt.Value
+		if conversation.StartedAt.State != HistoryFactKnown || when.Before(conversation.StartedAt.Value) {
+			conversation.StartedAt = historyKnown(when)
+		}
+		if conversation.LastActivityAt.State != HistoryFactKnown || when.After(conversation.LastActivityAt.Value) {
+			conversation.LastActivityAt = historyKnown(when)
+		}
+		if event.Kind == HistoryEventPrompt && event.Text.State == HistoryFactKnown {
+			// queryHistoryRecords liefert absteigend; der erste Prompt ist der jüngste.
+			if conversation.LastPrompt.State != HistoryFactKnown {
+				conversation.LastPrompt = historyKnown(event.Text.Value)
+			}
+		}
+	}
+	out := make([]HistoryConversation, 0, len(order))
+	for _, id := range order {
+		out = append(out, *byKey[id])
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.LastActivityAt.State != b.LastActivityAt.State {
+			return a.LastActivityAt.State == HistoryFactKnown
+		}
+		if a.LastActivityAt.State == HistoryFactKnown && !a.LastActivityAt.Value.Equal(b.LastActivityAt.Value) {
+			return a.LastActivityAt.Value.After(b.LastActivityAt.Value)
+		}
+		return a.ConversationID < b.ConversationID
+	})
+	total := len(out)
+	limit := query.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	out = historyPage(out, query.Offset, limit)
+	if out == nil {
+		out = []HistoryConversation{}
+	}
+	return HistoryConversationPage{Conversations: out, Total: total, Meta: meta}, nil
+}
+
+type HistoryActivityQuery struct {
+	Since, Before time.Time
+	Providers     []HistoryProvider
+	Location      *time.Location
+}
+
+type HistoryActivityBucket struct {
+	Day                     string             `json:"day"`
+	Hour                    int                `json:"hour"`
+	Provider                HistoryProvider    `json:"provider"`
+	ConversationID          string             `json:"conversationId"`
+	Model                   string             `json:"model"`
+	Prompts                 int                `json:"prompts"`
+	Turns                   int                `json:"turns"`
+	Usage                   HistoryUsage       `json:"usage"`
+	Cost                    float64            `json:"cost"`
+	PricedEvents            int                `json:"pricedEvents"`
+	UnpricedEvents          int                `json:"unpricedEvents"`
+	KnownInputEvents        int                `json:"knownInputEvents"`
+	UnknownInputEvents      int                `json:"unknownInputEvents"`
+	KnownOutputEvents       int                `json:"knownOutputEvents"`
+	UnknownOutputEvents     int                `json:"unknownOutputEvents"`
+	KnownCacheReadEvents    int                `json:"knownCacheReadEvents"`
+	UnknownCacheReadEvents  int                `json:"unknownCacheReadEvents"`
+	KnownCacheWriteEvents   int                `json:"knownCacheWriteEvents"`
+	UnknownCacheWriteEvents int                `json:"unknownCacheWriteEvents"`
+	Attribution             HistoryAttribution `json:"attribution"`
+}
+
+type HistoryActivityPage struct {
+	Buckets []HistoryActivityBucket `json:"buckets"`
+	Meta    HistoryMeta             `json:"meta"`
+}
+
+// Activity liefert die dauerhaften Kennzahlen. Sie überdauern das
+// Aufbewahrungsfenster der Roh-Events und tragen die Merkmale, aus denen
+// dieselbe Attribution entsteht wie bei Events.
+func (h *WorkHistory) Activity(ctx context.Context, associations HistoryAssociations, query HistoryActivityQuery) (HistoryActivityPage, error) {
+	h.ensureIndexing(ctx)
+	rows, err := h.store.activityRows(ctx, query.Since, query.Before, query.Providers, query.Location)
+	if err != nil {
+		return HistoryActivityPage{}, err
+	}
+	meta, err := h.snapshotMeta(ctx)
+	if err != nil {
+		return HistoryActivityPage{}, err
+	}
+	meta.AssociationRevision = associations.Revision
+	resolver := newHistoryAssociationResolver(associations)
+	buckets := make([]HistoryActivityBucket, 0, len(rows))
+	for _, row := range rows {
+		attribution := resolver.resolve(historyRecord{
+			Provider: row.Provider, ConversationID: row.ConversationID,
+			CWD: row.CWD, ProjectAlias: row.ProjectAlias,
+		})
+		buckets = append(buckets, HistoryActivityBucket{
+			Day: row.Day, Hour: row.Hour, Provider: row.Provider,
+			ConversationID: row.ConversationID, Model: row.Model,
+			Prompts: row.Prompts, Turns: row.Turns,
+			Usage: HistoryUsage{
+				InputTokens:      historyKnown(row.Input),
+				OutputTokens:     historyKnown(row.Output),
+				CacheReadTokens:  historyKnown(row.CacheRead),
+				CacheWriteTokens: historyKnown(row.CacheWrite),
+			},
+			Cost: row.Cost, PricedEvents: row.PricedEvents, UnpricedEvents: row.UnpricedEvents,
+			KnownInputEvents: row.KnownInputEvents, UnknownInputEvents: row.UnknownInputEvents,
+			KnownOutputEvents: row.KnownOutputEvents, UnknownOutputEvents: row.UnknownOutputEvents,
+			KnownCacheReadEvents: row.KnownCacheReadEvents, UnknownCacheReadEvents: row.UnknownCacheReadEvents,
+			KnownCacheWriteEvents: row.KnownCacheWriteEvents, UnknownCacheWriteEvents: row.UnknownCacheWriteEvents,
+			Attribution: attribution,
+		})
+	}
+	return HistoryActivityPage{Buckets: buckets, Meta: meta}, nil
+}
+
+// read stößt bei Bedarf einen Indexlauf an und liest anschließend die passenden
+// Datensätze samt Zustandsbericht aus dem Speicher.
+func (h *WorkHistory) read(ctx context.Context, query HistoryEventQuery) ([]historyRecord, HistoryMeta, error) {
+	h.ensureIndexing(ctx)
+	records, err := h.store.records(ctx, historyFilterFor(query))
+	if err != nil {
+		return nil, HistoryMeta{}, err
+	}
+	meta, err := h.snapshotMeta(ctx)
+	if err != nil {
+		return nil, HistoryMeta{}, err
+	}
+	return records, meta, nil
+}
+
+func historyFilterFor(query HistoryEventQuery) historyRecordFilter {
+	return historyRecordFilter{
+		Since: query.Since, Before: query.Before, IncludeUnknownTime: query.IncludeUnknownTime,
+		Providers: query.Providers, Roles: query.Roles, Kinds: query.Kinds,
+		Lineages: query.Lineages, Text: query.Text,
+	}
 }
 
 type historyUsageRecord struct {
@@ -573,205 +801,16 @@ type historyRecord struct {
 	NativeID       string             `json:"nativeId,omitempty"`
 }
 
-func (h *WorkHistory) indexPath() string { return filepath.Join(h.config.IndexDir, "index.json") }
-func (h *WorkHistory) lockPath() string  { return filepath.Join(h.config.IndexDir, "index.lock") }
+func (h *WorkHistory) dbPath() string   { return filepath.Join(h.config.IndexDir, "history.db") }
+func (h *WorkHistory) lockPath() string { return filepath.Join(h.config.IndexDir, "index.lock") }
+func (h *WorkHistory) Close() error     { return h.store.Close() }
 
-func (h *WorkHistory) refresh(ctx context.Context) (*historyIndex, HistoryMeta, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if err := ensurePrivateHistoryDir(h.config.IndexDir); err != nil {
-		return nil, HistoryMeta{}, err
+// retention liefert das wirksame Aufbewahrungsfenster der Roh-Events.
+func (h *WorkHistory) retention() time.Duration {
+	if h.config.Retention > 0 {
+		return h.config.Retention
 	}
-	var index *historyIndex
-	var meta HistoryMeta
-	err := withWorkHistoryFileLock(ctx, h.lockPath(), func() error {
-		var refreshErr error
-		index, meta, refreshErr = h.refreshIndex(ctx)
-		return refreshErr
-	})
-	return index, meta, err
-}
-
-func (h *WorkHistory) refreshIndex(ctx context.Context) (*historyIndex, HistoryMeta, error) {
-	index, existed, err := loadHistoryIndex(h.indexPath())
-	if err != nil {
-		return nil, HistoryMeta{}, err
-	}
-	// contentDirty steuert den einzigen teuren Schritt des Laufs: das
-	// Zurückschreiben des gesamten Index. Reine Metadatenberührungen (Größe,
-	// mtime) bleiben im Speicher; sie beim nächsten inhaltsändernden Lauf
-	// mit zu persistieren genügt, weil sie aus den Dateien rekonstruierbar sind.
-	contentDirty := !existed
-	observedAt := h.now().UTC()
-	coverage := make([]HistoryProviderCoverage, 0, len(h.adapters))
-
-	for _, adapter := range h.adapters {
-		if err := ctx.Err(); err != nil {
-			return nil, HistoryMeta{}, err
-		}
-		inventory := discoverHistoryFiles(ctx, h.files, adapter)
-		cov := inventory.coverage
-		seen := make(map[string]bool, len(inventory.files))
-		for _, path := range inventory.files {
-			if err := ctx.Err(); err != nil {
-				return nil, HistoryMeta{}, err
-			}
-			sourceID := historySourceID(adapter.Provider(), path)
-			seen[sourceID] = true
-			info, statErr := h.files.Stat(path)
-			if statErr != nil {
-				cov.Problems = append(cov.Problems, HistoryProblem{Provider: adapter.Provider(), SourceID: sourceID, Kind: "file-unavailable", Message: statErr.Error()})
-				continue
-			}
-			old, ok := index.Files[sourceID]
-			if ok && old.Provider == adapter.Provider() && old.AdapterVersion == adapter.Version() &&
-				old.Size == info.Size() && old.ModTime == info.ModTime().UnixNano() {
-				// Unveränderte Datei: Inhalt weder lesen noch parsen. Größe
-				// plus Nanosekunden-mtime tragen die Änderungserkennung; der
-				// gespeicherte Digest wurde aus genau diesem Inhalt gebildet.
-				cov.ReusedFiles++
-				cov.Problems = append(cov.Problems, old.Problems...)
-				continue
-			}
-			data, err := h.files.ReadFile(path)
-			if err != nil {
-				cov.Problems = append(cov.Problems, HistoryProblem{Provider: adapter.Provider(), SourceID: sourceID, Kind: "file-unreadable", Message: err.Error()})
-				continue
-			}
-			digest, err := adapter.Fingerprint(h.files, path, data)
-			if err != nil {
-				cov.Problems = append(cov.Problems, HistoryProblem{Provider: adapter.Provider(), SourceID: sourceID, Kind: "dependency-unreadable", Message: err.Error()})
-				continue
-			}
-			if ok && old.Provider == adapter.Provider() && old.AdapterVersion == adapter.Version() && old.Digest == digest {
-				cov.ReusedFiles++
-				// Gleicher Inhalt, neue Metadaten: Zeile im Speicher
-				// nachführen, aber nichts schreiben.
-				old.Size, old.ModTime = info.Size(), info.ModTime().UnixNano()
-				index.Files[sourceID] = old
-				cov.Problems = append(cov.Problems, old.Problems...)
-				continue
-			}
-			records, problems, parseErr := adapter.Parse(ctx, h.files, path, data)
-			for i := range problems {
-				problems[i].Provider = adapter.Provider()
-				problems[i].SourceID = sourceID
-			}
-			if parseErr != nil {
-				cov.Problems = append(cov.Problems, HistoryProblem{Provider: adapter.Provider(), SourceID: sourceID, Kind: "parse-failed", Message: parseErr.Error()})
-				if ok {
-					cov.Problems = append(cov.Problems, old.Problems...)
-				}
-				continue
-			}
-			records = normalizeHistoryRecords(adapter.Provider(), sourceID, records)
-			index.Files[sourceID] = historyIndexFile{
-				Provider: adapter.Provider(), AdapterVersion: adapter.Version(),
-				Digest: digest, Size: info.Size(), ModTime: info.ModTime().UnixNano(),
-				Records: records, Problems: problems,
-			}
-			cov.ParsedFiles++
-			cov.Problems = append(cov.Problems, problems...)
-			contentDirty = true
-		}
-		if cov.State == HistorySourceAvailable || cov.State == HistorySourceAbsent {
-			for sourceID, file := range index.Files {
-				if file.Provider == adapter.Provider() && !seen[sourceID] {
-					delete(index.Files, sourceID)
-					contentDirty = true
-				}
-			}
-		}
-		for _, file := range index.Files {
-			if file.Provider == adapter.Provider() {
-				cov.IndexedFiles++
-			}
-		}
-		if len(cov.Problems) > 0 {
-			if cov.State == HistorySourceAvailable {
-				cov.State = HistorySourcePartial
-			} else if cov.State == HistorySourceAbsent {
-				cov.State = HistorySourceUnavailable
-			}
-		}
-		coverage = append(coverage, cov)
-	}
-	if contentDirty {
-		index.Revision++
-		if err := saveHistoryIndex(h.indexPath(), index); err != nil {
-			return nil, HistoryMeta{}, err
-		}
-	} else if err := protectHistoryIndex(h.indexPath()); err != nil {
-		return nil, HistoryMeta{}, err
-	}
-	return index, HistoryMeta{Revision: index.Revision, ObservedAt: observedAt, Coverage: coverage}, nil
-}
-
-func loadHistoryIndex(path string) (*historyIndex, bool, error) {
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return &historyIndex{Version: workHistoryIndexVersion, Files: map[string]historyIndexFile{}}, false, nil
-	}
-	if err != nil {
-		return nil, false, fmt.Errorf("read work history index: %w", err)
-	}
-	var index historyIndex
-	if err := json.Unmarshal(data, &index); err != nil {
-		return nil, false, fmt.Errorf("decode work history index: %w", err)
-	}
-	if index.Version != workHistoryIndexVersion {
-		return &historyIndex{Version: workHistoryIndexVersion, Files: map[string]historyIndexFile{}}, false, nil
-	}
-	if index.Files == nil {
-		index.Files = map[string]historyIndexFile{}
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return nil, false, fmt.Errorf("protect work history index: %w", err)
-	}
-	return &index, true, nil
-}
-
-func saveHistoryIndex(path string, index *historyIndex) error {
-	data, err := json.Marshal(index)
-	if err != nil {
-		return fmt.Errorf("encode work history index: %w", err)
-	}
-	tmp := fmt.Sprintf("%s.tmp.%d.%d", path, os.Getpid(), time.Now().UnixNano())
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("create work history index: %w", err)
-	}
-	ok := false
-	defer func() {
-		_ = f.Close()
-		if !ok {
-			_ = os.Remove(tmp)
-		}
-	}()
-	if _, err := f.Write(data); err != nil {
-		return fmt.Errorf("write work history index: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		return fmt.Errorf("sync work history index: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("close work history index: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("replace work history index: %w", err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("protect work history index: %w", err)
-	}
-	ok = true
-	return nil
-}
-
-func protectHistoryIndex(path string) error {
-	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("protect work history index: %w", err)
-	}
-	return nil
+	return historyRetentionWindow
 }
 
 func historySourceID(provider HistoryProvider, path string) string {
@@ -866,49 +905,21 @@ func mergeHistoryRecord(a, b historyRecord) historyRecord {
 	return a
 }
 
-func queryHistoryEvents(index *historyIndex, associations HistoryAssociations, query HistoryEventQuery, paginate bool) ([]HistoryEvent, int) {
+// queryHistoryRecords wendet die Filter an, die erst nach dem Auflösen der
+// Registry-Zuordnung entschieden werden können, und sortiert das Ergebnis. Die
+// Filter nach Provider, Rolle, Art, Abstammung, Zeitfenster und Text hat der
+// Speicher bereits erledigt.
+func queryHistoryRecords(records []historyRecord, associations HistoryAssociations, query HistoryEventQuery, paginate bool) ([]HistoryEvent, int) {
 	resolver := newHistoryAssociationResolver(associations)
-	byID := map[string]historyRecord{}
-	for _, file := range index.Files {
-		for _, record := range file.Records {
-			if old, ok := byID[record.ID]; ok {
-				byID[record.ID] = mergeHistoryRecord(old, record)
-			} else {
-				byID[record.ID] = record
-			}
-		}
-	}
-	providers := historySet(query.Providers)
 	projects := historySet(query.ProjectKeys)
 	sessions := historySet(query.SessionKeys)
-	roles := historySet(query.Roles)
-	kinds := historySet(query.Kinds)
-	lineages := historySet(query.Lineages)
-	needle := strings.ToLower(strings.TrimSpace(query.Text))
 	var events []HistoryEvent
-	for _, record := range byID {
-		if len(providers) > 0 && !providers[record.Provider] || len(roles) > 0 && !roles[record.Role] ||
-			len(kinds) > 0 && !kinds[record.Kind] || len(lineages) > 0 && !lineages[record.Lineage] {
-			continue
-		}
+	for _, record := range records {
 		event := historyEventFromRecord(record, resolver.resolve(record))
-		if !query.Since.IsZero() || !query.Before.IsZero() {
-			if event.OccurredAt.State != HistoryFactKnown {
-				if !query.IncludeUnknownTime {
-					continue
-				}
-			} else if !query.Since.IsZero() && event.OccurredAt.Value.Before(query.Since) ||
-				!query.Before.IsZero() && !event.OccurredAt.Value.Before(query.Before) {
-				continue
-			}
-		}
 		if len(projects) > 0 && (event.Attribution.ProjectKey.State != HistoryFactKnown || !projects[event.Attribution.ProjectKey.Value]) {
 			continue
 		}
 		if len(sessions) > 0 && (event.Attribution.SessionKey.State != HistoryFactKnown || !sessions[event.Attribution.SessionKey.Value]) {
-			continue
-		}
-		if needle != "" && !strings.Contains(strings.ToLower(event.Text.Value), needle) {
 			continue
 		}
 		events = append(events, event)

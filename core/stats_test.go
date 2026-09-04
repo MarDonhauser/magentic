@@ -72,10 +72,15 @@ func TestBuildStatsConsumesNormalizedWorkHistory(t *testing.T) {
 	if err := os.MkdirAll(projectPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	history, err := OpenWorkHistory(WorkHistoryConfig{HomeDir: home, CodexHome: codexHome, IndexDir: indexDir})
+	// buildStats prüft hier vollständige Kennzahlen und muss deshalb auf einen
+	// abgeschlossenen Indexlauf warten statt auf den Hintergrundlauf.
+	history, err := OpenWorkHistory(WorkHistoryConfig{
+		HomeDir: home, CodexHome: codexHome, IndexDir: indexDir, SynchronousIndex: true,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { history.Close() })
 
 	now := time.Now()
 	claudePromptAt := now.Add(-2 * time.Hour).UTC().Format(time.RFC3339Nano)

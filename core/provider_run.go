@@ -58,7 +58,7 @@ func resolveMissingAgentRun(ctx context.Context, session Session) (Session, erro
 	if !known {
 		return session, nil
 	}
-	history, err := OpenWorkHistory(WorkHistoryConfig{})
+	history, err := SharedWorkHistory()
 	if err != nil {
 		return session, nil
 	}

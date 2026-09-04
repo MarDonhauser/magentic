@@ -117,7 +117,7 @@ func (a *App) SessionLinks(sessionID string) (SessionLinksResult, error) {
 		seen[l.URL] = true
 		out = append(out, l)
 	}
-	history, historyErr := core.OpenWorkHistory(core.WorkHistoryConfig{})
+	history, historyErr := core.SharedWorkHistory()
 	if historyErr != nil {
 		sources = append(sources, unavailableTimelineSource("work-history", historyErr))
 	} else {
@@ -183,7 +183,7 @@ func (a *App) SearchTranscripts(query string) (SearchResult, error) {
 	if err != nil {
 		return SearchResult{}, err
 	}
-	history, err := core.OpenWorkHistory(core.WorkHistoryConfig{})
+	history, err := core.SharedWorkHistory()
 	if err != nil {
 		return SearchResult{}, err
 	}
@@ -342,7 +342,7 @@ func (a *App) Timeline() (TimelineResult, error) {
 	if err != nil {
 		return TimelineResult{}, err
 	}
-	history, err := core.OpenWorkHistory(core.WorkHistoryConfig{})
+	history, err := core.SharedWorkHistory()
 	if err != nil {
 		return TimelineResult{}, err
 	}
