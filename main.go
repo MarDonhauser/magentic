@@ -55,7 +55,7 @@ func main() {
 			fmt.Println("  magentic hooks install    Claude-Code-Hooks und Statuszeile für Status-Meldungen einrichten")
 			fmt.Println("  magentic hooks uninstall  Diese Hooks wieder entfernen")
 			fmt.Println("  magentic serve            Steuer-API ohne Oberfläche bedienen")
-		fmt.Println("  magentic serve-remote     Host-Dienst für Remote-Clients (Opt-in, nur TLS+Token, Default nur Loopback)")
+			fmt.Println("  magentic serve-remote     Host-Dienst für Remote-Clients (Opt-in, nur TLS+Token, Default nur Loopback)")
 			fmt.Println("  magentic skill install    Agent-Anleitung in ein Projekt schreiben")
 			fmt.Println()
 			fmt.Println("Steuer-API — Sessions aus einem Skript oder einem Coding-Agent heraus steuern:")

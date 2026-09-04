@@ -2,6 +2,7 @@ package remote
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -19,11 +20,11 @@ import (
 // zweiter Lifecycle. Was hier nicht verdrahtet ist (App-lokale
 // Kompositionen aus Verlaufslesern), meldet ErrorMethod statt zu raten.
 type CoreBackend struct {
-	observe  func(context.Context, []core.Session) core.ObservationSnapshot
-	planner  *core.AttentionPlanner
-	ledger   *identityLedger
-	termSrc  TermSource
-	events   *eventLog
+	observe func(context.Context, []core.Session) core.ObservationSnapshot
+	planner *core.AttentionPlanner
+	ledger  *identityLedger
+	termSrc TermSource
+	events  *eventLog
 }
 
 // TermSource liefert Terminal-Bytes für Streams; die Produktion hängt den
@@ -322,6 +323,15 @@ func (b *CoreBackend) HandleCall(ctx context.Context, method string, params json
 		return b.mutate(identity, method, func() (any, error) {
 			return b.sidebar(ctx, method, args.DividerID, args.Name, args.Collapsed, args.Kind, args.Ref, args.ParentKind, args.Parent, args.Order)
 		})
+	case "OpenTerm", "WriteTerm", "ResizeTerm", "CloseTerm":
+		var args struct {
+			SessionID string `json:"sessionID"`
+			DataB64   string `json:"dataB64"`
+			Cols      int    `json:"cols"`
+			Rows      int    `json:"rows"`
+		}
+		decodeParams(params, &args)
+		return b.terminal(method, args.SessionID, args.DataB64, args.Cols, args.Rows)
 	default:
 		return nil, &WireError{Code: ErrorMethod, Message: "Methode " + method + " wird von diesem Host noch nicht über Remote bedient"}
 	}
@@ -985,6 +995,35 @@ func (b *CoreBackend) sidebar(ctx context.Context, method, dividerID, name strin
 		_, err := registry.Change(ctx, core.MoveSidebarItem(
 			core.SidebarSlotKind(kind), ref, core.SidebarSlotKind(parentKind), parent, order))
 		return nil, err
+	}
+}
+
+// terminal bedient Open/Write/Resize/Close über die Terminal-Quelle: Der
+// Stream trägt die Bytes, diese Aufrufe tragen Anhang, Eingabe und Größe.
+func (b *CoreBackend) terminal(method, sessionID, dataB64 string, cols, rows int) (any, error) {
+	if b.termSrc == nil {
+		return nil, &WireError{Code: ErrorMethod, Message: "keine Terminal-Quelle eingehängt"}
+	}
+	id := strings.TrimSpace(sessionID)
+	if id == "" {
+		return nil, fmt.Errorf("SessionID fehlt")
+	}
+	switch method {
+	case "OpenTerm":
+		if err := b.termSrc.Resize(id, cols, rows); err != nil {
+			return nil, err
+		}
+		return map[string]bool{"attached": true}, nil
+	case "WriteTerm":
+		data, err := base64.StdEncoding.DecodeString(dataB64)
+		if err != nil || len(data) == 0 {
+			return nil, fmt.Errorf("Eingabe unlesbar")
+		}
+		return nil, b.termSrc.Write(id, data)
+	case "ResizeTerm":
+		return nil, b.termSrc.Resize(id, cols, rows)
+	default:
+		return map[string]bool{"closed": true}, nil
 	}
 }
 

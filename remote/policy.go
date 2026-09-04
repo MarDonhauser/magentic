@@ -68,11 +68,11 @@ var RemoteActionPolicy = map[string]PolicyEntry{
 
 	// Nachrichten, Skills, Prompts, Session-Anlage, harmlose Registry-
 	// Übergänge: erlaubt.
-	"SendSkill":             {ActionPermitted, "Nachricht an die Session"},
-	"SendMessage":           {ActionPermitted, "Nachricht an die Session"},
-	"DiscardQueuedMessage":  {ActionPermitted, "Outbox-Verwaltung der Session"},
-	"RetryQueuedMessage":    {ActionPermitted, "Outbox-Verwaltung der Session"},
-	"SaveSessionAutomation": {ActionPermitted, "Automatisierung der Session"},
+	"SendSkill":               {ActionPermitted, "Nachricht an die Session"},
+	"SendMessage":             {ActionPermitted, "Nachricht an die Session"},
+	"DiscardQueuedMessage":    {ActionPermitted, "Outbox-Verwaltung der Session"},
+	"RetryQueuedMessage":      {ActionPermitted, "Outbox-Verwaltung der Session"},
+	"SaveSessionAutomation":   {ActionPermitted, "Automatisierung der Session"},
 	"DeleteSessionAutomation": {ActionPermitted, "Automatisierung der Session"},
 	"SwitchSessionVendor":     {ActionPermitted, "Vendor-Wechsel der Session"},
 	"HandoffSession":          {ActionPermitted, "Übergabe zwischen Sessions"},

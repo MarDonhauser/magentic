@@ -134,9 +134,9 @@ func TestUnmarshalFrameRefusesUnknownKind(t *testing.T) {
 // Transportausfall unterscheidbar.
 func TestHostUnavailabilitySurvivesSerialization(t *testing.T) {
 	want := core.ObservationSnapshot{
-		Availability:      core.ObservationUnavailable,
-		Transport:         core.ObservationTransportRemote,
-		TransportProblem:  "",
+		Availability:     core.ObservationUnavailable,
+		Transport:        core.ObservationTransportRemote,
+		TransportProblem: "",
 		Problems: []core.ObservationProblem{
 			{Operation: "list-panes", Message: "timed out", TimedOut: true},
 		},

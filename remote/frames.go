@@ -28,9 +28,9 @@ const (
 // Inhalt (Terminal-Bytes bzw. Snapshot-Text), Event ist eine Statusmeldung,
 // Control ein Steuerwort. Genau eines ist je nach Kind gesetzt.
 type Frame struct {
-	Kind    FrameKind `json:"kind"`
-	Seq     uint64    `json:"seq"`
-	Payload string    `json:"payload,omitempty"`
+	Kind    FrameKind   `json:"kind"`
+	Seq     uint64      `json:"seq"`
+	Payload string      `json:"payload,omitempty"`
 	Event   StatusEvent `json:"event,omitempty"`
 	Control string      `json:"control,omitempty"`
 }

@@ -170,7 +170,10 @@ func (s *termSubscriber) deliver(frame Frame, log *eventLog) {
 
 // subscribe öffnet einen Stream ab fromSeq: im Fenster Replay plus live,
 // außerhalb Lücke plus frischer Snapshot. fromSeq 0 heißt Neu-Anhang und
-// bekommt den aktuellen Stand als Ursprung.
+// bekommt den aktuellen Stand als Ursprung. Das Abo hängt VOR dem Snapshot
+// ein, damit kein Byte zwischen Snapshot und Anhang verloren geht: Was
+// dazwischen live eintrifft, deckt der Snapshot ab (die Lücke ersetzt), was
+// danach kommt, trägt das Replay nach.
 func (l *eventLog) subscribe(sessionID string, fromSeq uint64) (StreamSubscription, error) {
 	if l.termOf == nil {
 		return nil, &WireError{Code: ErrorInternal, Message: "keine Terminal-Quelle eingehängt"}
@@ -180,24 +183,30 @@ func (l *eventLog) subscribe(sessionID string, fromSeq uint64) (StreamSubscripti
 		return nil, &WireError{Code: ErrorMethod, Message: "Session " + sessionID + " hat keine Terminal-Quelle"}
 	}
 	sub := &termSubscriber{frames: make(chan Frame, subscriberBudget)}
+	l.attach(sessionID, sub)
+	subscription := &logSubscription{log: l, session: sessionID, sub: sub}
 	ring := l.ring(sessionID)
 	if fromSeq > 0 {
 		if frames, _, ok := ring.Replay(fromSeq); ok {
 			for _, frame := range frames {
 				sub.frames <- frame
 			}
-			l.attach(sessionID, sub)
-			return &logSubscription{log: l, session: sessionID, sub: sub}, nil
+			return subscription, nil
 		}
 	}
 	snapshot, err := source.Snapshot(sessionID)
 	if err != nil {
+		l.detach(sessionID, sub)
 		return nil, &WireError{Code: ErrorObservation, Message: "Pane-Snapshot derzeit nicht lesbar: " + err.Error()}
 	}
-	_, next := ring.Bounds()
-	sub.frames <- GapFrame(next, snapshot)
-	l.attach(sessionID, sub)
-	return &logSubscription{log: l, session: sessionID, sub: sub}, nil
+	_, origin := ring.Bounds()
+	sub.frames <- GapFrame(origin, snapshot)
+	if frames, _, ok := ring.Replay(origin); ok {
+		for _, frame := range frames {
+			sub.frames <- frame
+		}
+	}
+	return subscription, nil
 }
 
 func (l *eventLog) attach(sessionID string, sub *termSubscriber) {
@@ -213,6 +222,14 @@ func (l *eventLog) detach(sessionID string, sub *termSubscriber) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.subs[sessionID], sub)
+}
+
+// subscriberCount nennt die Zahl offener Abos einer Session (für Tests, die
+// erst nach vollständigem Anhang publizieren).
+func (l *eventLog) subscriberCount(sessionID string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.subs[sessionID])
 }
 
 type logSubscription struct {

@@ -64,8 +64,6 @@ func (s *StubBackend) Subscribe(sessionID string, fromSeq uint64) (StreamSubscri
 
 type stubSubscription struct {
 	frames chan Frame
-	closed chan struct{}
-	once   chan struct{}
 }
 
 func (s *stubSubscription) Frames() <-chan Frame { return s.frames }

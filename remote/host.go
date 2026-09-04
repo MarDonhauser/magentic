@@ -86,10 +86,10 @@ func NewHost(config HostConfig) (*Host, error) {
 		return nil, err
 	}
 	host := &Host{
-		config: config,
-		tokens: tokens,
-		closed: make(chan struct{}),
-		streams: map[*streamConn]string{},
+		config:   config,
+		tokens:   tokens,
+		closed:   make(chan struct{}),
+		streams:  map[*streamConn]string{},
 		upgrader: websocket.Upgrader{},
 	}
 	mux := http.NewServeMux()

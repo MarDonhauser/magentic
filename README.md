@@ -593,3 +593,87 @@ Code-Signing-Zertifikat `magentic-dev` im Login-Schlüsselbund an (macOS fragt
 dabei einmal nach dem Passwort, und beim ersten Signieren ggf. nach „Immer
 erlauben"). Danach läuft `build-app.sh` ohne Rückfragen durch. Anschließend
 einmal das Mikrofon erlauben — das gilt dann für alle künftigen Builds.
+
+## Remote-Zugriff (Host-Dienst)
+
+Der Host-Dienst stellt die Sessions einer Maschine im vertrauenswürdigen Netz
+zur Verfügung — etwa vom Mac aus an den Linux-Rechner unter dem Schreibtisch
+angebunden. Transport: nur TLS mit selbstsigniertem, gepinntem Zertifikat;
+Anmeldung: HostToken (pre-shared Geräte-Anmeldedaten).
+
+```sh
+magentic serve-remote                          # Opt-in: hört auf 127.0.0.1:8443
+magentic serve-remote --bind 100.64.0.2        # Overlay-Adresse (Tailscale/LAN)
+magentic serve-remote --issue-token            # frische Geräte-Anmeldedaten ausgeben
+magentic serve-remote --revoke-token <wert>    # entziehen (schließt ihre Streams)
+magentic serve-remote --allow RemoveWorktree   # einzelne beschränkte Aktion öffnen
+```
+
+Vertrauensannahmen (narrow, deliberately): ein Entwickler, ein oder mehrere
+Geräte-Anmeldedaten, Perimeter ist das Overlay-Netz. Wer einen HostToken hält,
+hält die erlaubte Aktionsfläche inklusive Terminal-Eingaben — ein
+kompromittiertes Client-Gerät ist ein kompromittierter Host. Es gibt kein
+Benutzermodell und keine Rechte jenseits der Policy unten.
+
+- **Default-Bindung:** Loopback (`127.0.0.1`). Jede andere Bindung braucht
+  `--bind` und damit eine bewusste Entscheidung. Ohne `serve-remote` öffnet
+  Magentic keinen Port. Der Host meldet beim Start, woran er hängt.
+- **Token-Handhabung:** 256 Bit Entropie, nur Hashes ruhen auf Platte
+  (`remote-host/host-tokens.json`, 0600). Vergleich in konstanter Zeit. Der
+  Klartext erscheint genau einmal bei `--issue-token`; danach nie wieder —
+  weder in Logs noch in Fehlermeldungen. Der Client legt ihn ausschließlich
+  im OS-Credential-Store ab (Schlüsselbund/Secret-Service), nie in Dateien.
+- **Widerruf:** `--revoke-token` entzieht einzeln; offene Streams dieser
+  Anmeldedaten schließt der Host sofort, Folgeanfragen werden abgewiesen.
+  Andere Geräte bleiben unberührt.
+- **TLS:** Selbstsigniert, beim ersten Start erzeugt (`remote-host/`,
+  0600). Der Client pinnt den Fingerprint beim ersten Attach (TOFU) und
+  verweigert jede Änderung danach.
+
+RemoteActionPolicy (Default, hostseitig erzwungen, clientseitig nur
+angezeigt). Die Marker in den Zeilen prüft ein Test gegen die erzwungene
+Tabelle — Doku und Durchsetzung können nicht auseinanderlaufen:
+
+<!-- policy: Overview permitted -->
+<!-- policy: Board permitted -->
+<!-- policy: GitGraph permitted -->
+<!-- policy: Stats permitted -->
+<!-- policy: OpenTerm permitted -->
+<!-- policy: WriteTerm permitted -->
+<!-- policy: ResizeTerm permitted -->
+<!-- policy: CloseTerm permitted -->
+<!-- policy: SendMessage permitted -->
+<!-- policy: SendSkill permitted -->
+<!-- policy: NewSession permitted -->
+<!-- policy: MarkSeen permitted -->
+<!-- policy: StartBoardItem permitted -->
+<!-- policy: RemoveWorktree restricted -->
+<!-- policy: RemoveProject restricted -->
+<!-- policy: AddProject restricted -->
+<!-- policy: KillSession restricted -->
+
+Erlaubt sind außerdem: BoardArchive, SessionAutomation, CompleteCommands,
+PromptLinePattern, SessionConversation, SessionPreview, SessionLinks,
+SearchTranscripts, Timeline, WorktreeDiff, StructuredDiff, Review-Kommentare
+und -Versand, Inbox, DeployStatus, Breaks-Lesen, AgentVendors,
+Terminal-Aufrufe, Nachrichten/Outbox/Automatisierung, Vendor-Wechsel,
+Handoff, Done, Session-Anlagen, Gesehen/Service-Markierung,
+Specification-Starts und Cleanup/Merge/Deploy-Sessions, Parken, Wiederöffnen,
+Fortsetzen, Frischstart, Verwerfen, Divider/Sidebar-Darstellung. Beschränkt
+bleiben zusätzlich alle rein lokalen Bedienungen (Ordnerdialog,
+Zwischenablage, Build-Info, Mitteilungen, Pausen, Cloud-Konten, Notch,
+Zeitgeist, Dateilisten des Hosts) — der Client bedient sie selbst, der Host
+verweigert sie über das Netz.
+
+Verbindungsabriss ist unavailable Wissen, nie Abwesenheit: Der Client zeigt
+die letzte bekannte Sicht mit Alter, blockiert Zerstörendes bis frische
+Fakten da sind, versucht Reconnect mit begrenztem Backoff (kein Retry nach
+Anmelde-Verweigerung oder bewusstem Detach) und setzt Terminal-Streams an der
+letzten Position fort — oder ersetzt ehrlich per Snapshot mit Lücken-Markierung.
+
+Browser-Client (Entscheidung, Open Question aus dem Design): Die bestehende
+Web-Oberfläche importiert die Wails-Runtime (`../wailsjs/runtime/runtime`) und
+braucht damit ein zweites Build-Ziel, um im Browser zu laufen — das fällt
+nicht nebenbei ab und ist aus diesem Change herausgenommen. Die Host-API
+selbst ist reines JSON über HTTPS und damit browser-lesbar; ein
+Browser-Client bleibt eine Folgestufe mit eigenem Build.
