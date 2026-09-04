@@ -2657,7 +2657,7 @@ function worktreeRow(p, wt, notice) {
   const rowAgents = (wt.agents || []).filter(a => !a.dock);
   const agents = rowAgents.map(a => agentPill(a, p.name)).join('');
   const sessionPanels = rowAgents.map(a => queuedBlock(a) + composeBlock(a)).join('');
-  const warns = (wt.warnings || []).map(w => `<span class="warn">${esc(w)}</span>`).join('');
+  const warns = (wt.warnings || []).map(w => `<span class="row-warn">${esc(w)}</span>`).join('');
   const pathHtml = wt.isMain ? '' : `<span class="wt-path" title="${esc(wt.location)}">${esc(wt.location)}</span>`;
   const last = wt.lastMsg ? `<span class="lastmsg" title="letzter Commit">„${esc(wt.lastMsg)}“</span>` : '';
   const branch = wt.checkoutKnown ? wt.branch : 'Branch unbekannt';

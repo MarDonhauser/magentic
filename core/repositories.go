@@ -240,6 +240,85 @@ func (r *Repositories) WorktreeDiff(ctx context.Context, target RepositoryWorktr
 	return repositoryKnownFact(text)
 }
 
+// DiffComparisonMode names which comparison a structured diff was read with.
+// The working tree is measured against the current commit, the branch against
+// its base branch through the merge base.
+type DiffComparisonMode string
+
+const (
+	DiffComparisonWorkingTree DiffComparisonMode = "working_tree"
+	DiffComparisonBranch      DiffComparisonMode = "branch"
+)
+
+// DiffComparisonModeLabel states the active comparison in interface copy.
+func DiffComparisonModeLabel(mode DiffComparisonMode) string {
+	if mode == DiffComparisonBranch {
+		return "Branch gegen Basis-Branch"
+	}
+	return "Arbeitsverzeichnis gegen HEAD"
+}
+
+// StructuredDiffLineKind names what one diff line carries.
+type StructuredDiffLineKind string
+
+const (
+	StructuredDiffLineAdded   StructuredDiffLineKind = "added"
+	StructuredDiffLineRemoved StructuredDiffLineKind = "removed"
+	StructuredDiffLineContext StructuredDiffLineKind = "context"
+)
+
+// StructuredDiffLine is one addressable diff line. Added lines carry only a
+// new number, removed lines only an old number, context lines carry both.
+type StructuredDiffLine struct {
+	Kind    StructuredDiffLineKind `json:"kind"`
+	OldLine int                    `json:"oldLine,omitempty"`
+	NewLine int                    `json:"newLine,omitempty"`
+	Text    string                 `json:"text"`
+}
+
+// StructuredDiffHunk groups contiguous diff lines with their header offsets.
+type StructuredDiffHunk struct {
+	OldStart int                  `json:"oldStart"`
+	OldCount int                  `json:"oldCount"`
+	NewStart int                  `json:"newStart"`
+	NewCount int                  `json:"newCount"`
+	Lines    []StructuredDiffLine `json:"lines"`
+}
+
+// StructuredDiffFile is one changed path. Binary files and files beyond the
+// render caps are listed without hunks: binary files carry no line content,
+// capped files are present but not rendered and cannot be commented on.
+type StructuredDiffFile struct {
+	Path    string               `json:"path"`
+	OldPath string               `json:"oldPath,omitempty"`
+	Added   bool                 `json:"added,omitempty"`
+	Deleted bool                 `json:"deleted,omitempty"`
+	Renamed bool                 `json:"renamed,omitempty"`
+	Binary  bool                 `json:"binary,omitempty"`
+	Capped  bool                 `json:"capped,omitempty"`
+	Hunks   []StructuredDiffHunk `json:"hunks,omitempty"`
+}
+
+// StructuredDiff is the one file/hunk/line shape both comparison modes
+// produce, so the desktop renders and addresses lines the same way.
+type StructuredDiff struct {
+	Mode  DiffComparisonMode   `json:"mode"`
+	Base  string               `json:"base,omitempty"`
+	Files []StructuredDiffFile `json:"files"`
+}
+
+// Render caps from the review design: a large diff must stay readable, so
+// files beyond the caps are listed as present-but-not-rendered rather than
+// dropped silently.
+const (
+	StructuredDiffMaxFiles        = 100
+	StructuredDiffMaxLinesPerFile = 1000
+	// structuredDiffMaxUntrackedBytes bounds how much of one untracked file
+	// is read for its added-file rendering. Larger files are listed without
+	// content, like tracked binaries.
+	structuredDiffMaxUntrackedBytes = 512 * 1024
+)
+
 // RepositoryBaseline is portable Registry data. The Repositories Module owns
 // its interpretation; callers only retain it and pass it back to Inspect.
 type RepositoryBaseline struct {

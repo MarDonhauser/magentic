@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -322,5 +323,45 @@ func TestARunThatHasNotStartedReadsAsEmptyAndAvailable(t *testing.T) {
 	}
 	if reading.Conversation == nil || len(reading.Conversation.Items) != 0 {
 		t.Fatalf("Conversation = %+v, want leer und verfügbar", reading.Conversation)
+	}
+}
+
+func TestARepeatedPassDoesNotSearchTheVendorStorageAgain(t *testing.T) {
+	session, path := claudeRecordFile(t, "run-1", prompt("u1", "erste Frage"))
+	reader := NewConversationReader()
+	searches := 0
+	underlying := reader.locate
+	reader.locate = func(normalizer ConversationNormalizer, ref ConversationRef, known []ConversationSource) ([]ConversationSource, bool) {
+		if len(known) == 0 {
+			searches++
+		}
+		return underlying(normalizer, ref, known)
+	}
+	reader.Watch(session.ID)
+
+	reader.Pass([]Session{session})
+	appendRecords(t, path, prompt("u2", "zweite Frage"))
+	reader.Pass([]Session{session})
+	reader.Pass([]Session{session})
+
+	if searches != 1 {
+		t.Fatalf("%d Suchläufe über die Ablage des Vendors, want 1 — spätere Durchläufe bestätigen nur", searches)
+	}
+}
+
+func TestApplyingALongConversationStaysLinear(t *testing.T) {
+	conversation := Conversation{}
+	items := make([]Item, 20000)
+	for i := range items {
+		items[i] = Item{ID: "id-" + strconv.Itoa(i), Kind: ItemKindAgentMessage, Title: "x"}
+	}
+	conversation.Apply(items...)
+	if len(conversation.Items) != len(items) {
+		t.Fatalf("Conversation hält %d Items, want %d", len(conversation.Items), len(items))
+	}
+	// Erneutes Anwenden derselben Items ersetzt an Ort und Stelle statt anzuhängen.
+	conversation.Apply(items...)
+	if len(conversation.Items) != len(items) {
+		t.Fatalf("erneutes Anwenden wächst auf %d Items", len(conversation.Items))
 	}
 }

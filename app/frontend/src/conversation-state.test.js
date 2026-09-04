@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  applyReading, applyUpdate, emptyConversationState, renderModel, scrollDecision,
+  applyReading, applyUpdate, emptyConversationState, fnv1a, renderModel, rowSignature, scrollDecision,
 } from './conversation-state.js';
 
 function item(id, kind, extra = {}) {
@@ -179,4 +179,46 @@ test('Ein leerer Zustand ist kein verfügbarer Zustand', () => {
   const model = renderModel(emptyConversationState());
   assert.equal(model.kind, 'notice');
   assert.deepEqual(model.rows, []);
+});
+
+test('Die Zeilensignatur ist stabil für unveränderte Zeilen', () => {
+  const model = renderModel(available([
+    item('m1', 'agent-message', { title: 'Fertig', detail: '# Bericht\n\nText' }),
+  ]));
+  const again = renderModel(available([
+    item('m1', 'agent-message', { title: 'Fertig', detail: '# Bericht\n\nText' }),
+  ]));
+  assert.equal(rowSignature(model.rows[0], new Set()), rowSignature(again.rows[0], new Set()));
+});
+
+test('Die Zeilensignatur ändert sich mit Inhalt, Zustand und Ausklappung', () => {
+  const base = renderModel(available([
+    item('t1', 'command-execution', { title: 'go test', detail: 'ok' }),
+  ])).rows[0];
+  const sig = rowSignature(base, new Set());
+  const changedDetail = { ...base, detail: 'FAIL' };
+  assert.notEqual(rowSignature(changedDetail, new Set()), sig);
+  const changedTitle = { ...base, title: 'go vet' };
+  assert.notEqual(rowSignature(changedTitle, new Set()), sig);
+  const failed = { ...base, failed: true };
+  assert.notEqual(rowSignature(failed, new Set()), sig);
+  assert.notEqual(rowSignature(base, new Set(['t1'])), sig);
+});
+
+test('Die Zeilensignatur enthält die eingebetteten Kindzeilen', () => {
+  const model = renderModel(available([
+    item('task', 'delegated-task', { title: 'Auftrag' }),
+    item('kind', 'tool-call', { title: 'Suche', parentTaskId: 'task', delegated: true }),
+  ]));
+  const parent = model.rows.find(row => row.id === 'task');
+  assert.equal(parent.children.length, 1);
+  const sig = rowSignature(parent, new Set());
+  const grown = { ...parent, children: [...parent.children, { ...parent.children[0], id: 'neu' }] };
+  assert.notEqual(rowSignature(grown, new Set()), sig);
+});
+
+test('fnv1a ist deterministisch und unterscheidet Eingaben', () => {
+  assert.equal(typeof fnv1a('Bericht'), 'string');
+  assert.equal(fnv1a('Bericht'), fnv1a('Bericht'));
+  assert.notEqual(fnv1a('Bericht'), fnv1a('bericht'));
 });

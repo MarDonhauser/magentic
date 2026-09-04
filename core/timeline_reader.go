@@ -36,7 +36,11 @@ type conversationState struct {
 	conversation Conversation
 	scan         ConversationScan
 	positions    map[string]conversationPosition
-	failure      error
+	// sources is what Locate last resolved. Handing it back lets a vendor
+	// confirm a record it already found instead of searching its storage again
+	// on every pass.
+	sources []ConversationSource
+	failure error
 }
 
 // ConversationReader keeps the Conversations of the Sessions an interface is
@@ -51,6 +55,10 @@ type ConversationReader struct {
 	// readRange is the only way this reader touches a vendor's record. It is
 	// a field so a test can count how often a record is read.
 	readRange func(path string, offset int64) (conversationRange, error)
+	// locate is the only way this reader asks where a Conversation lives. It
+	// is a field for the same reason: searching a vendor's storage is the
+	// expensive part of a pass, and a test has to be able to count it.
+	locate func(ConversationNormalizer, ConversationRef, []ConversationSource) ([]ConversationSource, bool)
 }
 
 type conversationRange struct {
@@ -81,6 +89,9 @@ func NewConversationReader() *ConversationReader {
 		watched:   map[SessionID]bool{},
 		held:      map[SessionID]*conversationState{},
 		readRange: readConversationRange,
+		locate: func(normalizer ConversationNormalizer, ref ConversationRef, known []ConversationSource) ([]ConversationSource, bool) {
+			return normalizer.Locate(ref, known)
+		},
 	}
 }
 
@@ -165,21 +176,20 @@ func (r *ConversationReader) advance(session Session) (ConversationUpdate, bool)
 	if !ok {
 		return ConversationUpdate{}, false
 	}
-	sources, located := normalizer.Locate(ref)
-	if !located {
-		r.mu.Lock()
-		delete(r.held, session.ID)
-		r.mu.Unlock()
-		return ConversationUpdate{}, false
-	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	state := r.held[session.ID]
 	if state == nil || state.ref != ref {
 		state = r.freshState(ref, normalizer)
-		r.held[session.ID] = state
 	}
+
+	sources, located := r.locate(normalizer, ref, state.sources)
+	if !located {
+		delete(r.held, session.ID)
+		return ConversationUpdate{}, false
+	}
+	state.sources = sources
+	r.held[session.ID] = state
 
 	ranges, replace, err := r.planReading(state, sources)
 	if err != nil {
@@ -190,8 +200,10 @@ func (r *ConversationReader) advance(session Session) (ConversationUpdate, bool)
 	if replace {
 		// The record no longer extends what was read before, so the Items
 		// derived from the discarded reading cannot be accounted for and are
-		// replaced rather than extended.
+		// replaced rather than extended. The located sources survive: what
+		// changed is the content of a record, not where it lives.
 		state = r.freshState(ref, normalizer)
+		state.sources = sources
 		r.held[session.ID] = state
 		ranges, _, err = r.planReading(state, sources)
 		if err != nil {

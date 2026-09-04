@@ -1,0 +1,39 @@
+{
+  "hash": "88a087ad",
+  "configHash": "3fce7273",
+  "lockfileHash": "8607920b",
+  "browserHash": "0d711c97",
+  "optimized": {
+    "@xterm/addon-fit": {
+      "src": "../../frontend/node_modules/@xterm/addon-fit/lib/addon-fit.mjs",
+      "file": "@xterm_addon-fit.js",
+      "fileHash": "176f29f3",
+      "needsInterop": false
+    },
+    "@xterm/addon-web-links": {
+      "src": "../../frontend/node_modules/@xterm/addon-web-links/lib/addon-web-links.mjs",
+      "file": "@xterm_addon-web-links.js",
+      "fileHash": "9381d387",
+      "needsInterop": false
+    },
+    "@xterm/addon-webgl": {
+      "src": "../../frontend/node_modules/@xterm/addon-webgl/lib/addon-webgl.mjs",
+      "file": "@xterm_addon-webgl.js",
+      "fileHash": "24a426d1",
+      "needsInterop": false
+    },
+    "@xterm/xterm": {
+      "src": "../../frontend/node_modules/@xterm/xterm/lib/xterm.mjs",
+      "file": "@xterm_xterm.js",
+      "fileHash": "3b526995",
+      "needsInterop": false
+    },
+    "marked": {
+      "src": "../../frontend/node_modules/marked/lib/marked.esm.js",
+      "file": "marked.js",
+      "fileHash": "6cb6f23b",
+      "needsInterop": false
+    }
+  },
+  "chunks": {}
+}

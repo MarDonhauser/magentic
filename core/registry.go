@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 )
@@ -69,6 +70,11 @@ const (
 	registryRemoveDivider
 	registrySetDividerCollapsed
 	registryMoveSidebarItem
+	registryAddReviewComment
+	registryEditReviewComment
+	registryDeleteReviewComment
+	registryMarkReviewSent
+	registryDiscardSentReview
 )
 
 // sidebarChange carries the payload of the session-list arrangement changes.
@@ -108,6 +114,13 @@ type RegistryChange struct {
 	vendor       AgentVendor
 	service      bool
 	at           time.Time
+	// reviewComment carries the payload of the Review changes: the full
+	// comment for an add, the new text for an edit, and the comment or sent
+	// Review identity for a delete, send or discard.
+	reviewComment   ReviewComment
+	reviewCommentID string
+	reviewID        string
+	reviewText      string
 }
 
 func RegisterProject(project Project) RegistryChange {
@@ -239,6 +252,34 @@ func DeleteSessionAutomation(sessionID SessionID, name, automationID string) Reg
 
 func QueueDueSessionAutomation(sessionID SessionID, automationID string, at time.Time) RegistryChange {
 	return RegistryChange{kind: registryQueueDueAutomation, sessionID: sessionID, automationID: automationID, at: at}
+}
+
+// AddReviewComment appends a comment to the Session's one open Review,
+// creating the Review when the Session has none yet.
+func AddReviewComment(sessionID SessionID, name string, comment ReviewComment) RegistryChange {
+	return RegistryChange{kind: registryAddReviewComment, sessionID: sessionID, sessionName: name, reviewComment: comment}
+}
+
+// EditReviewComment replaces the text of one comment of the open Review.
+func EditReviewComment(sessionID SessionID, name, commentID, text string) RegistryChange {
+	return RegistryChange{kind: registryEditReviewComment, sessionID: sessionID, sessionName: name, reviewCommentID: commentID, reviewText: text}
+}
+
+// DeleteReviewComment removes one comment from the open Review.
+func DeleteReviewComment(sessionID SessionID, name, commentID string) RegistryChange {
+	return RegistryChange{kind: registryDeleteReviewComment, sessionID: sessionID, sessionName: name, reviewCommentID: commentID}
+}
+
+// MarkReviewSent records the open Review as sent, retains it as history and
+// starts a fresh empty open Review.
+func MarkReviewSent(sessionID SessionID, name string, at time.Time) RegistryChange {
+	return RegistryChange{kind: registryMarkReviewSent, sessionID: sessionID, sessionName: name, at: at}
+}
+
+// DiscardSentReview removes one sent Review from the history. The open Review
+// is unaffected.
+func DiscardSentReview(sessionID SessionID, name, reviewID string) RegistryChange {
+	return RegistryChange{kind: registryDiscardSentReview, sessionID: sessionID, sessionName: name, reviewID: reviewID}
 }
 
 func addDiscoveredSessionsChange(sessions []Session) RegistryChange {
@@ -625,6 +666,107 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 			automation.NextRunAt = nextAutomationRun(automation.NextRunAt, automation.EveryMinutes, at)
 		}
 		return true, "", session.ID, nil
+	case registryAddReviewComment, registryEditReviewComment, registryDeleteReviewComment, registryMarkReviewSent, registryDiscardSentReview:
+		idx := sessionIndex(state, change.sessionID, change.sessionName)
+		if idx < 0 {
+			return false, "", "", fmt.Errorf("Session %q nicht gefunden", change.sessionName)
+		}
+		session := &state.Agents[idx]
+		switch change.kind {
+		case registryAddReviewComment:
+			comment := change.reviewComment
+			comment.Path = strings.TrimSpace(comment.Path)
+			comment.Text = strings.TrimSpace(comment.Text)
+			comment.Quoted = strings.TrimRight(comment.Quoted, "\n")
+			if comment.Path == "" {
+				return false, "", "", fmt.Errorf("Review-Kommentar braucht einen Dateipfad")
+			}
+			if reviewCommentAnchorLine(comment) == 0 {
+				return false, "", "", fmt.Errorf("Review-Kommentar braucht eine Diff-Zeile")
+			}
+			if comment.Text == "" {
+				return false, "", "", fmt.Errorf("Kommentartext ist leer")
+			}
+			if comment.Mode == "" {
+				comment.Mode = DiffComparisonWorkingTree
+			}
+			if comment.Mode != DiffComparisonWorkingTree && comment.Mode != DiffComparisonBranch {
+				return false, "", "", fmt.Errorf("unbekannter Vergleichsmodus %q", comment.Mode)
+			}
+			if comment.ID == "" {
+				comment.ID = NewUUID()
+			}
+			if comment.CreatedAt.IsZero() {
+				comment.CreatedAt = time.Now()
+			}
+			if session.Review == nil {
+				session.Review = &SessionReview{ID: NewUUID()}
+			}
+			session.Review.Comments = append(session.Review.Comments, comment)
+			sortReviewComments(session.Review.Comments)
+		case registryEditReviewComment:
+			if session.Review == nil {
+				return false, "", "", fmt.Errorf("Kommentar nicht gefunden")
+			}
+			text := strings.TrimSpace(change.reviewText)
+			if text == "" {
+				return false, "", "", fmt.Errorf("Kommentartext ist leer")
+			}
+			msgIdx := reviewCommentIndex(session.Review.Comments, change.reviewCommentID)
+			if msgIdx < 0 {
+				return false, "", "", fmt.Errorf("Kommentar nicht gefunden")
+			}
+			session.Review.Comments[msgIdx].Text = text
+		case registryDeleteReviewComment:
+			if session.Review == nil {
+				return false, "", "", fmt.Errorf("Kommentar nicht gefunden")
+			}
+			msgIdx := reviewCommentIndex(session.Review.Comments, change.reviewCommentID)
+			if msgIdx < 0 {
+				return false, "", "", fmt.Errorf("Kommentar nicht gefunden")
+			}
+			session.Review.Comments = append(session.Review.Comments[:msgIdx], session.Review.Comments[msgIdx+1:]...)
+			if len(session.Review.Comments) == 0 {
+				session.Review.Comments = nil
+			}
+		case registryMarkReviewSent:
+			if session.Review == nil || len(session.Review.Comments) == 0 {
+				return false, "", "", fmt.Errorf("Review enthält keine Kommentare")
+			}
+			at := change.at
+			if at.IsZero() {
+				at = time.Now()
+			}
+			sent := SessionReview{
+				ID:       session.Review.ID,
+				Comments: append([]ReviewComment(nil), session.Review.Comments...),
+				SentAt:   at,
+			}
+			if sent.ID == "" {
+				sent.ID = NewUUID()
+			}
+			session.SentReviews = append(session.SentReviews, sent)
+			for len(session.SentReviews) > MaxSentReviewsPerSession {
+				session.SentReviews = append([]SessionReview(nil), session.SentReviews[1:]...)
+			}
+			session.Review = &SessionReview{ID: NewUUID()}
+		case registryDiscardSentReview:
+			discardIdx := -1
+			for i := range session.SentReviews {
+				if change.reviewID != "" && session.SentReviews[i].ID == change.reviewID {
+					discardIdx = i
+					break
+				}
+			}
+			if discardIdx < 0 {
+				return false, "", "", fmt.Errorf("Gesendetes Review nicht gefunden")
+			}
+			session.SentReviews = append(session.SentReviews[:discardIdx], session.SentReviews[discardIdx+1:]...)
+			if len(session.SentReviews) == 0 {
+				session.SentReviews = nil
+			}
+		}
+		return true, "", session.ID, nil
 	case registryAddDiscovered:
 		changed := false
 		var last SessionID
@@ -820,6 +962,9 @@ func validateRegistryState(state *State) error {
 				return fmt.Errorf("Session %q enthält eine ungültige Automatisierung: %w", session.Name, err)
 			}
 		}
+		if err := validateSessionReviews(session); err != nil {
+			return err
+		}
 	}
 	return validateSidebar(state)
 }
@@ -917,8 +1062,22 @@ func cloneState(state *State) State {
 			automation := *state.Agents[i].Automation
 			clone.Agents[i].Automation = &automation
 		}
+		clone.Agents[i].Review = cloneSessionReview(state.Agents[i].Review)
+		clone.Agents[i].SentReviews = append([]SessionReview(nil), state.Agents[i].SentReviews...)
+		for j := range clone.Agents[i].SentReviews {
+			clone.Agents[i].SentReviews[j].Comments = append([]ReviewComment(nil), state.Agents[i].SentReviews[j].Comments...)
+		}
 	}
 	return clone
+}
+
+func cloneSessionReview(review *SessionReview) *SessionReview {
+	if review == nil {
+		return nil
+	}
+	clone := *review
+	clone.Comments = append([]ReviewComment(nil), review.Comments...)
+	return &clone
 }
 
 func projectIndex(state *State, id ProjectID, name string) int {
@@ -946,6 +1105,60 @@ func queuedMessageIndex(outbox []QueuedMessage, id string) int {
 		}
 	}
 	return -1
+}
+
+// reviewCommentAnchorLine is the first addressed line of a comment: the new
+// side when the anchor touches added or context lines, else the old side.
+func reviewCommentAnchorLine(comment ReviewComment) int {
+	if comment.NewStart > 0 {
+		return comment.NewStart
+	}
+	return comment.OldStart
+}
+
+func reviewCommentIndex(comments []ReviewComment, id string) int {
+	for i := range comments {
+		if id != "" && comments[i].ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// sortReviewComments keeps the open Review in file-then-line order, so the
+// rendered prompt and the desktop list agree regardless of creation order.
+func sortReviewComments(comments []ReviewComment) {
+	sort.SliceStable(comments, func(i, j int) bool {
+		if comments[i].Path != comments[j].Path {
+			return comments[i].Path < comments[j].Path
+		}
+		if reviewCommentAnchorLine(comments[i]) != reviewCommentAnchorLine(comments[j]) {
+			return reviewCommentAnchorLine(comments[i]) < reviewCommentAnchorLine(comments[j])
+		}
+		return comments[i].ID < comments[j].ID
+	})
+}
+
+// validateSessionReviews keeps stored Reviews honest without migrating old
+// state: absent Reviews stay absent, present ones carry complete comments.
+func validateSessionReviews(session Session) error {
+	reviews := append([]SessionReview(nil), session.SentReviews...)
+	if session.Review != nil {
+		reviews = append(reviews, *session.Review)
+	}
+	for _, review := range reviews {
+		for _, comment := range review.Comments {
+			if comment.ID == "" || comment.Path == "" || comment.Text == "" {
+				return fmt.Errorf("Session %q enthält ein unvollständiges Review", session.Name)
+			}
+		}
+	}
+	for _, sent := range session.SentReviews {
+		if sent.ID == "" || sent.SentAt.IsZero() {
+			return fmt.Errorf("Session %q enthält ein unvollständiges gesendetes Review", session.Name)
+		}
+	}
+	return nil
 }
 
 func projectOrder(projects []Project) []ProjectID {

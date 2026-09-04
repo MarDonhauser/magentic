@@ -19,9 +19,11 @@ export const TERMINAL_FONT = 'ui-monospace, SFMono-Regular, "Commit Mono", Menlo
 // Gemeinsame Optionen beider Terminal-Oberflächen. Größe und Zeilenhöhe setzen
 // die Aufrufer, weil die Agentenansicht und das Raster unterschiedlich dicht sind.
 //
-// scrollback bewusst knapp (5000): Jede Zeile kostet JS-Heap plus WebGL-Textur,
-// und es lebt ein Terminal pro Session. Wer mehr Verlauf braucht, findet ihn im
-// Agenten-Verlauf.
+// scrollback bewusst begrenzt (5000): In der Agentenansicht bleiben auch
+// versteckte Terminals live — mit Puffer, Ereignisstrom und Renderer —, und im
+// Hydra-Raster sind viele gleichzeitig sichtbar. Wer mehr Verlauf braucht,
+// findet ihn im Agenten-Verlauf. Das Dock setzt seinen eigenen, großzügigeren
+// Wert, weil dort nur der sichtbare Tab ein Terminal besitzt.
 export const TERMINAL_OPTIONS = {
   fontFamily: TERMINAL_FONT,
   fontWeight: 400,

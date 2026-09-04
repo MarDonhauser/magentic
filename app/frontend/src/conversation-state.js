@@ -39,12 +39,20 @@ export function applyUpdate(state, event) {
   if (event?.replaced) {
     return { ...base, availability: AVAILABLE, itemsKnown: true, reason: '', items: items.slice() };
   }
+  // Ein Index statt einer Suche je Item: sonst wächst das Anwenden eines
+  // Stapels mit der Länge der Conversation multipliziert mit seiner eigenen.
   const next = base.items.slice();
+  const at = new Map();
+  for (let i = 0; i < next.length; i++) at.set(next[i].id, i);
   for (const item of items) {
     if (!item?.id) continue;
-    const at = next.findIndex(held => held.id === item.id);
-    if (at >= 0) next[at] = item;
-    else next.push(item);
+    const known = at.get(item.id);
+    if (known === undefined) {
+      at.set(item.id, next.length);
+      next.push(item);
+    } else {
+      next[known] = item;
+    }
   }
   return { ...base, availability: AVAILABLE, itemsKnown: true, items: next };
 }
@@ -210,4 +218,31 @@ export function scrollDecision({ scrollTop = 0, scrollHeight = 0, clientHeight =
     follow: atBottom && hasNewItems,
     showJumpToEnd: !atBottom,
   };
+}
+
+// fnv1a hashes a string to a short hex signature. It is only change detection
+// for the surface's row cache: fast enough to run over a whole transcript on
+// every draw, unlike the Markdown rendering it guards.
+export function fnv1a(text) {
+  let hash = 0x811c9dc5;
+  const input = String(text ?? '');
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+// rowSignature identifies one rendered row: its content, its flags, its nested
+// children and whether it is currently expanded. Rows whose signature did not
+// change keep their DOM nodes across draws, so a growing transcript costs one
+// Markdown pass per row instead of one per draw.
+export function rowSignature(row, expanded) {
+  const bits = [
+    row?.id ?? '', row?.kind ?? '', row?.title ?? '', row?.detail ?? '',
+    row?.failed ? 1 : 0, row?.awaiting ? 1 : 0, row?.delegated ? 1 : 0,
+    expanded?.has(row?.id) ? 1 : 0,
+  ];
+  for (const child of row?.children || []) bits.push(rowSignature(child, expanded));
+  return fnv1a(bits.join('\u0000'));
 }

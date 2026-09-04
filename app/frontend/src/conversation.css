@@ -22,10 +22,16 @@
   padding: 10px 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
   font-size: 13px;
   line-height: 1.5;
 }
+
+.cv-head,
+.cv-list,
+.cv-foot { display: flex; flex-direction: column; gap: 6px; }
+.cv-foot:empty,
+.cv-head:empty { display: none; }
 
 .cv-row { display: flex; flex-direction: column; gap: 4px; }
 
@@ -105,7 +111,7 @@
   background: rgba(127, 140, 160, .12);
 }
 
-.cv-actions { margin-top: 10px; }
+.cv-foot { flex-direction: row; }
 
 .cv-action {
   padding: 5px 10px;

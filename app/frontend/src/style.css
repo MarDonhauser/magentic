@@ -1314,10 +1314,8 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
 .git-state { font-size: var(--fs-label); color: var(--ink-2); display: inline-flex; align-items: center; gap: 5px; }
 .git-state.clean { color: var(--muted); }
 .branch.unknown,
-.ab.unknown,
 .git-state.unknown,
-.project-main-branch.unknown,
-.repo-unknown { color: var(--warning); }
+.project-main-branch.unknown { color: var(--warning); }
 .git-state.in-main { color: var(--good); }
 
 /* Der Grund steht einmal an der Karte. Er liest sich als Satz, nicht als
@@ -1406,17 +1404,29 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
   .pill-actions { transition: opacity .14s ease-out; transform: translate(0, -50%); }
 }
 
+/* .warn wird auch von den Git-Chips der Term-Leiste und vom Seitenlabel der
+   Navigation getragen. Die Warnung einer Worktree-Zeile hat deshalb ihre
+   eigene Klasse, statt deren Aussehen mitzuverändern. */
 .warn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: rgba(226,145,95,0.14);
+  border: 1px solid rgba(226,145,95,0.4);
+  border-radius: 999px; padding: 2px 10px; font-size: var(--fs-label); color: var(--ink-2);
+}
+.warn .ic { color: var(--serious); font-weight: var(--fw-bold); }
+
+/* In der Zeile zählt der Satz, nicht die Plakette: eine Karte trägt schnell
+   vier davon, und als gefüllte Badges rufen sie lauter als der Branch. */
+.row-warn {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: var(--fs-label); color: var(--serious);
 }
-.warn::before {
+.row-warn::before {
   content: '';
   flex: none;
   width: 5px; height: 5px; border-radius: 50%;
   background: currentColor;
 }
-.warn .ic { color: var(--serious); font-weight: var(--fw-bold); }
 .wt-path {
   color: var(--muted); font-size: var(--fs-meta); font-family: var(--font-mono);
   max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

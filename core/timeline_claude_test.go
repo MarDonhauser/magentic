@@ -323,7 +323,7 @@ func TestLocateFindsTheRunRecordAndItsSubagentRecords(t *testing.T) {
 	writeFixture(t, filepath.Join(subagents, "agent-abc.meta.json"), `{"agentType":"general-purpose","toolUseId":"toolu_1"}`)
 	writeFixture(t, filepath.Join(subagents, "agent-def.jsonl"), "")
 
-	sources, ok := claudeConversationNormalizer{root: root}.Locate(ConversationRef{Vendor: AgentVendorClaude, RunID: "run-1"})
+	sources, ok := claudeConversationNormalizer{root: root}.Locate(ConversationRef{Vendor: AgentVendorClaude, RunID: "run-1"}, nil)
 	if !ok {
 		t.Fatal("das Record der Session muss gefunden werden")
 	}
@@ -360,5 +360,53 @@ func writeFixture(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLocateConfirmsAKnownRecordInsteadOfSearchingAgain(t *testing.T) {
+	// Der Suchbaum ist leer: Was Locate zurückgibt, kann es nur aus der
+	// übergebenen Kenntnis haben — es hat also nicht erneut gesucht.
+	elsewhere := filepath.Join(t.TempDir(), "run-1.jsonl")
+	writeFixture(t, elsewhere, "")
+	normalizer := claudeConversationNormalizer{root: t.TempDir()}
+	ref := ConversationRef{Vendor: AgentVendorClaude, RunID: "run-1"}
+
+	if _, ok := normalizer.Locate(ref, nil); ok {
+		t.Fatal("ohne Kenntnis darf im leeren Baum nichts gefunden werden")
+	}
+	sources, ok := normalizer.Locate(ref, []ConversationSource{{Path: elsewhere}})
+	if !ok || len(sources) != 1 || sources[0].Path != elsewhere {
+		t.Fatalf("Locate = %+v (%v), want das bereits bekannte Record ohne neue Suche", sources, ok)
+	}
+}
+
+func TestAVanishedRecordIsSearchedForAgain(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "-Users-dev-navi")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	record := filepath.Join(project, "run-1.jsonl")
+	writeFixture(t, record, "")
+
+	normalizer := claudeConversationNormalizer{root: root}
+	ref := ConversationRef{Vendor: AgentVendorClaude, RunID: "run-1"}
+	sources, ok := normalizer.Locate(ref, []ConversationSource{{Path: filepath.Join(root, "weg.jsonl")}})
+	if !ok || sources[0].Path != record {
+		t.Fatalf("Locate = %+v (%v), want das tatsächlich vorhandene Record", sources, ok)
+	}
+}
+
+func TestALongToolResultIsCutWithAVisibleMarker(t *testing.T) {
+	long := strings.Repeat("x", claudeDetailLimit+5000)
+	items := normalizeClaude(t,
+		`{"type":"assistant","uuid":"a1","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cat gross.log"}}]}}`,
+		`{"type":"user","uuid":"u1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"`+long+`"}]}}`)
+	detail := items[1].Detail
+	if len(detail) > claudeDetailLimit+400 {
+		t.Fatalf("Detail ist %d Bytes lang, want höchstens rund %d", len(detail), claudeDetailLimit)
+	}
+	if !strings.Contains(detail, "gekürzt") {
+		t.Error("ein gekürztes Detail muss sagen, dass es gekürzt wurde")
 	}
 }

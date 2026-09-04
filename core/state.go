@@ -101,6 +101,10 @@ const (
 	QueuedMessageKindSkill      QueuedMessageKind = "skill"
 	QueuedMessageKindHandoff    QueuedMessageKind = "handoff"
 	QueuedMessageKindAutomation QueuedMessageKind = "automation"
+	// QueuedMessageKindReview carries a rendered diff Review back into the
+	// Session that produced the changes. Delivery reuses the literal
+	// bracketed-paste path every other kind uses.
+	QueuedMessageKindReview QueuedMessageKind = "review"
 )
 
 // QueuedMessage is one message waiting in a Session's Outbox. AttemptedAt is
@@ -112,6 +116,37 @@ type QueuedMessage struct {
 	EnqueuedAt  time.Time         `json:"enqueued_at"`
 	AttemptedAt time.Time         `json:"attempted_at,omitzero"`
 }
+
+// ReviewComment anchors one developer remark to a single diff line or a
+// contiguous line range within one file. OldStart/OldEnd address removed
+// lines, NewStart/NewEnd address added and context lines; Quoted carries the
+// anchored code as captured, and Mode records which comparison it was made
+// in, so a Review mixing both modes renders unambiguously.
+type ReviewComment struct {
+	ID        string             `json:"id"`
+	Path      string             `json:"path"`
+	OldStart  int                `json:"old_start,omitempty"`
+	OldEnd    int                `json:"old_end,omitempty"`
+	NewStart  int                `json:"new_start,omitempty"`
+	NewEnd    int                `json:"new_end,omitempty"`
+	Quoted    string             `json:"quoted,omitempty"`
+	Text      string             `json:"text"`
+	Mode      DiffComparisonMode `json:"mode"`
+	CreatedAt time.Time          `json:"created_at"`
+}
+
+// SessionReview is one Review belonging to a Session. A zero SentAt means the
+// Review is still open; a sent Review carries its send time and is read-only
+// history.
+type SessionReview struct {
+	ID       string          `json:"id"`
+	Comments []ReviewComment `json:"comments,omitempty"`
+	SentAt   time.Time       `json:"sent_at,omitzero"`
+}
+
+// MaxSentReviewsPerSession bounds the retained sent Reviews per Session; the
+// oldest is dropped beyond the bound.
+const MaxSentReviewsPerSession = 10
 
 // SessionAutomation is the one recurring instruction attached to a coding
 // Session. NextRunAt is persisted so restarts preserve the cadence instead of
@@ -175,6 +210,12 @@ type Session struct {
 	Service      bool               `json:"service,omitempty"`
 	Outbox       []QueuedMessage    `json:"outbox,omitempty"`
 	Automation   *SessionAutomation `json:"automation,omitempty"`
+	// Review is the Session's one open Review. A nil Review reads as an empty
+	// open Review, which keeps every state.json written before Reviews existed
+	// valid without a migration step. SentReviews carries the retained sent
+	// history, oldest first.
+	Review      *SessionReview  `json:"review,omitempty"`
+	SentReviews []SessionReview `json:"sent_reviews,omitempty"`
 }
 
 // Agent remains as a source-compatible name while callers migrate to Session.

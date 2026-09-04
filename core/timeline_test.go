@@ -24,6 +24,8 @@ func TestItemKindLabelsAreStableAndRoundTrip(t *testing.T) {
 		{ItemKindDelegatedTask, "delegated-task"},
 		{ItemKindContextCompaction, "context-compaction"},
 		{ItemKindError, "error"},
+		{ItemKindPermissionRequest, "permission-request"},
+		{ItemKindPermissionDecision, "permission-decision"},
 		{ItemKindUnknown, "unknown"},
 	}
 	if len(cases) != len(ItemKinds()) {

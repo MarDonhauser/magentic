@@ -314,9 +314,10 @@ function ensureLive(t) {
     ...TERMINAL_OPTIONS,
     fontSize: 13,
     lineHeight: 1.1,
-    // Dock-Tabs gibt es viele gleichzeitig: Scrollback kleiner als in der
-    // Agentenansicht, sonst wächst je ein voller Buffer plus WebGL-Textur pro Tab.
-    scrollback: 3000,
+    // Nur der jeweils sichtbare Tab je Blatt kostet einen Terminal-Puffer:
+    // versteckte Tabs erzeugen ihr Terminal erst bei der Aktivierung
+    // (ensureLive). Deshalb darf der sichtbare Verlauf hier großzügig sein.
+    scrollback: 10000,
     theme: terminalTheme(),
     minimumContrastRatio: terminalContrastFloor(),
   });

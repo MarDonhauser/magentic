@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // claudeConversationNormalizer reads Claude Code's own JSON Lines record —
@@ -21,25 +22,50 @@ func (claudeConversationNormalizer) Vendor() AgentVendor { return AgentVendorCla
 // Locate resolves the run's own record and, beside it, the record Claude
 // writes per delegated task under <run-id>/subagents. Without those files a
 // delegated task would show as a single row whose work is invisible.
-func (n claudeConversationNormalizer) Locate(ref ConversationRef) ([]ConversationSource, bool) {
+//
+// Finding the run's record means walking ~/.claude/projects, which holds
+// thousands of files on a machine that has been used for a while. That walk
+// happens once: a record named by a previous Locate is confirmed with one
+// stat, and only its subagent directory — a single, cheap directory read — is
+// looked at again on later passes.
+func (n claudeConversationNormalizer) Locate(ref ConversationRef, known []ConversationSource) ([]ConversationSource, bool) {
 	if ref.Vendor != AgentVendorClaude || strings.TrimSpace(ref.RunID) == "" {
 		return nil, false
+	}
+	record, found := n.locateRecord(ref, known)
+	if !found {
+		return nil, false
+	}
+	return append([]ConversationSource{{Path: record}}, n.subagentSources(record)...), true
+}
+
+// locateRecord confirms the record a previous Locate found, or searches for it.
+func (n claudeConversationNormalizer) locateRecord(ref ConversationRef, known []ConversationSource) (string, bool) {
+	if len(known) > 0 && known[0].Path != "" && known[0].DelegatedFrom == "" {
+		if info, err := os.Stat(known[0].Path); err == nil && !info.IsDir() {
+			return known[0].Path, true
+		}
 	}
 	matches := vendorRunMatches(n.root, ref.RunID, func(name, id string) bool {
 		return name == id+".jsonl"
 	})
 	if len(matches) == 0 {
-		return nil, false
+		return "", false
 	}
 	// A run identity is unique across projects; sorting keeps a duplicated
 	// record deterministic rather than dependent on walk order.
 	sort.Strings(matches)
-	record := matches[0]
-	sources := []ConversationSource{{Path: record}}
+	return matches[0], true
+}
+
+// subagentSources lists the delegated-task records Claude files beside the
+// run's own. New ones appear while the run proceeds, so this is read again on
+// every pass — one directory, not the whole storage root.
+func (n claudeConversationNormalizer) subagentSources(record string) []ConversationSource {
 	subagents := filepath.Join(strings.TrimSuffix(record, filepath.Ext(record)), "subagents")
 	entries, err := os.ReadDir(subagents)
 	if err != nil {
-		return sources, true
+		return nil
 	}
 	var names []string
 	for _, entry := range entries {
@@ -48,6 +74,7 @@ func (n claudeConversationNormalizer) Locate(ref ConversationRef) ([]Conversatio
 		}
 	}
 	sort.Strings(names)
+	sources := make([]ConversationSource, 0, len(names))
 	for _, name := range names {
 		path := filepath.Join(subagents, name)
 		sources = append(sources, ConversationSource{
@@ -55,7 +82,7 @@ func (n claudeConversationNormalizer) Locate(ref ConversationRef) ([]Conversatio
 			DelegatedFrom: claudeSubagentToolUseID(path),
 		})
 	}
-	return sources, true
+	return sources
 }
 
 // claudeSubagentToolUseID reads the tool call a subagent record belongs to
@@ -351,7 +378,7 @@ func claudeItemID(recordID string, index int) string {
 // claudeDetailBeyond keeps a detail only when it carries more than the title
 // already says, so a one-line message renders without an empty expandable body.
 func claudeDetailBeyond(title, text string) string {
-	detail := strings.TrimSpace(text)
+	detail := claudeCappedDetail(text)
 	if detail == title {
 		return ""
 	}
@@ -385,12 +412,19 @@ func claudeContentBlocks(raw json.RawMessage) ([]claudeContentBlock, string) {
 	return nil, text
 }
 
+// claudeDetailLimit caps what one Item carries. A tool result has no bound —
+// a single command can print megabytes — and an Item's detail travels whole to
+// every interface, on the first reading and in every later event. Cutting it
+// here keeps a Conversation transportable; the vendor's record still holds
+// everything.
+const claudeDetailLimit = 64 << 10
+
 // claudeResultText reads a tool result's content, which Claude writes either
 // as one string or as an array of text blocks.
 func claudeResultText(raw json.RawMessage) string {
 	blocks, plain := claudeContentBlocks(raw)
 	if blocks == nil {
-		return strings.TrimSpace(plain)
+		return claudeCappedDetail(plain)
 	}
 	var parts []string
 	for _, block := range blocks {
@@ -398,7 +432,21 @@ func claudeResultText(raw json.RawMessage) string {
 			parts = append(parts, text)
 		}
 	}
-	return strings.TrimSpace(strings.Join(parts, "\n"))
+	return claudeCappedDetail(strings.Join(parts, "\n"))
+}
+
+// claudeCappedDetail cuts at a rune boundary and says that it did, so a reader
+// never mistakes a cut for the end of the output.
+func claudeCappedDetail(text string) string {
+	detail := strings.TrimSpace(text)
+	if len(detail) <= claudeDetailLimit {
+		return detail
+	}
+	cut := claudeDetailLimit
+	for cut > 0 && !utf8.RuneStart(detail[cut]) {
+		cut--
+	}
+	return strings.TrimSpace(detail[:cut]) + "\n\n… gekürzt, die vollständige Ausgabe steht in der Aufzeichnung des Agenten."
 }
 
 func claudeToolInput(raw json.RawMessage) map[string]json.RawMessage {

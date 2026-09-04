@@ -414,7 +414,7 @@ func TestClaudeNormalizerSatisfiesTheContract(t *testing.T) {
 	if scan == nil {
 		t.Fatal("NewScan liefert keinen Scan")
 	}
-	if _, ok := normalizer.Locate(ConversationRef{Vendor: AgentVendorCodex, RunID: "run-1"}); ok {
+	if _, ok := normalizer.Locate(ConversationRef{Vendor: AgentVendorCodex, RunID: "run-1"}, nil); ok {
 		t.Error("der Claude-Normalizer darf keine Conversation eines fremden Vendors lokalisieren")
 	}
 }

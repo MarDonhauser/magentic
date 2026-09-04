@@ -21,7 +21,14 @@ const (
 	ItemKindDelegatedTask     ItemKind = "delegated-task"
 	ItemKindContextCompaction ItemKind = "context-compaction"
 	ItemKindError             ItemKind = "error"
-	ItemKindUnknown           ItemKind = "unknown"
+	// ItemKindPermissionRequest und ItemKindPermissionDecision halten eine
+	// managed Session offen: Die Frage, die der Agent stellte, und die
+	// Antwort, die eine Person darauf gab — in der Reihenfolge, in der sie
+	// geschahen. Sie entstehen im Agent-Host, nicht im Transcript-Reader,
+	// sind aber dieselben Items, kein zweites Modell.
+	ItemKindPermissionRequest  ItemKind = "permission-request"
+	ItemKindPermissionDecision ItemKind = "permission-decision"
+	ItemKindUnknown            ItemKind = "unknown"
 )
 
 // ItemKinds enumerates the closed set in a stable order.
@@ -39,6 +46,8 @@ func ItemKinds() []ItemKind {
 		ItemKindDelegatedTask,
 		ItemKindContextCompaction,
 		ItemKindError,
+		ItemKindPermissionRequest,
+		ItemKindPermissionDecision,
 		ItemKindUnknown,
 	}
 }
@@ -89,6 +98,11 @@ type Item struct {
 	// stays set when the agent was killed mid-call, which renders as
 	// unfinished rather than as a success.
 	AwaitingResult bool `json:"awaitingResult,omitempty"`
+	// InProgress marks a message the managed runtime published while it is
+	// still being produced. The completed message supersedes it in place
+	// (see Conversation.Apply), so a streamed message is never presented as
+	// finished and never appears twice.
+	InProgress bool `json:"inProgress,omitempty"`
 }
 
 // ConversationRef is the vendor-qualified handle of one coding-agent run's
@@ -103,15 +117,25 @@ type ConversationRef struct {
 type Conversation struct {
 	Ref   ConversationRef `json:"ref"`
 	Items []Item          `json:"items,omitempty"`
+	// index maps an Item identity to its position. Without it, applying a
+	// batch would scan every held Item per new Item, which turns the first
+	// reading of a long run into quadratic work. It is rebuilt on demand, so
+	// a decoded or zero Conversation stays usable.
+	index map[string]int
 }
 
 func (c *Conversation) indexOf(id string) int {
-	for i := range c.Items {
-		if c.Items[i].ID == id {
-			return i
+	if c.index == nil || len(c.index) != len(c.Items) {
+		c.index = make(map[string]int, len(c.Items))
+		for i := range c.Items {
+			c.index[c.Items[i].ID] = i
 		}
 	}
-	return -1
+	at, known := c.index[id]
+	if !known {
+		return -1
+	}
+	return at
 }
 
 // Append adds an Item unless its identity is already present. Re-reading the
@@ -119,6 +143,7 @@ func (c *Conversation) indexOf(id string) int {
 func (c *Conversation) Append(items ...Item) {
 	for _, item := range items {
 		if c.indexOf(item.ID) < 0 {
+			c.index[item.ID] = len(c.Items)
 			c.Items = append(c.Items, item)
 		}
 	}
@@ -133,6 +158,7 @@ func (c *Conversation) Apply(items ...Item) {
 			c.Items[at] = item
 			continue
 		}
+		c.index[item.ID] = len(c.Items)
 		c.Items = append(c.Items, item)
 	}
 }
@@ -195,7 +221,12 @@ type ConversationNormalizer interface {
 	// Locate resolves the record files this Conversation is normalized from,
 	// the run's own record first. A vendor that cannot locate the record
 	// reports false rather than an empty list.
-	Locate(ref ConversationRef) ([]ConversationSource, bool)
+	//
+	// known is what a previous Locate returned for this ref, or nil. Searching
+	// a vendor's storage can mean walking thousands of files, and this runs on
+	// every Observation pass, so a vendor that is handed what it found last
+	// time must confirm it cheaply instead of searching again.
+	Locate(ref ConversationRef, known []ConversationSource) ([]ConversationSource, bool)
 	// NewScan starts one normalization over one Conversation. The scan carries
 	// the state a later byte range depends on — the tool calls still waiting
 	// for their result, and the delegated tasks a subagent record can belong

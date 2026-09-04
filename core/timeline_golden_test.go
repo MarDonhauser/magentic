@@ -17,7 +17,7 @@ var updateGolden = flag.Bool("update", false, "die Golden-Dateien neu schreiben"
 func TestGoldenClaudeConversation(t *testing.T) {
 	root := filepath.Join("testdata", "timeline")
 	normalizer := claudeConversationNormalizer{root: root}
-	sources, ok := normalizer.Locate(ConversationRef{Vendor: AgentVendorClaude, RunID: "claude-run"})
+	sources, ok := normalizer.Locate(ConversationRef{Vendor: AgentVendorClaude, RunID: "claude-run"}, nil)
 	if !ok {
 		t.Fatal("das Fixture-Record wurde nicht gefunden")
 	}

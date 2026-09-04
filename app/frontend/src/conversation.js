@@ -2,7 +2,7 @@ import './conversation.css';
 
 import { renderMarkdown } from './conversation-markdown.js';
 import {
-  applyReading, applyUpdate, emptyConversationState, renderModel, scrollDecision,
+  applyReading, applyUpdate, emptyConversationState, renderModel, rowSignature, fnv1a, scrollDecision,
 } from './conversation-state.js';
 
 const KIND_LABELS = {
@@ -81,6 +81,15 @@ export function createConversationView({ host, onOpenTerminal } = {}) {
   let state = emptyConversationState();
   let waiting = false;
   const expanded = new Set();
+  const rendered = new Map();
+
+  const headEl = document.createElement('div');
+  headEl.className = 'cv-head';
+  const listEl = document.createElement('div');
+  listEl.className = 'cv-list';
+  const footEl = document.createElement('div');
+  footEl.className = 'cv-foot';
+  root.replaceChildren(headEl, listEl, footEl);
 
   function toggle(id) {
     if (expanded.has(id)) expanded.delete(id);
@@ -107,19 +116,39 @@ export function createConversationView({ host, onOpenTerminal } = {}) {
     return el;
   }
 
-  function actionsElement(model) {
-    if (!model.actions.length) return null;
-    const el = document.createElement('div');
-    el.className = 'cv-actions';
-    for (const action of model.actions) {
-      const button = document.createElement('button');
-      button.className = 'cv-action';
-      button.type = 'button';
-      button.textContent = action.label;
-      button.addEventListener('click', () => onOpenTerminal?.());
-      el.appendChild(button);
+  function buildRow(row) {
+    const el = rowElement(row, expanded.has(row.id), toggle);
+    if (row.children.length) {
+      const nested = document.createElement('div');
+      nested.className = 'cv-children';
+      for (const child of row.children) {
+        nested.appendChild(rowElement(child, expanded.has(child.id), toggle));
+      }
+      el.appendChild(nested);
     }
     return el;
+  }
+
+  // reconcile places exactly the rows the model asks for, reusing every
+  // element whose row did not change and touching the DOM only where the
+  // order actually differs.
+  function reconcile(rows) {
+    const wanted = rows.map(row => {
+      const signature = rowSignature(row, expanded);
+      const held = rendered.get(row.id);
+      if (held && held.signature === signature) return held.el;
+      const el = buildRow(row);
+      rendered.set(row.id, { signature, el });
+      return el;
+    });
+    const live = new Set(rows.map(row => row.id));
+    for (const id of rendered.keys()) {
+      if (!live.has(id)) rendered.delete(id);
+    }
+    wanted.forEach((el, index) => {
+      if (listEl.childNodes[index] !== el) listEl.insertBefore(el, listEl.childNodes[index] || null);
+    });
+    while (listEl.childNodes.length > wanted.length) listEl.removeChild(listEl.lastChild);
   }
 
   function draw(hasNewItems) {
@@ -128,8 +157,8 @@ export function createConversationView({ host, onOpenTerminal } = {}) {
       clientHeight: root.clientHeight, hasNewItems,
     });
     const model = renderModel(state, { waiting });
-    root.replaceChildren();
 
+    const head = [];
     if (model.waiting) {
       const el = document.createElement('div');
       el.className = 'cv-waiting';
@@ -138,25 +167,23 @@ export function createConversationView({ host, onOpenTerminal } = {}) {
       const detail = document.createElement('span');
       detail.textContent = model.waiting.detail;
       el.append(headline, detail);
-      root.appendChild(el);
+      head.push(el);
     }
-    if (model.kind !== 'items') {
-      root.appendChild(noticeElement(model));
+    if (model.kind !== 'items') head.push(noticeElement(model));
+    headEl.replaceChildren(...head);
+
+    reconcile(model.rows);
+
+    const foot = [];
+    for (const action of model.actions) {
+      const button = document.createElement('button');
+      button.className = 'cv-action';
+      button.type = 'button';
+      button.textContent = action.label;
+      button.addEventListener('click', () => onOpenTerminal?.());
+      foot.push(button);
     }
-    for (const row of model.rows) {
-      const el = rowElement(row, expanded.has(row.id), toggle);
-      if (row.children.length) {
-        const nested = document.createElement('div');
-        nested.className = 'cv-children';
-        for (const child of row.children) {
-          nested.appendChild(rowElement(child, expanded.has(child.id), toggle));
-        }
-        el.appendChild(nested);
-      }
-      root.appendChild(el);
-    }
-    const actions = actionsElement(model);
-    if (actions) root.appendChild(actions);
+    footEl.replaceChildren(...foot);
 
     if (decision.follow || (!hasNewItems && decision.atBottom)) {
       root.scrollTop = root.scrollHeight;
@@ -168,9 +195,15 @@ export function createConversationView({ host, onOpenTerminal } = {}) {
     setReading(result) {
       state = applyReading(result);
       expanded.clear();
+      rendered.clear();
+      listEl.replaceChildren();
       draw(false);
     },
     applyUpdate(event) {
+      if (event?.replaced) {
+        rendered.clear();
+        listEl.replaceChildren();
+      }
       state = applyUpdate(state, event);
       draw(true);
     },
