@@ -43,8 +43,8 @@ type ControlService struct {
 	managedInterrupt func(context.Context, Session) (ManagedTurn, error)
 	// managedAnswer delivers a developer's decision to one open request.
 	managedAnswer func(context.Context, Session, string, PermissionDecision, string) (PermissionRequest, error)
-	events *ControlEvents
-	now    func() time.Time
+	events        *ControlEvents
+	now           func() time.Time
 }
 
 type ControlServiceConfig struct {
@@ -64,12 +64,10 @@ func NewControlService(config ControlServiceConfig) *ControlService {
 		registry:     OpenRegistry(config.RegistryPath),
 		lifecycle:    OpenSessionLifecycle(SessionLifecycleConfig{RegistryPath: config.RegistryPath, LedgerPath: config.LedgerPath}),
 		repositories: NewRepositories(),
-		observe: func(ctx context.Context, sessions []Session) ObservationSnapshot {
-			return ObserveWithManaged(ctx, sessions, Observe, DefaultManagedStateProvider)
-		},
-		installed: providerBinaryAvailable,
-		events:    NewControlEvents(),
-		now:       time.Now,
+		observe:      ObserveSessions,
+		installed:    providerBinaryAvailable,
+		events:       NewControlEvents(),
+		now:          time.Now,
 	}
 	service.deliver = service.deliverThroughOutbox
 	service.managedInterrupt = interruptManagedTurnThroughHost

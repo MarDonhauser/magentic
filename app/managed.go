@@ -24,11 +24,20 @@ type ManagedPermissionView struct {
 // at all; unavailable means the host cannot be reached and names its reason.
 // Only available with an open permission or a running turn offers actions.
 type ManagedSessionStateResult struct {
-	SessionID   string                 `json:"sessionId"`
-	Availability string                `json:"availability"`
-	Reason      string                 `json:"reason,omitempty"`
-	TurnRunning bool                   `json:"turnRunning"`
-	Permission  *ManagedPermissionView `json:"permission,omitempty"`
+	SessionID    string                 `json:"sessionId"`
+	Availability string                 `json:"availability"`
+	Reason       string                 `json:"reason,omitempty"`
+	TurnRunning  bool                   `json:"turnRunning"`
+	Permission   *ManagedPermissionView `json:"permission,omitempty"`
+}
+
+// managedHostOf resolves one managed Session to its agent host's address.
+// Only the durably recorded socket path and token address the host.
+func managedHostOf(session core.Session) (string, core.AgentHostToken, error) {
+	if session.SessionRuntime() != core.RuntimeManaged {
+		return "", "", fmt.Errorf("%s läuft nicht verwaltet", session.Name)
+	}
+	return core.ManagedHostEndpoint(session.ID)
 }
 
 // ManagedSessionState answers the control facts of one Session. It reads
@@ -38,40 +47,30 @@ func (a *App) ManagedSessionState(sessionID string) ManagedSessionStateResult {
 	if err != nil {
 		return ManagedSessionStateResult{SessionID: sessionID, Availability: "unavailable", Reason: err.Error()}
 	}
-	if session.SessionRuntime() != core.RuntimeManaged {
-		return ManagedSessionStateResult{SessionID: sessionID, Availability: "not-managed"}
+	socketPath, token, err := managedHostOf(session)
+	if err != nil {
+		if session.SessionRuntime() != core.RuntimeManaged {
+			return ManagedSessionStateResult{SessionID: sessionID, Availability: "not-managed"}
+		}
+		return ManagedSessionStateResult{SessionID: sessionID, Availability: "unavailable", Reason: err.Error()}
 	}
-	registry := core.NewManagedHostRegistry()
-	records, err := registry.Records()
+	state, err := core.QueryAgentHostState(socketPath, token)
 	if err != nil {
 		return ManagedSessionStateResult{SessionID: sessionID, Availability: "unavailable", Reason: err.Error()}
 	}
-	for _, record := range records {
-		if record.SessionID != session.ID {
-			continue
-		}
-		state, err := core.QueryAgentHostState(record.SocketPath, record.Token)
-		if err != nil {
-			return ManagedSessionStateResult{SessionID: sessionID, Availability: "unavailable", Reason: err.Error()}
-		}
-		result := ManagedSessionStateResult{
-			SessionID: sessionID, Availability: "available",
-			TurnRunning: state.TurnKnown && state.Turn.Running,
-		}
-		if len(state.OpenPermissions) > 0 {
-			open := state.OpenPermissions[0]
-			result.Permission = &ManagedPermissionView{
-				ID: open.ID, Asked: open.Asked,
-				RaisedAt: open.RaisedAt.Format("15:04:05"),
-				Open: true,
-			}
-		}
-		return result
+	result := ManagedSessionStateResult{
+		SessionID: sessionID, Availability: "available",
+		TurnRunning: state.TurnKnown && state.Turn.Running,
 	}
-	return ManagedSessionStateResult{
-		SessionID: sessionID, Availability: "unavailable",
-		Reason: fmt.Sprintf("für Session %q ist kein Agent-Host verzeichnet", session.Name),
+	if len(state.OpenPermissions) > 0 {
+		open := state.OpenPermissions[0]
+		result.Permission = &ManagedPermissionView{
+			ID: open.ID, Asked: open.Asked,
+			RaisedAt: open.RaisedAt.Format("15:04:05"),
+			Open:     true,
+		}
 	}
+	return result
 }
 
 // InterruptManagedTurn ends the running turn of a managed Session, leaving
@@ -81,22 +80,12 @@ func (a *App) InterruptManagedTurn(sessionID string) error {
 	if err != nil {
 		return err
 	}
-	if session.SessionRuntime() != core.RuntimeManaged {
-		return fmt.Errorf("%s läuft nicht verwaltet — Interrupts gibt es nur für verwaltete Sessions", session.Name)
-	}
-	registry := core.NewManagedHostRegistry()
-	records, err := registry.Records()
+	socketPath, token, err := managedHostOf(session)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s — Interrupts gibt es nur für verwaltete Sessions", err)
 	}
-	for _, record := range records {
-		if record.SessionID != session.ID {
-			continue
-		}
-		_, err := core.InterruptAgentHostTurn(record.SocketPath, record.Token)
-		return err
-	}
-	return fmt.Errorf("für Session %q ist kein Agent-Host verzeichnet", session.Name)
+	_, err = core.InterruptAgentHostTurn(socketPath, token)
+	return err
 }
 
 // AnswerManagedPermission delivers a developer's explicit decision to one open
@@ -123,17 +112,10 @@ func (a *App) AnswerManagedPermission(sessionID, requestID, decision string) err
 	if strings.TrimSpace(requestID) == "" {
 		return fmt.Errorf("die Kennung der Berechtigungsanfrage fehlt")
 	}
-	registry := core.NewManagedHostRegistry()
-	records, err := registry.Records()
+	socketPath, token, err := managedHostOf(session)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s — Freigaben gibt es nur für verwaltete Sessions", err)
 	}
-	for _, record := range records {
-		if record.SessionID != session.ID {
-			continue
-		}
-		_, err := core.AnswerAgentHostPermission(record.SocketPath, record.Token, strings.TrimSpace(requestID), parsed, "Desktop-App")
-		return err
-	}
-	return fmt.Errorf("für Session %q ist kein Agent-Host verzeichnet", session.Name)
+	_, err = core.AnswerAgentHostPermission(socketPath, token, strings.TrimSpace(requestID), parsed, "Desktop-App")
+	return err
 }

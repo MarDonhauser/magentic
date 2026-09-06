@@ -59,9 +59,7 @@ func NewCoreBackend() *CoreBackend {
 func (b *CoreBackend) freshObserve(ctx context.Context, sessions []core.Session) core.ObservationSnapshot {
 	observe := b.observe
 	if observe == nil {
-		observe = func(ctx context.Context, sessions []core.Session) core.ObservationSnapshot {
-			return core.ObserveWithManaged(ctx, sessions, core.Observe, core.DefaultManagedStateProvider)
-		}
+		observe = core.ObserveSessions
 	}
 	snapshot := observe(ctx, sessions)
 	snapshot.Transport = core.ObservationTransportRemote

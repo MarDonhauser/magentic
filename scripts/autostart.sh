@@ -5,7 +5,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 LABEL="de.donhauser.magentic"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-APP="$(pwd)/app/build/bin/magentic.app"
+# Installierte Version hat Vorrang — sonst startet nach der Anmeldung ein
+# alter Repo-Build statt des Updates aus ./start.sh.
+if [ -d "/Applications/magentic.app" ]; then
+  APP="/Applications/magentic.app"
+else
+  APP="$(pwd)/app/build/bin/magentic.app"
+fi
 
 if [ "${1:-on}" = "off" ]; then
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true

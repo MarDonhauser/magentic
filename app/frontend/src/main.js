@@ -1127,38 +1127,21 @@ function openSessionActionsMenu(anchor, sessionID, sessionName, a, gone) {
   showSubMenu(anchor, `<div class="mi-head">${sessionToolMark(a)}${esc(sessionName)}</div>`, items);
 }
 
-// openQueueMenu zeigt, was die Badge in der Term-Leiste nur zählt: die
-// eingereihten Nachrichten mit Alter, Ungewiss-Vermerk und den Aktionen aus
-// der Übersicht (Verwerfen, erneut senden) — plus Einstieg zum Weiter-Einreihen.
+// openQueueMenu zeigt, was die Badge in der Term-Leiste nur zählt: derselbe
+// queuedBlock wie unter der Übersichts-Zeile — ein Renderer, ein Vokabular
+// (Verwerfen, erneut senden), plus Einstieg zum Weiter-Einreihen.
 function openQueueMenu(anchor, sessionID, sessionName) {
   if (subMenuEl.style.display === 'block' && subMenuAnchor === anchor) { hideSubMenu(); return; }
   const a = agentInfo(sessionName, sessionID);
-  const messages = queuedMessages(a);
-  if (!messages.length) {
+  if (!queuedMessages(a).length) {
     showSubMenu(anchor,
       `<div class="mi-head">${icon('hourglass')} Eingereiht</div>`,
       [{ icon: 'hourglass', label: 'Nachricht einreihen', hint: 'wird zugestellt, sobald die Session frei ist', run: () => toggleQueueForm(true) }]);
     return;
   }
   subMenuAnchor = anchor;
-  const head = `<div class="mi-head">${icon('hourglass')} Eingereiht — ` +
-    (messages.length === 1 ? '1 Nachricht wartet' : `${messages.length} Nachrichten warten`) + `</div>`;
-  const list = messages.map(message => {
-    const age = message.age ? `<span class="qm-age">${esc(message.age)}</span>` : '';
-    const note = message.stuck ? `<span class="qm-note">Zustellung ungewiss</span>` : '';
-    const retry = message.stuck
-      ? `<button type="button" class="btn tiny" data-queue-act="requeue" data-session-id="${esc(a.id)}" data-message-id="${esc(message.id)}" ` +
-        `title="Die Nachricht noch einmal zustellen — die Session könnte sie dann doppelt erhalten">Erneut senden</button>`
-      : '';
-    return `<div class="qm-item${message.stuck ? ' is-stuck' : ''}">` +
-      `<span class="qm-text" title="${esc(message.text)}">${esc(message.text)}</span>` +
-      `<span class="qm-meta">${age}${note}</span>` +
-      `<span class="qm-actions">${retry}` +
-      `<button type="button" class="btn tiny danger" data-queue-act="drop" data-session-id="${esc(a.id)}" data-message-id="${esc(message.id)}" ` +
-      `title="Die Nachricht aus der Warteschlange entfernen">Verwerfen</button></span></div>`;
-  }).join('');
-  subMenuEl.innerHTML = head +
-    `<div class="qm-list">${list}</div>` +
+  subMenuEl.innerHTML = `<div class="mi-head">${icon('hourglass')} Eingereiht</div>` +
+    queuedBlock(a) +
     `<div class="mi" data-queue-more>${icon('hourglass')}` +
     `<span class="mi-body"><span class="mi-label">Weitere Nachricht einreihen</span>` +
     `<span class="mi-hint">wird zugestellt, sobald die Session frei ist</span></span></div>`;
@@ -3891,9 +3874,9 @@ subMenuEl.addEventListener('click', async e => {
   } catch { /* toast zeigt den Fehler */ }
 });
 
-// Die Warteschlangen-Liste der Term-Leiste nutzt dieselben Aktionen wie die
-// Übersicht: Verwerfen und erneutes Senden laufen über act(), damit Toast und
-// Refresh (und damit die Badge-Anzahl) denselben Weg nehmen.
+// Die Warteschlangen-Liste der Term-Leiste trägt dieselben data-act-Knöpfe
+// wie die Übersicht — der Handler läuft über act(), damit Toast und Refresh
+// (und damit die Badge-Anzahl) denselben Weg nehmen.
 subMenuEl.addEventListener('click', async e => {
   const more = e.target.closest('[data-queue-more]');
   if (more) {
@@ -3901,7 +3884,7 @@ subMenuEl.addEventListener('click', async e => {
     toggleQueueForm(true);
     return;
   }
-  const button = e.target.closest('[data-queue-act]');
+  const button = e.target.closest('[data-act="dropqueued"], [data-act="requeue"]');
   if (!button) return;
   const sessionId = button.dataset.sessionId;
   const messageId = button.dataset.messageId;
@@ -3909,7 +3892,7 @@ subMenuEl.addEventListener('click', async e => {
   button.disabled = true;
   hideSubMenu();
   try {
-    if (button.dataset.queueAct === 'requeue') {
+    if (button.dataset.act === 'requeue') {
       await act(RetryQueuedMessage(sessionId, messageId), 'Die Nachricht wird erneut zugestellt.');
     } else {
       await act(DiscardQueuedMessage(sessionId, messageId), 'Die wartende Nachricht wurde verworfen.');

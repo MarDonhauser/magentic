@@ -835,7 +835,8 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
   box-shadow: var(--term-control-shadow-hover);
 }
 
-#terms:not(.hydra) #term-bar .tb-automation.is-active {
+#terms:not(.hydra) #term-bar .tb-automation.is-active,
+#terms:not(.hydra) #term-bar .tb-queue.is-active {
   border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
   background: var(--accent-soft);
   color: var(--accent);
@@ -844,12 +845,6 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
 /* Die Warteschlangen-Badge spricht dieselbe Sprache wie „Geplant“: aktiv
    heißt Accent. Nur die ungewisse Zustellung nach einem Absturz trägt Warnung,
    damit sie sich von der normalen Warteschlange unterscheidet. */
-#terms:not(.hydra) #term-bar .tb-queue.is-active {
-  border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-
 #terms:not(.hydra) #term-bar .tb-queue.is-active.is-stuck {
   border-color: color-mix(in srgb, var(--warning) 52%, var(--border));
   background: color-mix(in srgb, var(--warning) 12%, transparent);
@@ -1672,48 +1667,14 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
 #submenu .mi.danger:hover { background: rgba(224,108,117,0.14); }
 #submenu .mi > .ico { flex: none; }
 
-/* Die Warteschlangen-Liste der Term-Leiste: dieselben Inhalte wie unter der
-   Übersichts-Zeile, aber als kompakte Karten im Menü — lange Vorschauen werden
-   nach drei Zeilen abgeschnitten, der Volltext steht im title. */
-#submenu .qm-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 2px 2px 4px;
-}
-#submenu .qm-item {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--raise);
-}
-#submenu .qm-item.is-stuck { border-color: color-mix(in srgb, var(--warning) 45%, var(--border)); }
-#submenu .qm-text {
-  color: var(--ink);
-  font-size: var(--fs-label);
-  line-height: var(--lh-snug);
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-}
-#submenu .qm-item.is-stuck .qm-text { color: var(--warning); }
-#submenu .qm-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--fs-meta);
-  color: var(--muted);
-}
-#submenu .qm-age { font-variant-numeric: tabular-nums; }
-#submenu .qm-note { color: var(--warning); }
-#submenu .qm-actions {
-  display: flex;
-  gap: 6px;
-  margin-top: 2px;
+/* Der queuedBlock der Übersicht läuft auch im Eingereiht-Menü der Term-Leiste:
+   dort ist das Menü selbst die Karte, also fallen Rahmen, Fläche und der
+   Einzug der Übersichts-Zeile weg. */
+#submenu .queued {
+  margin: 0 0 2px;
+  padding: 6px 8px 4px;
+  border: 0;
+  background: none;
 }
 
 #search-view { position: absolute; inset: 0; display: none; flex-direction: column; padding: 4px 20px 10px; }

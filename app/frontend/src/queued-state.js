@@ -40,18 +40,11 @@ export function queuedBadge(agent) {
   if (!messages.length) return null;
   const stuck = messages.filter(message => message.stuck).length;
   const label = messages.length === 1 ? '1 wartet' : `${messages.length} warten`;
-  const previews = messages.map(message => message.text).filter(Boolean).slice(0, 3);
-  const extra = messages.length - previews.length;
-  const detail = previews.join(' · ') + (extra > 0 ? ` · +${extra} weitere` : '');
-  const uncertain = stuck
-    ? (stuck === 1
-      ? 'Bei einer davon ist ungewiss, ob die Session sie erhalten hat.'
-      : `Bei ${stuck} davon ist ungewiss, ob die Session sie erhalten hat.`)
-    : '';
-  const title = `${queuedHeadline(agent?.name, messages)}` +
-    (detail ? ` ${detail}` : '') +
-    (uncertain ? ` ${uncertain}` : '') +
-    ' Klicken für Details.';
+  // Der Titel nennt erst den Stand (inklusive Ungewiss-Vermerk aus der
+  // Headline), dann die Vorschauen — nichts davon zweimal.
+  const previews = messages.map(message => message.text).slice(0, 3);
+  if (messages.length > previews.length) previews.push(`+${messages.length - previews.length} weitere`);
+  const title = `${queuedHeadline(agent?.name, messages)} ${previews.join(' · ')} Klicken für Details.`;
   return { count: messages.length, stuck, label, title: title.trim() };
 }
 

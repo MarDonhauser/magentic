@@ -60,7 +60,7 @@ var (
 	discardSessionByID     = core.DiscardSessionByID
 	startSkillAgent        = core.StartSkillAgent
 	sendSkillByID          = core.SendSkillByID
-	observeSessions        = observeSessionsWithManaged
+	observeSessions        = core.ObserveSessions
 
 	shortPath     = core.ShortPath
 	formatAge     = core.FormatAge

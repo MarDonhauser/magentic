@@ -239,3 +239,24 @@ func TestReconcileManagedHostsIfOwningRefusesWhenAnotherDaemonOwns(t *testing.T)
 		t.Fatalf("results = %+v, want none — a refused daemon starts no agent process", results)
 	}
 }
+
+// ManagedHostEndpoint löst genau die verzeichneten Fakten auf — Socket-Pfad
+// und Token — und liest eine unbekannte Session als unerreichbar, nie als tot.
+func TestManagedHostEndpointResolvesRecordedFacts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "managed-hosts.json")
+	t.Setenv("MAGENTIC_MANAGED_HOSTS", path)
+	token := NewAgentHostToken()
+	if err := NewManagedHostRegistry().RecordIntent("session-1", "/tmp/session-1.sock", token); err != nil {
+		t.Fatal(err)
+	}
+	socketPath, got, err := ManagedHostEndpoint("session-1")
+	if err != nil {
+		t.Fatalf("Endpoint = %v", err)
+	}
+	if socketPath != "/tmp/session-1.sock" || got != token {
+		t.Fatalf("Endpoint = %q/%q, want Pfad und verzeichnetes Token", socketPath, got)
+	}
+	if _, _, err := ManagedHostEndpoint("session-fremd"); !errors.Is(err, ErrManagedHostUnreachable) {
+		t.Fatalf("unbekannte Session = %v, want ErrManagedHostUnreachable", err)
+	}
+}

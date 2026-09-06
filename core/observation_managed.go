@@ -14,6 +14,35 @@ import (
 // same way: neither adopted nor killed.
 type ManagedStateProvider func(ctx context.Context, session Session) (AgentHostState, error)
 
+// ObserveSessions is the production observation pass: tmux Sessions are read
+// from tmux, managed Sessions from their agent hosts. The host records are
+// read once per pass rather than once per managed Session; each host is still
+// dialed individually. No tmux command is issued for a managed Session, and
+// an unreachable daemon reads as unobservable, never as dead.
+func ObserveSessions(ctx context.Context, sessions []Session) ObservationSnapshot {
+	records, err := NewManagedHostRegistry().Records()
+	endpoints := make(map[SessionID]ManagedHostRecord, len(records))
+	if err == nil {
+		for _, record := range records {
+			endpoints[record.SessionID] = record
+		}
+	}
+	return ObserveWithManaged(ctx, sessions, Observe, func(_ context.Context, session Session) (AgentHostState, error) {
+		if err != nil {
+			return AgentHostState{}, fmtManagedHostUnreachable(session, err)
+		}
+		record, ok := endpoints[session.ID]
+		if !ok {
+			return AgentHostState{}, fmtManagedHostUnreachable(session, errors.New("kein Host verzeichnet"))
+		}
+		state, dialErr := QueryAgentHostState(record.SocketPath, record.Token)
+		if dialErr != nil {
+			return AgentHostState{}, fmtManagedHostUnreachable(session, dialErr)
+		}
+		return state, nil
+	})
+}
+
 // ObserveWithManaged reads tmux Sessions from tmux and managed Sessions from
 // their agent hosts. No tmux command is issued for a managed Session. Sessions
 // whose runtime is neither tmux nor managed are observed the tmux way, so an
@@ -78,25 +107,15 @@ func ObserveWithManaged(ctx context.Context, sessions []Session, tmuxObserve obs
 // facts and protocol events only: host liveness, the running or last turn,
 // and the open permission requests. Terminal content is never scraped.
 func observeManagedSession(ctx context.Context, session Session, provider ManagedStateProvider) SessionObservation {
-	observed := SessionObservation{
-		SessionID: session.ID, WorktreePath: session.Dir, Worktree: session.Worktree,
-	}
 	if provider == nil {
-		observed.Availability = ObservationUnavailable
-		observed.Presence = SessionPresenceUnknown
-		observed.Status = StatusUnknown
-		observed.Attention = AttentionUnknown
-		observed.Occupancy = OccupancyUnknown
-		return observed
+		return unobservableManagedSession(session)
 	}
 	state, err := provider(ctx, session)
 	if err != nil {
-		observed.Availability = ObservationUnavailable
-		observed.Presence = SessionPresenceUnknown
-		observed.Status = StatusUnknown
-		observed.Attention = AttentionUnknown
-		observed.Occupancy = OccupancyUnknown
-		return observed
+		return unobservableManagedSession(session)
+	}
+	observed := SessionObservation{
+		SessionID: session.ID, WorktreePath: session.Dir, Worktree: session.Worktree,
 	}
 	observed.Availability = ObservationAvailable
 	if state.Alive {
@@ -159,31 +178,33 @@ func managedStatusFromHostState(session Session, state AgentHostState) (AgentSta
 	return StatusIdle, StatusSourceSnapshot, "", time.Time{}, false
 }
 
+// unobservableManagedSession reports a managed Session whose host cannot be
+// read as unobservable with the daemon named — never as dead and never with
+// a plausible-looking status (ADR 0004).
+func unobservableManagedSession(session Session) SessionObservation {
+	return SessionObservation{
+		SessionID: session.ID, Availability: ObservationUnavailable,
+		Presence: SessionPresenceUnknown, Status: StatusUnknown,
+		Attention: AttentionUnknown, WorktreePath: session.Dir, Worktree: session.Worktree,
+		Occupancy: OccupancyUnknown,
+	}
+}
+
 // DefaultManagedStateProvider reads a managed Session's host through the
 // durably recorded socket path and token. A missing record, an unreachable
 // socket, or a foreign answer all read as unreachable: the Session is
 // unobservable with the daemon named, never dead.
 func DefaultManagedStateProvider(ctx context.Context, session Session) (AgentHostState, error) {
 	_ = ctx
-	registry := NewManagedHostRegistry()
-	records, err := registry.Records()
+	socketPath, token, err := ManagedHostEndpoint(session.ID)
 	if err != nil {
 		return AgentHostState{}, fmtManagedHostUnreachable(session, err)
 	}
-	for _, record := range records {
-		if record.SessionID != session.ID {
-			continue
-		}
-		state, err := QueryAgentHostState(record.SocketPath, record.Token)
-		if err != nil {
-			if errors.Is(err, ErrAgentHostForeign) {
-				return AgentHostState{}, fmtManagedHostUnreachable(session, err)
-			}
-			return AgentHostState{}, fmtManagedHostUnreachable(session, err)
-		}
-		return state, nil
+	state, err := QueryAgentHostState(socketPath, token)
+	if err != nil {
+		return AgentHostState{}, fmtManagedHostUnreachable(session, err)
 	}
-	return AgentHostState{}, fmtManagedHostUnreachable(session, errors.New("kein Host verzeichnet"))
+	return state, nil
 }
 
 func fmtManagedHostUnreachable(session Session, err error) error {

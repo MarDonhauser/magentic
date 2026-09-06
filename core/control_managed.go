@@ -11,35 +11,21 @@ import (
 // through its durably recorded agent host. Only the recorded socket path and
 // token address the host — never a process-table search.
 func interruptManagedTurnThroughHost(_ context.Context, session Session) (ManagedTurn, error) {
-	registry := NewManagedHostRegistry()
-	records, err := registry.Records()
+	socketPath, token, err := ManagedHostEndpoint(session.ID)
 	if err != nil {
-		return ManagedTurn{}, fmt.Errorf("%w: %v", ErrManagedHostUnreachable, err)
+		return ManagedTurn{}, err
 	}
-	for _, record := range records {
-		if record.SessionID != session.ID {
-			continue
-		}
-		return InterruptAgentHostTurn(record.SocketPath, record.Token)
-	}
-	return ManagedTurn{}, fmt.Errorf("%w: für Session %q ist kein Host verzeichnet", ErrManagedHostUnreachable, session.ID)
+	return InterruptAgentHostTurn(socketPath, token)
 }
 
 // answerManagedPermissionThroughHost delivers a developer's explicit decision
 // to one open PermissionRequest through its host, exactly once.
 func answerManagedPermissionThroughHost(_ context.Context, session Session, requestID string, decision PermissionDecision, decidedBy string) (PermissionRequest, error) {
-	registry := NewManagedHostRegistry()
-	records, err := registry.Records()
+	socketPath, token, err := ManagedHostEndpoint(session.ID)
 	if err != nil {
-		return PermissionRequest{}, fmt.Errorf("%w: %v", ErrManagedHostUnreachable, err)
+		return PermissionRequest{}, err
 	}
-	for _, record := range records {
-		if record.SessionID != session.ID {
-			continue
-		}
-		return AnswerAgentHostPermission(record.SocketPath, record.Token, requestID, decision, decidedBy)
-	}
-	return PermissionRequest{}, fmt.Errorf("%w: für Session %q ist kein Host verzeichnet", ErrManagedHostUnreachable, session.ID)
+	return AnswerAgentHostPermission(socketPath, token, requestID, decision, decidedBy)
 }
 
 // requireManagedSession refuses a managed-only verb against any other runtime
@@ -58,19 +44,29 @@ func requireManagedSession(session Session, verb string) *controlError {
 			"Interrupt und Freigaben gibt es nur für verwaltete Sessions.", session.Name, verb)
 }
 
+// resolveManagedSession resolves the addressed Session for a managed-only
+// verb and refuses any other runtime with the reason stated.
+func (s *ControlService) resolveManagedSession(ctx context.Context, args ControlArgs, verbNoun string) (Session, *controlError) {
+	state, failure := s.state(ctx)
+	if failure != nil {
+		return Session{}, failure
+	}
+	session, failure := resolveControlSession(state, args)
+	if failure != nil {
+		return Session{}, failure
+	}
+	if refusal := requireManagedSession(session, verbNoun); refusal != nil {
+		return Session{}, refusal
+	}
+	return session, nil
+}
+
 // sessionInterrupt stops the running turn of a managed Session, leaving its
 // process alive for the next prompt. With no turn running it is refused.
 func (s *ControlService) sessionInterrupt(ctx context.Context, request ControlRequest) ControlResponse {
-	state, failure := s.state(ctx)
+	session, failure := s.resolveManagedSession(ctx, request.Args, "einen Interrupt")
 	if failure != nil {
 		return failure.response(request.ID)
-	}
-	session, failure := resolveControlSession(state, request.Args)
-	if failure != nil {
-		return failure.response(request.ID)
-	}
-	if refusal := requireManagedSession(session, "einen Interrupt"); refusal != nil {
-		return refusal.response(request.ID)
 	}
 	interrupt := s.managedInterrupt
 	if interrupt == nil {
@@ -100,16 +96,9 @@ func (s *ControlService) sessionInterrupt(ctx context.Context, request ControlRe
 // PermissionRequest. There is no automatic answer: an empty decision, an
 // unknown request, and a second answer are all refused.
 func (s *ControlService) sessionAnswerPermission(ctx context.Context, request ControlRequest) ControlResponse {
-	state, failure := s.state(ctx)
+	session, failure := s.resolveManagedSession(ctx, request.Args, "eine Freigabe")
 	if failure != nil {
 		return failure.response(request.ID)
-	}
-	session, failure := resolveControlSession(state, request.Args)
-	if failure != nil {
-		return failure.response(request.ID)
-	}
-	if refusal := requireManagedSession(session, "eine Freigabe"); refusal != nil {
-		return refusal.response(request.ID)
 	}
 	decision, ok := parsePermissionDecision(request.Args.Decision)
 	if !ok {

@@ -260,17 +260,9 @@ func (h *AgentHost) serve(conn *net.UnixConn) {
 // ErrAgentHostForeign means something is there that this token does not own.
 // In neither case may the caller adopt or kill anything on that path.
 func ConnectAgentHost(path string, token AgentHostToken) error {
-	conn, err := net.Dial("unix", path)
+	response, err := callAgentHost(path, AgentHostRequest{Token: token, Method: AgentHostConnect})
 	if err != nil {
-		return fmt.Errorf("%w: %s: %v", ErrAgentHostUnreachable, path, err)
-	}
-	defer conn.Close()
-	if err := json.NewEncoder(conn).Encode(AgentHostRequest{Token: token, Method: AgentHostConnect}); err != nil {
-		return fmt.Errorf("%w: %s: %v", ErrAgentHostUnreachable, path, err)
-	}
-	var response AgentHostResponse
-	if err := json.NewDecoder(conn).Decode(&response); err != nil {
-		return fmt.Errorf("%w: %s: %v", ErrAgentHostUnreachable, path, err)
+		return err
 	}
 	if !response.Confirmed {
 		reason := response.Reason
@@ -367,10 +359,6 @@ func AnswerAgentHostPermission(path string, token AgentHostToken, requestID stri
 // with, so a second answer stays a refusal and an unknown request stays
 // unknown instead of flattening into one generic failure.
 func mapAgentHostMethodError(reason string) error {
-	switch {
-	case errors.Is(errors.New(reason), ErrPermissionClosed):
-		return ErrPermissionClosed
-	}
 	if strings.Contains(reason, ErrPermissionClosed.Error()) {
 		return fmt.Errorf("%w: %s", ErrPermissionClosed, reason)
 	}

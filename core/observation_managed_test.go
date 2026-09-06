@@ -27,7 +27,7 @@ func TestObserveManagedIssuesNoTmuxCall(t *testing.T) {
 	}
 	provider := func(_ context.Context, session Session) (AgentHostState, error) {
 		return AgentHostState{SessionID: session.ID, Alive: true,
-			Turn: ManagedTurn{SessionID: session.ID, Running: true, MessageID: "msg-1"},
+			Turn:      ManagedTurn{SessionID: session.ID, Running: true, MessageID: "msg-1"},
 			TurnKnown: true}, nil
 	}
 	snapshot := ObserveWithManaged(context.Background(), []Session{tmux, managed}, tmuxObserve, provider)
@@ -152,4 +152,45 @@ func TestNoAutomaticPermissionDecision(t *testing.T) {
 		t.Fatalf("ohne Interface muss die Anfrage offen bleiben: %+v", open)
 	}
 	_ = errors.Is
+}
+
+// StatusAwaitingDecision hängt hinten an: keine bereits gespeicherte Session
+// wird umnummeriert, und die Darstellung ist von blocked unterscheidbar.
+func TestAwaitingDecisionIsAppendedAndDistinct(t *testing.T) {
+	if int(StatusAwaitingDecision) != int(StatusDone)+1 {
+		t.Fatalf("StatusAwaitingDecision = %d, want eins nach StatusDone (%d)",
+			int(StatusAwaitingDecision), int(StatusDone))
+	}
+	if StatusAwaitingDecision.Label() == StatusBlocked.Label() {
+		t.Fatal("wartet-auf-Entscheidung muss sich von wartet unterscheiden lesen")
+	}
+	if StatusAwaitingDecision.Icon() == StatusBlocked.Icon() {
+		t.Fatal("wartet-auf-Entscheidung braucht ein eigenes Zeichen")
+	}
+	if got := AgentStatusFromPersistedLabel(StatusAwaitingDecision.PersistedLabel()); got != StatusAwaitingDecision {
+		t.Fatalf("PersistedLabel-Roundtrip = %v", got.Label())
+	}
+	if got := controlStatus(StatusAwaitingDecision); got != ControlStatusAwaitingDecision {
+		t.Fatalf("Kontrollstatus = %q, want %q", got, ControlStatusAwaitingDecision)
+	}
+}
+
+// ObserveSessions ist der Produktionseinstieg: ohne verzeichneten Host liest
+// eine verwaltete Session unverfügbar — mit benanntem Dämon, nicht als tot.
+func TestObserveSessionsReadsManagedWithoutTmux(t *testing.T) {
+	t.Setenv("MAGENTIC_MANAGED_HOSTS", t.TempDir()+"/managed-hosts.json")
+	managed := Session{ID: "session-m", Name: "managed", RuntimeName: "mgt-managed",
+		Dir: "/tmp/alpha", Vendor: AgentVendorClaude, Runtime: RuntimeManaged,
+		SessionKind: SessionKindCodingAgent}
+	snapshot := ObserveSessions(context.Background(), []Session{managed})
+	if len(snapshot.Sessions) != 1 {
+		t.Fatalf("Sessions = %+v", snapshot.Sessions)
+	}
+	observed := snapshot.Sessions[0]
+	if observed.Availability != ObservationUnavailable {
+		t.Fatalf("Verfügbarkeit = %q, want unavailable", observed.Availability)
+	}
+	if observed.Status == StatusDead || observed.Presence == SessionPresenceAbsent {
+		t.Fatalf("ohne Host darf nichts als tot lesen: %+v", observed)
+	}
 }

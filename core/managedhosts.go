@@ -190,6 +190,24 @@ func (r *ManagedHostRegistry) Records() ([]ManagedHostRecord, error) {
 	return records, nil
 }
 
+// ManagedHostEndpoint resolves one managed Session to the socket path and
+// handshake token its agent host was recorded with. Only these recorded facts
+// ever address the host — never a process-table search. A missing record or
+// an unreadable store reads as unreachable, so the Session is unobservable
+// and never dead.
+func ManagedHostEndpoint(sessionID SessionID) (socketPath string, token AgentHostToken, err error) {
+	records, recErr := NewManagedHostRegistry().Records()
+	if recErr != nil {
+		return "", "", fmt.Errorf("%w: %v", ErrManagedHostUnreachable, recErr)
+	}
+	for _, record := range records {
+		if record.SessionID == sessionID {
+			return record.SocketPath, record.Token, nil
+		}
+	}
+	return "", "", fmt.Errorf("%w: für Session %q ist kein Host verzeichnet", ErrManagedHostUnreachable, sessionID)
+}
+
 // ManagedHostOutcome is one recorded host's fate at reconciliation.
 type ManagedHostOutcome string
 

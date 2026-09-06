@@ -38,7 +38,7 @@ magentic hooks install     # Claude-Code-Hooks für Status-Meldungen einrichten
 magentic serve             # Steuer-API ohne Oberfläche bedienen
 magentic skill install     # Agent-Anleitung in ein Projekt schreiben
 open app/build/bin/magentic.app   # Desktop-App
-./start.sh                         # Desktop-App bequem starten
+./start.sh                         # Update: neu bauen, nach /Applications installieren, starten
 ```
 
 ## Tasten (TUI)
@@ -568,7 +568,11 @@ direkt ins Ziel bauen (oben) oder vorher `rm ~/.local/bin/magentic`.
 ```
 
 `build-app.sh` startet eine bereits laufende App am Ende automatisch neu —
-sonst arbeitet man weiter mit der alten Version. Welcher Build gerade läuft,
+sonst arbeitet man weiter mit der alten Version. `./start.sh` geht einen
+Schritt weiter: es beendet die laufende App, baut neu, ersetzt
+`/Applications/magentic.app` (alte Version wird gelöscht, nicht überkopiert)
+und startet die installierte Version. `./start.sh --start-only` startet nur,
+ohne zu bauen. Welcher Build gerade läuft,
 steht im Tooltip des „magentic"-Schriftzugs oben links in der App.
 
 **Autostart bei der Anmeldung:**
@@ -579,10 +583,11 @@ steht im Tooltip des „magentic"-Schriftzugs oben links in der App.
 ```
 
 Legt einen LaunchAgent unter `~/Library/LaunchAgents/de.donhauser.magentic.plist`
-an, der die gebaute App startet. Der Pfad zeigt in den Projektordner — ein
-späterer `build-app.sh` ersetzt die App an Ort und Stelle, der Autostart bleibt
-gültig. Nach einem Rechnerneustart ist also nichts zu tun; es startet immer
-der zuletzt gebaute Stand.
+an, der die installierte App (`/Applications/magentic.app`, ersatzweise den
+Repo-Build) startet. Ein späteres `./start.sh` ersetzt die installierte App an
+Ort und Stelle, der Autostart bleibt gültig und wird bei Bedarf auf die
+installierte App umgebogen. Nach einem Rechnerneustart ist also nichts zu tun;
+es startet immer der zuletzt installierte Stand.
 
 Das Skript baut mit `wails build` und signiert die App danach mit einer
 **stabilen Identität**. Das ist nötig für die Spracheingabe: macOS bindet die
