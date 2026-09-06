@@ -236,8 +236,9 @@ type ConversationReading struct {
 	Reason       string                   `json:"reason,omitempty"`
 }
 
-// AvailableConversation reports a Conversation that was located and read. An
-// available Conversation holding no Items is empty, which is distinct from
+// AvailableConversation reports a Conversation that was located and read —
+// or that was never located, in which case the run has produced nothing yet.
+// An available Conversation holding no Items is empty, which is distinct from
 // every unavailable reading.
 func AvailableConversation(conversation Conversation) ConversationReading {
 	return ConversationReading{

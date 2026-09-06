@@ -82,7 +82,11 @@ func TestBuildStatsConsumesNormalizedWorkHistory(t *testing.T) {
 	}
 	t.Cleanup(func() { history.Close() })
 
-	now := time.Now()
+	// Fixe lokale Mittagszeit statt Wall-Clock: Die Fixture liegt damit zu
+	// jeder Tageszeit am selben Kalendertag wie der letzte Day-Bucket. Mit
+	// time.Now() würde ein Lauf zwischen 00:00 und ~02:00 die Events über die
+	// Mitternachtsgrenze in den Vortag schieben und der Test flaken.
+	now := time.Date(2026, time.September, 7, 12, 0, 0, 0, time.Local)
 	claudePromptAt := now.Add(-2 * time.Hour).UTC().Format(time.RFC3339Nano)
 	claudeOutputAt := now.Add(-2*time.Hour + time.Minute).UTC().Format(time.RFC3339Nano)
 	delegatedPromptAt := now.Add(-90 * time.Minute).UTC().Format(time.RFC3339Nano)

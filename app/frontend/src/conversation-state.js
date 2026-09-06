@@ -111,7 +111,7 @@ const NOTICES = {
 
 // EMPTY_HEADLINE is deliberately different from every unavailable wording: an
 // available Conversation without Items means the run has produced nothing yet.
-const EMPTY_HEADLINE = 'Dieser Lauf hat noch nichts hervorgebracht.';
+const EMPTY_HEADLINE = 'Dieser Verlauf ist noch leer.';
 
 // renderModel is what the surface draws. It groups delegated work under its
 // task, states an unavailable reading with its reason, and — when the agent is
@@ -128,7 +128,7 @@ export function renderModel(state, context = {}) {
 
   if (current.availability !== AVAILABLE || !current.itemsKnown) {
     const notice = NOTICES[current.availability] || {
-      headline: 'Diese Conversation ist derzeit nicht verfügbar.',
+      headline: 'Dieser Verlauf ist derzeit nicht verfügbar.',
       terminal: true,
     };
     if (terminalAvailable && notice.terminal && !actions.some(action => action.kind === 'open-terminal')) {

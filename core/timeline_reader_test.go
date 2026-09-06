@@ -278,21 +278,44 @@ func TestAHalfWrittenTrailingRecordIsNormalizedOnALaterPass(t *testing.T) {
 	}
 }
 
-func TestAMissingRecordIsNotAnEmptyConversation(t *testing.T) {
+func TestARunThatNeverWroteAreadsAsEmptyAndAvailable(t *testing.T) {
+	// Kein Record-File: Der frische Lauf hat noch nichts hervorgebracht —
+	// das ist eine leere Conversation, keine fehlende Aufzeichnung.
 	t.Setenv("HOME", t.TempDir())
 	session := Session{
 		ID: "s1", Name: "navi", SessionKind: SessionKindCodingAgent, Vendor: AgentVendorClaude,
 		AgentRuns: []AgentRunRef{{Vendor: AgentVendorClaude, ExternalID: "run-fehlt"}},
 	}
 	reading := NewConversationReader().Read(session)
+	if reading.Availability != ConversationAvailable {
+		t.Fatalf("Lesung = %q, want %q", reading.Availability, ConversationAvailable)
+	}
+	if reading.Conversation == nil || len(reading.Conversation.Items) != 0 {
+		t.Fatalf("Conversation = %+v, want leer und verfügbar", reading.Conversation)
+	}
+}
+
+func TestALostRecordIsNotAnEmptyConversation(t *testing.T) {
+	// Das Record-File war da und ist jetzt weg: Das ist eine fehlende
+	// Aufzeichnung mit genanntem Grund, keine leere Conversation.
+	session, path := claudeRecordFile(t, "run-1", prompt("u1", "erste Frage"))
+	reader := NewConversationReader()
+	reader.Watch(session.ID)
+	if located := reader.Read(session); located.Availability != ConversationAvailable {
+		t.Fatalf("Lesung = %q, want %q", located.Availability, ConversationAvailable)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	reading := reader.Read(session)
 	if reading.Availability != ConversationRecordNotFound {
 		t.Fatalf("Lesung = %q, want %q", reading.Availability, ConversationRecordNotFound)
 	}
 	if reading.Conversation != nil {
-		t.Error("eine fehlende Aufzeichnung darf keine leere Conversation liefern")
+		t.Error("eine verlorene Aufzeichnung darf keine leere Conversation liefern")
 	}
 	if reading.Reason == "" {
-		t.Error("eine fehlende Aufzeichnung muss ihren Grund nennen")
+		t.Error("eine verlorene Aufzeichnung muss ihren Grund nennen")
 	}
 }
 

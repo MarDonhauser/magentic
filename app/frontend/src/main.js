@@ -716,12 +716,18 @@ function ensureConversationView() {
   return conversationView;
 }
 
+// managedBusy sperrt die Managed-Aktionen, solange eine Entscheidung
+// unterwegs ist — auch über den 2-s-Poll hinweg, der sonst neu zeichnen
+// und die Buttons dabei wieder freigeben würde.
+let managedBusy = false;
+
 async function refreshManagedState(sessionID) {
   if (!conversationView || String(conversationSessionID) !== String(sessionID)) return;
   try {
     const result = await ManagedSessionState(String(sessionID));
     if (String(conversationSessionID) !== String(sessionID)) return;
     conversationView.setManagedState(result);
+    if (managedBusy) conversationView.setControlBusy(true);
   } catch {
     // Ohne Host bleibt die Fläche lesend statt eine Steuerung vorzutäuschen.
   }
@@ -746,13 +752,17 @@ function stopManagedPoll() {
 
 async function interruptManagedSession() {
   const sessionID = conversationSessionID;
-  if (!sessionID) return;
+  if (!sessionID || managedBusy) return;
+  managedBusy = true;
+  conversationView?.setControlBusy(true);
   try {
     await InterruptManagedTurn(String(sessionID));
     toast('Turn unterbrochen — die Session bleibt bereit');
   } catch (err) {
     toast('Unterbrechen fehlgeschlagen: ' + errorText(err), true);
   } finally {
+    managedBusy = false;
+    conversationView?.setControlBusy(false);
     refreshManagedState(sessionID);
     await refresh(true);
   }
@@ -760,13 +770,17 @@ async function interruptManagedSession() {
 
 async function answerManagedSession(requestID, decision) {
   const sessionID = conversationSessionID;
-  if (!sessionID || !requestID) return;
+  if (!sessionID || !requestID || managedBusy) return;
+  managedBusy = true;
+  conversationView?.setControlBusy(true);
   try {
     await AnswerManagedPermission(String(sessionID), String(requestID), String(decision));
     toast(decision === 'allow' ? 'Freigabe erteilt' : 'Freigabe verweigert');
   } catch (err) {
     toast('Entscheidung fehlgeschlagen: ' + errorText(err), true);
   } finally {
+    managedBusy = false;
+    conversationView?.setControlBusy(false);
     refreshManagedState(sessionID);
     await refresh(true);
   }
@@ -996,6 +1010,7 @@ function updateTermComposer(a, visual, gone) {
   termStateIconEl.innerHTML = icon(stateIcon);
   termStateTitleEl.textContent = title;
   termStateDetailEl.textContent = detail;
+  termStateDetailEl.title = detail;
   termPromptEl.placeholder = activeTerm ? `Nachricht an ${activeTerm} …` : 'Nachricht an die Session …';
   updateComposerControls(gone);
   const status = gone ? 'exited' : a?.status;
@@ -1193,6 +1208,8 @@ termQueueTextEl.addEventListener('keydown', e => {
     toggleQueueForm(false);
   }
 });
+// Klickbarer Weg zurück für Mausnutzer — das Formular kannte bisher nur Esc.
+$('term-queue-cancel').onclick = () => toggleQueueForm(false);
 
 const automationDialogEl = $('automation-dialog');
 const automationFormEl = $('automation-form');
@@ -3146,6 +3163,11 @@ async function sendSessionMessage(sessionID, sessionName) {
   try {
     await SendMessage(sessionID, text);
     composingSession = null;
+    // Eingabe sofort räumen und Fokus lösen: renderOverview rendert nicht,
+    // solange der Fokus in einem Textfeld steht — ohne das bliebe der bereits
+    // gesendete Text stehen und die Warteschlange unsichtbar bis zum Blur.
+    if (input) input.value = '';
+    if (document.activeElement === input) input.blur();
     await refresh(true);
   } catch (err) {
     toast(`Nachricht an „${sessionName}“ konnte nicht übernommen werden: ` + errorText(err), true);
@@ -3890,14 +3912,18 @@ subMenuEl.addEventListener('click', async e => {
   const messageId = button.dataset.messageId;
   if (!sessionId || !messageId) return;
   button.disabled = true;
-  hideSubMenu();
   try {
     if (button.dataset.act === 'requeue') {
       await act(RetryQueuedMessage(sessionId, messageId), 'Die Nachricht wird erneut zugestellt.');
     } else {
       await act(DiscardQueuedMessage(sessionId, messageId), 'Die wartende Nachricht wurde verworfen.');
     }
-  } catch { /* toast zeigt den Fehler */ }
+    hideSubMenu();
+  } catch {
+    // toast zeigt den Fehler — das Menü bleibt offen, damit der Fehler einer
+    // konkreten Nachricht zugeordnet und der Versuch wiederholt werden kann.
+    button.disabled = false;
+  }
 });
 document.addEventListener('mousedown', e => {
   if (!subMenuEl.contains(e.target) && !e.target.closest('[data-act="azsub"]') && !e.target.closest('.submenu-anchor')) hideSubMenu();
@@ -3905,11 +3931,20 @@ document.addEventListener('mousedown', e => {
 window.addEventListener('blur', hideSubMenu);
 
 window.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && subMenuEl.style.display === 'block') { hideSubMenu(); return; }
+  if (e.key === 'Escape' && subMenuEl.style.display === 'block') {
+    // Fokus zurück zum Auslöser: Die Term-Leiste rendert per innerHTML neu,
+    // ein verwaister Fokus wäre für Tastaturnutzer eine Sackgasse.
+    const anchor = subMenuAnchor;
+    hideSubMenu();
+    if (anchor?.isConnected) anchor.focus();
+    return;
+  }
   if (e.key === 'Escape' && modalEl.style.display === 'flex') { modalEl.style.display = 'none'; return; }
   if (e.key === 'Escape' && menuEl.style.display === 'block') { hideMenu(); return; }
   const projectMenu = document.querySelector('.project-more[open]');
   if (e.key === 'Escape' && projectMenu) { projectMenu.open = false; return; }
+  if (e.key === 'Escape' && document.body.classList.contains('tl-open')) { tlToggle(false); return; }
+  if (e.key === 'Escape' && sidebarToolsEl.open) { sidebarToolsEl.open = false; return; }
   if (!e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.key >= '1' && e.key <= '9') {
     const session = sidebarSessions[parseInt(e.key) - 1];

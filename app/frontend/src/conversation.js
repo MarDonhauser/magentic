@@ -34,7 +34,7 @@ function rowElement(row, expanded, toggle) {
     if (row.inProgress) {
       const live = document.createElement('span');
       live.className = 'cv-live';
-      live.textContent = 'schreibt';
+      live.textContent = 'schreibt gerade';
       head.appendChild(live);
     }
     const body = document.createElement('div');
@@ -47,7 +47,7 @@ function rowElement(row, expanded, toggle) {
   const line = document.createElement('button');
   line.className = 'cv-line';
   line.type = 'button';
-  const state = row.failed ? 'fehlgeschlagen' : row.inProgress ? 'läuft' : row.awaiting ? 'läuft noch' : '';
+  const state = row.failed ? 'fehlgeschlagen' : row.inProgress ? 'läuft' : row.awaiting ? 'wartet' : '';
   line.innerHTML =
     `<span class="cv-kind">${esc(row.label || row.kind)}</span>` +
     `<span class="cv-title">${esc(row.title)}</span>` +
@@ -193,6 +193,7 @@ export function createConversationView({
     if (model.waiting) {
       const el = document.createElement('div');
       el.className = 'cv-waiting';
+      el.setAttribute('role', 'status');
       const headline = document.createElement('strong');
       headline.textContent = model.waiting.headline;
       const detail = document.createElement('span');
@@ -251,6 +252,14 @@ export function createConversationView({
     setManagedState(next) {
       managedState = applyManagedSessionState(next);
       draw(false);
+    },
+    // setControlBusy sperrt die Managed-Aktionen während eine Entscheidung
+    // unterwegs ist, damit kein Doppelklick zwei Antworten auslöst. Der
+    // nächste draw (z. B. nach dem Refresh) gibt sie wieder frei.
+    setControlBusy(busy) {
+      for (const button of root.querySelectorAll('.cv-control-action')) {
+        button.disabled = !!busy;
+      }
     },
   };
 }

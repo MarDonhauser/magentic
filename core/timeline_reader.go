@@ -52,6 +52,11 @@ type ConversationReader struct {
 	mu      sync.Mutex
 	watched map[SessionID]bool
 	held    map[SessionID]*conversationState
+	// seen remembers every run reference that was located at least once. A
+	// run that was never located has produced nothing yet — an available
+	// empty Conversation, not a missing recording. Only a run whose record
+	// was located before and is now gone reads as record-not-found.
+	seen map[ConversationRef]bool
 	// readRange is the only way this reader touches a vendor's record. It is
 	// a field so a test can count how often a record is read.
 	readRange func(path string, offset int64) (conversationRange, error)
@@ -88,6 +93,7 @@ func NewConversationReader() *ConversationReader {
 	return &ConversationReader{
 		watched:   map[SessionID]bool{},
 		held:      map[SessionID]*conversationState{},
+		seen:      map[ConversationRef]bool{},
 		readRange: readConversationRange,
 		locate: func(normalizer ConversationNormalizer, ref ConversationRef, known []ConversationSource) ([]ConversationSource, bool) {
 			return normalizer.Locate(ref, known)
@@ -154,9 +160,11 @@ func (r *ConversationReader) Read(session Session) ConversationReading {
 	defer r.mu.Unlock()
 	state, held := r.held[session.ID]
 	switch {
-	case !held:
+	case !held && r.seen[ref]:
 		return UnavailableConversation(ConversationRecordNotFound, ref,
-			"Das Aufzeichnungs-File dieses Laufs wurde nicht gefunden.")
+			"Die Aufzeichnung dieses Laufs war vorhanden und ist jetzt nicht mehr auffindbar.")
+	case !held:
+		return AvailableConversation(Conversation{Ref: ref})
 	case state.failure != nil:
 		return UnavailableConversation(ConversationRecordUnreadable, ref,
 			"Das Aufzeichnungs-File konnte nicht gelesen werden: "+state.failure.Error())
@@ -188,6 +196,7 @@ func (r *ConversationReader) advance(session Session) (ConversationUpdate, bool)
 		delete(r.held, session.ID)
 		return ConversationUpdate{}, false
 	}
+	r.seen[ref] = true
 	state.sources = sources
 	r.held[session.ID] = state
 

@@ -16,11 +16,14 @@ func TestClaudeStatusFromManifest(t *testing.T) {
 		exists     bool
 		cmd        string
 		content    string
+		// last ist der gespeicherte Vorstatus: Eine Shell bedeutet "beendet"
+		// nur als Übergang — ohne belegtes Vorleben bleibt sie unbekannt.
+		last       AgentStatus
 		want       AgentStatus
 		wantDetail string
 	}{
 		{name: "session weg", exists: false, want: StatusDead},
-		{name: "shell nach exit", exists: true, cmd: "zsh", content: "❯ ", want: StatusExited},
+		{name: "shell nach exit", exists: true, cmd: "zsh", content: "❯ ", last: StatusRunning, want: StatusExited},
 		{name: "spinner aktiv", exists: true, cmd: "2.1.198", content: "  Antwort läuft\n✽ Hatching… (6s · thinking with xhigh effort)\n❯ ", want: StatusRunning},
 		{name: "spinner aktiv kurz", exists: true, cmd: "2.1.198", content: "· Hatching…\n❯ ", want: StatusRunning},
 		{name: "spinner aktiv stern", exists: true, cmd: "2.1.198", content: "✳ Hatching…", want: StatusRunning},
@@ -48,7 +51,7 @@ func TestClaudeStatusFromManifest(t *testing.T) {
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			got := resolveSessionStatus(statusInput{
-				session:      Session{ID: "session-1", Name: "one"},
+				session:      Session{ID: "session-1", Name: "one", LastStatus: test.last},
 				present:      test.exists,
 				paneCommand:  test.cmd,
 				content:      test.content,

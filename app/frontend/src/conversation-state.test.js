@@ -153,7 +153,7 @@ test('Eine leere, verfügbare Conversation sagt etwas anderes als eine fehlende 
   assert.equal(empty.kind, 'empty');
   assert.equal(missing.kind, 'notice');
   assert.notEqual(empty.headline, missing.headline);
-  assert.match(empty.headline, /noch nichts/);
+  assert.match(empty.headline, /noch leer/);
   assert.equal(missing.reason, 'Das Aufzeichnungs-File dieses Laufs wurde nicht gefunden.');
   assert.equal(missing.terminalReachable, true);
 });

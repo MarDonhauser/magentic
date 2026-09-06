@@ -33,6 +33,13 @@ quit_running() {
 
 install_build() {
   echo "→ Installiere nach $INSTALL_APP (alte Version wird ersetzt)…"
+  # Erst prüfen, dann löschen: Ohne Build-Output würde das rm unten die
+  # funktionierende installierte Version vernichten und das cp danach
+  # fehlschlagen — der Rechner stünde ohne App da.
+  if [ ! -d "$BUILD_APP" ]; then
+    echo "✗ Abbruch: kein Build-Output unter $BUILD_APP — installierte Version bleibt unangetastet." >&2
+    exit 1
+  fi
   # Nicht per cp über die bestehende App kopieren — macOS invalidiert dabei
   # die Signatur. Immer erst löschen, dann frisch kopieren.
   rm -rf "$INSTALL_APP"

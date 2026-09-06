@@ -631,6 +631,16 @@ type statusOutcome struct {
 	Detail string
 }
 
+// sessionExitedFromAgent decides whether a shell pane means the agent is
+// gone. Only a transition counts: prior agent life (or a sticky exited
+// reading) proves it, a shell without history proves nothing.
+func sessionExitedFromAgent(previous AgentStatus) bool {
+	if previous == StatusExited {
+		return true
+	}
+	return agentAlive(previous) && previous != StatusShell && previous != StatusTerm
+}
+
 // resolveSessionStatus applies the one precedence there is: runtime presence
 // first, then a fresh hook report, then manifest inference over the pane
 // snapshot, then unknown. Nothing that cannot be proven becomes idle or done.
@@ -643,7 +653,13 @@ func resolveSessionStatus(in statusInput) statusOutcome {
 		return statusOutcome{Status: StatusTerm, Source: StatusSourcePresence}
 	}
 	if shellCommands[normalizedPaneCommand(in.paneCommand)] {
-		return statusOutcome{Status: StatusExited, Source: StatusSourcePresence}
+		// Exited names a transition: the agent lived here and is gone. A
+		// shell with no prior agent life is a Session that never started —
+		// claiming "exited" would lock a fresh Session out of its composer.
+		if sessionExitedFromAgent(in.session.LastStatus) {
+			return statusOutcome{Status: StatusExited, Source: StatusSourcePresence}
+		}
+		return statusOutcome{Status: StatusUnknown, Source: StatusSourceNone}
 	}
 	if record, fresh := in.reports.fresh(in.session.ID, in.now); fresh {
 		return statusOutcome{Status: record.status, Source: StatusSourceHook, Detail: record.detail}

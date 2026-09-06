@@ -128,6 +128,11 @@ var claudeMetadataRecordTypes = map[string]bool{
 	"atis-latch":      true,
 	"ai-title":        true,
 	"queue-operation": true,
+	// Session bookkeeping without conversation content: the display title,
+	// the agent name, and the cloud-bridge linkage.
+	"custom-title":   true,
+	"agent-name":     true,
+	"bridge-session": true,
 }
 
 // claudeConversationScan normalizes one record file. It holds the tool calls
@@ -190,6 +195,10 @@ func (s *claudeConversationScan) normalizeRecord(source ConversationSource, line
 			item.Kind = ItemKindContextCompaction
 			item.Title = "Kontext verdichtet"
 			return []Item{item}
+		}
+		if record.Subtype == "turn_duration" {
+			// Turn statistics, not conversation content.
+			return nil
 		}
 		label := "system"
 		if record.Subtype != "" {

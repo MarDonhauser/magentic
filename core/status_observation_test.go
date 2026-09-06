@@ -83,6 +83,31 @@ func TestObservationNamesItsStatusSource(t *testing.T) {
 	}
 }
 
+// Beendet heißt Übergang: Eine Shell ohne früheres Agentenleben ist eine
+// Session, die nie beobachtet gestartet ist — kein beendeter Agent. Sonst
+// sperrt eine frische Session ihren eigenen Composer.
+func TestShellWithoutPriorAgentLifeIsUnknownNotExited(t *testing.T) {
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	fresh := resolveSessionStatus(statusInput{
+		session: Session{ID: "s"}, present: true, paneCommand: "zsh", now: now,
+	})
+	if fresh.Status != StatusUnknown || fresh.Source != StatusSourceNone {
+		t.Fatalf("frische Shell = %v aus %q, want unbekannt ohne Quelle", fresh.Status.Label(), fresh.Source)
+	}
+	ended := resolveSessionStatus(statusInput{
+		session: Session{ID: "s", LastStatus: StatusRunning}, present: true, paneCommand: "zsh", now: now,
+	})
+	if ended.Status != StatusExited || ended.Source != StatusSourcePresence {
+		t.Fatalf("Shell nach Agent = %v aus %q, want beendet aus Präsenz", ended.Status.Label(), ended.Source)
+	}
+	sticky := resolveSessionStatus(statusInput{
+		session: Session{ID: "s", LastStatus: StatusExited}, present: true, paneCommand: "zsh", now: now,
+	})
+	if sticky.Status != StatusExited {
+		t.Fatalf("bleibende Shell = %v, want weiter beendet", sticky.Status.Label())
+	}
+}
+
 // Unbekannt bleibt unbekannt: es zählt nicht als idle, es weckt keine
 // Aufmerksamkeit, die etwas behauptet, und es bekommt keine Eingabe.
 func TestUnknownIsExplicitAndFailClosed(t *testing.T) {

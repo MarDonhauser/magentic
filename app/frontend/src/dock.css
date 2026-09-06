@@ -148,7 +148,8 @@ body.dk-dragging .dk-resize::after { background: var(--accent); }
 }
 
 .dk-tab:hover .dk-x,
-.dk-tab.dk-active .dk-x { opacity: .75; }
+.dk-tab.dk-active .dk-x,
+.dk-tab:focus-within .dk-x { opacity: .75; }
 
 .dk-x:hover {
   opacity: 1;

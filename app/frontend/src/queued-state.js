@@ -44,7 +44,7 @@ export function queuedBadge(agent) {
   // Headline), dann die Vorschauen — nichts davon zweimal.
   const previews = messages.map(message => message.text).slice(0, 3);
   if (messages.length > previews.length) previews.push(`+${messages.length - previews.length} weitere`);
-  const title = `${queuedHeadline(agent?.name, messages)} ${previews.join(' · ')} Klicken für Details.`;
+  const title = `${queuedHeadline(agent?.name, messages)} ${previews.join(' · ')} · Klicken für Details.`;
   return { count: messages.length, stuck, label, title: title.trim() };
 }
 

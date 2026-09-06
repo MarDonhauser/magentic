@@ -48,11 +48,20 @@ func TestKnownMetadataRecordsProduceNoItem(t *testing.T) {
 	for _, recordType := range []string{
 		"attachment", "last-prompt", "mode", "permission-mode",
 		"atis-latch", "ai-title", "queue-operation",
+		"custom-title", "agent-name", "bridge-session",
 	} {
 		items := normalizeClaude(t, `{"type":"`+recordType+`","sessionId":"run-1"}`)
 		if len(items) != 0 {
 			t.Errorf("Record-Typ %q ergibt %d Items, want 0", recordType, len(items))
 		}
+	}
+}
+
+func TestTurnDurationIsBookkeepingWithoutAnItem(t *testing.T) {
+	items := normalizeClaude(t,
+		`{"type":"system","subtype":"turn_duration","uuid":"d1","durationMs":13800,"messageCount":12,"sessionId":"run-1"}`)
+	if len(items) != 0 {
+		t.Fatalf("%d Items, want 0: Turn-Statistik ist kein Gesprächsinhalt", len(items))
 	}
 }
 
@@ -81,7 +90,7 @@ func TestClaudeKindMappingTable(t *testing.T) {
 		{"MCP-Werkzeug", `{"type":"assistant","uuid":"a16","message":{"role":"assistant","content":[{"type":"tool_use","id":"t14","name":"mcp__chrome__navigate","input":{}}]}}`, ItemKindToolCall},
 		{"Unbekanntes Werkzeug", `{"type":"assistant","uuid":"a17","message":{"role":"assistant","content":[{"type":"tool_use","id":"t15","name":"Skill","input":{}}]}}`, ItemKindToolCall},
 		{"Verdichtung", `{"type":"system","uuid":"s1","subtype":"compact_boundary"}`, ItemKindContextCompaction},
-		{"Sonstiges", `{"type":"system","uuid":"s2","subtype":"turn_duration"}`, ItemKindUnknown},
+		{"Sonstiges", `{"type":"system","uuid":"s2","subtype":"api_error"}`, ItemKindUnknown},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

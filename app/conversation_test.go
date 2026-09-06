@@ -75,12 +75,18 @@ func TestEachUnavailableReadingHasItsOwnTransportValue(t *testing.T) {
 		name    string
 		shape   func(core.Session) core.Session
 		records []string
-		want    core.ConversationAvailability
+		// deleteAfterPrime schreibt die Aufzeichnung, lässt sie einmal lesen
+		// und entfernt sie dann: Nur eine verlorene Aufzeichnung liest sich
+		// als fehlend — eine nie geschriebene ist eine leere Conversation.
+		deleteAfterPrime bool
+		want             core.ConversationAvailability
 	}{
 		{
-			name:  "Aufzeichnung fehlt",
-			shape: keep,
-			want:  core.ConversationRecordNotFound,
+			name:             "Aufzeichnung verloren",
+			shape:            keep,
+			records:          []string{developerPrompt("u1", "erste Frage")},
+			deleteAfterPrime: true,
+			want:             core.ConversationRecordNotFound,
 		},
 		{
 			name: "Vendor ohne Normalizer",
@@ -106,8 +112,16 @@ func TestEachUnavailableReadingHasItsOwnTransportValue(t *testing.T) {
 	seen := map[string]bool{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			app, session, _ := conversationAppFixtureFor(t, "run-1", tt.shape, tt.records...)
-			result := app.SessionConversation(string(session.ID))
+		app, session, record := conversationAppFixtureFor(t, "run-1", tt.shape, tt.records...)
+		if tt.deleteAfterPrime {
+			if first := app.SessionConversation(string(session.ID)); first.Availability != string(core.ConversationAvailable) {
+				t.Fatalf("Lesung vor dem Verlust = %q, want %q", first.Availability, core.ConversationAvailable)
+			}
+			if err := os.Remove(record); err != nil {
+				t.Fatal(err)
+			}
+		}
+		result := app.SessionConversation(string(session.ID))
 			if result.Availability != string(tt.want) {
 				t.Fatalf("Availability = %q, want %q", result.Availability, tt.want)
 			}

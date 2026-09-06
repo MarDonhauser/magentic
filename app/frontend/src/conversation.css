@@ -203,7 +203,7 @@
     border-color var(--duration-fast) var(--ease-out);
 }
 
-.cv-line:disabled { cursor: default; }
+.cv-line:disabled { cursor: default; opacity: .6; }
 .cv-line:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
   background: var(--raise-2);
@@ -309,9 +309,71 @@
   font-weight: var(--fw-medium);
   cursor: pointer;
 }
-.cv-action:hover {
+.cv-action:hover:not(:disabled),
+.cv-action:focus-visible {
   border-color: var(--accent);
   color: var(--accent);
+}
+.cv-action:disabled { opacity: .45; cursor: not-allowed; }
+
+/* Die verwaltete Steuerung (Freigabe, Interrupt) spricht dieselbe
+   Button-Sprache wie der Rest der Fläche: Ghost für sekundär, gefüllt
+   für die primäre Entscheidung. Ohne diese Regeln rendert der
+   kritischste Moment der Session ungestylt. */
+.cv-control {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--raise);
+  color: var(--ink-2);
+}
+.cv-control strong { color: var(--ink); }
+.cv-control-copy { display: grid; gap: 4px; }
+.cv-control-permission {
+  border-color: color-mix(in srgb, var(--warning) 42%, var(--border));
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface));
+}
+.cv-control-running {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+}
+.cv-control-unavailable { opacity: .85; }
+.cv-control-actions { display: flex; gap: var(--space-sm); flex-wrap: wrap; }
+.cv-control-action {
+  min-height: 36px;
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+}
+.cv-control-action:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.cv-control-action:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.cv-control-action:disabled { opacity: .45; cursor: not-allowed; }
+.cv-control-action-primary {
+  border-color: var(--term-action-hover);
+  background: var(--term-action-hover);
+  color: var(--term-action-text);
+  font-weight: var(--fw-semibold);
+}
+.cv-control-action-primary:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--term-action-hover) 86%, black);
+  background: color-mix(in srgb, var(--term-action-hover) 86%, black);
+  color: var(--term-action-text);
+}
+.cv-control-action-primary:focus-visible {
+  border-color: color-mix(in srgb, var(--term-action-hover) 86%, black);
+  color: var(--term-action-text);
 }
 
 @keyframes cv-live-pulse {

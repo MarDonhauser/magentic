@@ -114,6 +114,7 @@
   --space-xl: 32px;
   --radius-control: 8px;
   --radius-panel: 12px;
+  --radius-composer: 12px;
   --sidebar-w: 250px;
   --titlebar-h: 52px;
   --duration-fast: 150ms;
@@ -846,13 +847,8 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
    heißt Accent. Nur die ungewisse Zustellung nach einem Absturz trägt Warnung,
    damit sie sich von der normalen Warteschlange unterscheidet. */
 #terms:not(.hydra) #term-bar .tb-queue.is-active.is-stuck {
-  border-color: color-mix(in srgb, var(--warning) 52%, var(--border));
-  background: color-mix(in srgb, var(--warning) 12%, transparent);
-  color: var(--warning);
-}
-
-#term-bar .tb-queue.is-active.is-stuck {
-  border-color: color-mix(in srgb, var(--warning) 52%, var(--border));
+  border-color: rgba(224,178,94,0.6);
+  background: rgba(224,178,94,0.10);
   color: var(--warning);
 }
 
@@ -1669,12 +1665,17 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
 
 /* Der queuedBlock der Übersicht läuft auch im Eingereiht-Menü der Term-Leiste:
    dort ist das Menü selbst die Karte, also fallen Rahmen, Fläche und der
-   Einzug der Übersichts-Zeile weg. */
+   Einzug der Übersichts-Zeile weg. Lange Vorschauen ohne Wortgrenzen dürfen
+   das 300–360px-Menü nicht horizontal aufsprengen. */
 #submenu .queued {
-  margin: 0 0 2px;
-  padding: 6px 8px 4px;
+  margin: 0 0 var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
   border: 0;
   background: none;
+}
+#submenu .queued-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 #search-view { position: absolute; inset: 0; display: none; flex-direction: column; padding: 4px 20px 10px; }
@@ -2534,6 +2535,13 @@ body.session-magnet-dragging * { cursor: grabbing !important; user-select: none 
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.term-queue-actions {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
 }
 
 @media (max-height: 720px) {
