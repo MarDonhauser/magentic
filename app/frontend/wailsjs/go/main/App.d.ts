@@ -153,6 +153,12 @@ export function Timeline():Promise<main.TimelineResult>;
 
 export function WatchConversation(arg1:string):Promise<void>;
 
+export function ManagedSessionState(arg1:string):Promise<any>;
+
+export function InterruptManagedTurn(arg1:string):Promise<void>;
+
+export function AnswerManagedPermission(arg1:string,arg2:string,arg3:string):Promise<void>;
+
 export function WorktreeDiff(arg1:string,arg2:string):Promise<string>;
 
 export function WriteTerm(arg1:string,arg2:string):Promise<void>;

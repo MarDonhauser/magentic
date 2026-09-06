@@ -8,28 +8,30 @@ import (
 )
 
 type OvAgent struct {
-	ID            SessionID `json:"id"`
-	Name          string    `json:"name"`
-	Tool          string    `json:"tool,omitempty"`
-	Vendor        string    `json:"vendor,omitempty"`
-	Status        string    `json:"status"`
-	Label         string    `json:"label"`
-	Detail        string    `json:"detail"`
-	Age           string    `json:"age"`
-	Worktree      bool      `json:"worktree"`
-	Term          bool      `json:"term"`
-	Phase         string    `json:"phase,omitempty"`
-	PhaseLabel    string    `json:"phaseLabel,omitempty"`
-	Deployed      bool      `json:"deployed"`
-	Known         bool      `json:"known"`
-	OwnDirty      int       `json:"ownDirty"`
-	OwnCommits    int       `json:"ownCommits"`
-	Branch        string    `json:"branch,omitempty"`
-	Unread        bool      `json:"unread"`
-	Dock          bool      `json:"dock"`
-	Service       bool      `json:"service"`
-	HandoffSource bool      `json:"handoffSource"`
-	HandoffTarget bool      `json:"handoffTarget"`
+	ID             SessionID `json:"id"`
+	Name           string    `json:"name"`
+	Tool           string    `json:"tool,omitempty"`
+	Vendor         string    `json:"vendor,omitempty"`
+	Runtime        string    `json:"runtime"`
+	RuntimeActions []string  `json:"runtimeActions"`
+	Status         string    `json:"status"`
+	Label          string    `json:"label"`
+	Detail         string    `json:"detail"`
+	Age            string    `json:"age"`
+	Worktree       bool      `json:"worktree"`
+	Term           bool      `json:"term"`
+	Phase          string    `json:"phase,omitempty"`
+	PhaseLabel     string    `json:"phaseLabel,omitempty"`
+	Deployed       bool      `json:"deployed"`
+	Known          bool      `json:"known"`
+	OwnDirty       int       `json:"ownDirty"`
+	OwnCommits     int       `json:"ownCommits"`
+	Branch         string    `json:"branch,omitempty"`
+	Unread         bool      `json:"unread"`
+	Dock           bool      `json:"dock"`
+	Service        bool      `json:"service"`
+	HandoffSource  bool      `json:"handoffSource"`
+	HandoffTarget  bool      `json:"handoffTarget"`
 
 	Queued     []OvQueuedMessage `json:"queued,omitempty"`
 	Automation *OvAutomation     `json:"automation,omitempty"`
@@ -201,6 +203,8 @@ func statusKey(s AgentStatus) string {
 		return "shell"
 	case StatusBlocked:
 		return "blocked"
+	case StatusAwaitingDecision:
+		return "awaiting-decision"
 	case StatusDone:
 		return "done"
 	case StatusIdle:
@@ -217,7 +221,7 @@ func statusKey(s AgentStatus) string {
 
 func agentAlive(s AgentStatus) bool {
 	return s == StatusRunning || s == StatusAgents || s == StatusShell || s == StatusBlocked ||
-		s == StatusDone || s == StatusIdle || s == StatusTerm
+		s == StatusAwaitingDecision || s == StatusDone || s == StatusIdle || s == StatusTerm
 }
 
 // agentWorking nennt die Sessions, die gerade arbeiten. Eine blockierte
@@ -669,31 +673,33 @@ func toOvAgent(a Agent, observed SessionObservation, branch string, res SessionR
 	// Survey deliberately omits per-Session baseline deltas. Keep the legacy
 	// fields explicitly unknown instead of rebuilding that Git meaning here.
 	agent := OvAgent{
-		ID:            a.ID,
-		Name:          a.Name,
-		Tool:          tool,
-		Vendor:        string(a.SessionVendor()),
-		Status:        statusKey(st),
-		Label:         st.Label(),
-		Detail:        observed.Detail,
-		Age:           FormatAge(lastActive),
-		Worktree:      a.Worktree,
-		Term:          a.IsTerm(),
-		Phase:         phase,
-		PhaseLabel:    phaseLabel,
-		Live:          agentAlive(st),
-		Working:       agentWorking(st),
-		Deployed:      agentAlive(st) && !a.DeployAt.IsZero() && time.Since(a.DeployAt) < 45*time.Minute,
-		Known:         false,
-		OwnDirty:      0,
-		OwnCommits:    0,
-		Branch:        branch,
-		Unread:        observed.Unread,
-		Dock:          a.IsDock(),
-		Service:       a.Service,
-		HandoffSource: handoffSource,
-		HandoffTarget: handoffTarget,
-		Queued:        queuedMessagesOverview(a.Outbox),
+		ID:             a.ID,
+		Name:           a.Name,
+		Tool:           tool,
+		Vendor:         string(a.SessionVendor()),
+		Runtime:        string(a.SessionRuntime()),
+		RuntimeActions: RuntimeActionsFor(a.SessionRuntime()),
+		Status:         statusKey(st),
+		Label:          st.Label(),
+		Detail:         observed.Detail,
+		Age:            FormatAge(lastActive),
+		Worktree:       a.Worktree,
+		Term:           a.IsTerm(),
+		Phase:          phase,
+		PhaseLabel:     phaseLabel,
+		Live:           agentAlive(st),
+		Working:        agentWorking(st),
+		Deployed:       agentAlive(st) && !a.DeployAt.IsZero() && time.Since(a.DeployAt) < 45*time.Minute,
+		Known:          false,
+		OwnDirty:       0,
+		OwnCommits:     0,
+		Branch:         branch,
+		Unread:         observed.Unread,
+		Dock:           a.IsDock(),
+		Service:        a.Service,
+		HandoffSource:  handoffSource,
+		HandoffTarget:  handoffTarget,
+		Queued:         queuedMessagesOverview(a.Outbox),
 	}
 	if observed.Presence == SessionPresenceAbsent && !res.Unknown {
 		if res.Resumable {

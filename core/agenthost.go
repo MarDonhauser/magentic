@@ -36,14 +36,20 @@ func AgentHostSocketPath(sessionID SessionID) string {
 const agentHostSocketMode = 0o600
 
 // AgentHostMethod names what one request on an agent host's socket asks for.
-// The empty method is the identity handshake, which is all the wire carries
-// today: turn delivery, interrupt and permission answering are the host's own
-// methods and are exposed over this socket together with the daemon-side code
-// that issues them.
+// The empty method is the identity handshake; the others are the managed
+// control surface the daemon and the interfaces use instead of keystrokes.
 type AgentHostMethod string
 
-// AgentHostConnect is the empty-method handshake.
-const AgentHostConnect AgentHostMethod = ""
+const (
+	// AgentHostConnect is the empty-method handshake.
+	AgentHostConnect AgentHostMethod = ""
+	// AgentHostStateMethod reads everything the host knows in one read.
+	AgentHostStateMethod AgentHostMethod = "state"
+	// AgentHostInterruptMethod ends the running turn, leaving the process alive.
+	AgentHostInterruptMethod AgentHostMethod = "interrupt"
+	// AgentHostAnswerMethod delivers a developer's decision to one request.
+	AgentHostAnswerMethod AgentHostMethod = "answer"
+)
 
 // AgentHostRequest is one request on an agent host's socket. Token is the
 // handshake secret the daemon recorded before the host was started; it is
@@ -52,14 +58,22 @@ const AgentHostConnect AgentHostMethod = ""
 type AgentHostRequest struct {
 	Token  AgentHostToken  `json:"token"`
 	Method AgentHostMethod `json:"method,omitempty"`
+	// RequestID and Decision answer one PermissionRequest; DecidedBy names the
+	// explicit developer action for the record and carries no authority.
+	RequestID string             `json:"requestId,omitempty"`
+	Decision  PermissionDecision `json:"decision,omitempty"`
+	DecidedBy string             `json:"decidedBy,omitempty"`
 }
 
 // AgentHostResponse answers one request. Confirmed is true only when the
 // request was understood and accepted; otherwise Reason states why and the
 // caller must treat the outcome as not done.
 type AgentHostResponse struct {
-	Confirmed bool   `json:"confirmed"`
-	Reason    string `json:"reason,omitempty"`
+	Confirmed  bool               `json:"confirmed"`
+	Reason     string             `json:"reason,omitempty"`
+	State      *AgentHostState    `json:"state,omitempty"`
+	Turn       *ManagedTurn       `json:"turn,omitempty"`
+	Permission *PermissionRequest `json:"permission,omitempty"`
 }
 
 // ErrAgentHostServedElsewhere reports a live agent-host socket for this
@@ -214,6 +228,25 @@ func (h *AgentHost) serve(conn *net.UnixConn) {
 	switch request.Method {
 	case AgentHostConnect:
 		_ = encoder.Encode(AgentHostResponse{Confirmed: true})
+	case AgentHostStateMethod:
+		_ = encoder.Encode(AgentHostResponse{Confirmed: true, State: func() *AgentHostState {
+			state := h.HostState()
+			return &state
+		}()})
+	case AgentHostInterruptMethod:
+		ended, err := h.Interrupt()
+		if err != nil {
+			_ = encoder.Encode(AgentHostResponse{Reason: err.Error()})
+			return
+		}
+		_ = encoder.Encode(AgentHostResponse{Confirmed: true, Turn: &ended})
+	case AgentHostAnswerMethod:
+		permission, err := h.answerWithOutcome(request.RequestID, request.Decision, request.DecidedBy)
+		if err != nil {
+			_ = encoder.Encode(AgentHostResponse{Reason: err.Error()})
+			return
+		}
+		_ = encoder.Encode(AgentHostResponse{Confirmed: true, Permission: &permission})
 	default:
 		_ = encoder.Encode(AgentHostResponse{
 			Reason: fmt.Sprintf("unbekannte Agent-Host-Methode %q", strings.TrimSpace(string(request.Method))),
@@ -247,6 +280,107 @@ func ConnectAgentHost(path string, token AgentHostToken) error {
 		return fmt.Errorf("%w: %s: %s", ErrAgentHostForeign, path, reason)
 	}
 	return nil
+}
+
+// callAgentHost issues one method call on an agent host's socket. The token
+// is checked before anything is dispatched; a mismatch reads as foreign,
+// anything else unreadable as unreachable.
+func callAgentHost(path string, request AgentHostRequest) (AgentHostResponse, error) {
+	conn, err := net.Dial("unix", path)
+	if err != nil {
+		return AgentHostResponse{}, fmt.Errorf("%w: %s: %v", ErrAgentHostUnreachable, path, err)
+	}
+	defer conn.Close()
+	if err := json.NewEncoder(conn).Encode(request); err != nil {
+		return AgentHostResponse{}, fmt.Errorf("%w: %s: %v", ErrAgentHostUnreachable, path, err)
+	}
+	var response AgentHostResponse
+	if err := json.NewDecoder(conn).Decode(&response); err != nil {
+		return AgentHostResponse{}, fmt.Errorf("%w: %s: %v", ErrAgentHostUnreachable, path, err)
+	}
+	if !response.Confirmed && isAgentHostTokenMismatch(response.Reason) {
+		return response, fmt.Errorf("%w: %s: %s", ErrAgentHostForeign, path, response.Reason)
+	}
+	return response, nil
+}
+
+func isAgentHostTokenMismatch(reason string) bool {
+	return reason == "token mismatch"
+}
+
+// QueryAgentHostState reads everything one managed Session's host knows, in
+// one call. Unreachable and foreign stay distinguishable: only the handshake
+// decides ownership, never a guessed process.
+func QueryAgentHostState(path string, token AgentHostToken) (AgentHostState, error) {
+	response, err := callAgentHost(path, AgentHostRequest{Token: token, Method: AgentHostStateMethod})
+	if err != nil {
+		return AgentHostState{}, err
+	}
+	if !response.Confirmed || response.State == nil {
+		reason := response.Reason
+		if reason == "" {
+			reason = "Agent-Host gab keinen Zustand zurück"
+		}
+		return AgentHostState{}, errors.New(reason)
+	}
+	return *response.State, nil
+}
+
+// InterruptAgentHostTurn ends the running turn of one managed Session through
+// its host. With no turn running the host refuses and nothing is signalled.
+func InterruptAgentHostTurn(path string, token AgentHostToken) (ManagedTurn, error) {
+	response, err := callAgentHost(path, AgentHostRequest{Token: token, Method: AgentHostInterruptMethod})
+	if err != nil {
+		return ManagedTurn{}, err
+	}
+	if !response.Confirmed || response.Turn == nil {
+		reason := response.Reason
+		if reason == "" {
+			reason = "Agent-Host unterbrach den Turn nicht"
+		}
+		return ManagedTurn{}, mapAgentHostMethodError(reason)
+	}
+	return *response.Turn, nil
+}
+
+// AnswerAgentHostPermission delivers a developer's explicit decision to one
+// open PermissionRequest through its host, exactly once.
+func AnswerAgentHostPermission(path string, token AgentHostToken, requestID string, decision PermissionDecision, decidedBy string) (PermissionRequest, error) {
+	response, err := callAgentHost(path, AgentHostRequest{
+		Token: token, Method: AgentHostAnswerMethod,
+		RequestID: requestID, Decision: decision, DecidedBy: decidedBy,
+	})
+	if err != nil {
+		return PermissionRequest{}, err
+	}
+	if !response.Confirmed || response.Permission == nil {
+		reason := response.Reason
+		if reason == "" {
+			reason = "Agent-Host nahm die Entscheidung nicht entgegen"
+		}
+		return PermissionRequest{}, mapAgentHostMethodError(reason)
+	}
+	return *response.Permission, nil
+}
+
+// mapAgentHostMethodError restores the typed refusal a host method answered
+// with, so a second answer stays a refusal and an unknown request stays
+// unknown instead of flattening into one generic failure.
+func mapAgentHostMethodError(reason string) error {
+	switch {
+	case errors.Is(errors.New(reason), ErrPermissionClosed):
+		return ErrPermissionClosed
+	}
+	if strings.Contains(reason, ErrPermissionClosed.Error()) {
+		return fmt.Errorf("%w: %s", ErrPermissionClosed, reason)
+	}
+	if strings.Contains(reason, ErrPermissionUnknown.Error()) {
+		return fmt.Errorf("%w: %s", ErrPermissionUnknown, reason)
+	}
+	if strings.Contains(reason, ErrManagedNoTurn.Error()) {
+		return fmt.Errorf("%w: %s", ErrManagedNoTurn, reason)
+	}
+	return errors.New(reason)
 }
 
 // StartVendorProcess launches binary as this host's owned process, in its
@@ -313,7 +447,7 @@ func (h *AgentHost) Deliver(messageID, text string) error {
 func (h *AgentHost) Interrupt() (ManagedTurn, error) {
 	if !h.turns.TurnRunning() {
 		return ManagedTurn{SessionID: h.sessionID},
-			fmt.Errorf("für Session %q läuft kein Turn, der unterbrochen werden könnte", h.sessionID)
+			fmt.Errorf("%w: Session %q", ErrManagedNoTurn, h.sessionID)
 	}
 	h.mu.Lock()
 	process := h.process
@@ -326,14 +460,31 @@ func (h *AgentHost) Interrupt() (ManagedTurn, error) {
 
 // OpenPermission registers a vendor permission prompt and blocks the caller —
 // the agent's own tool call — until a person decides it or the process ends.
+// The opened request is part of the Session's activity, in the order it
+// occurred.
 func (h *AgentHost) OpenPermission(asked string) PermissionRequest {
-	return h.permissions.Open(h.sessionID, asked)
+	request := h.permissions.Open(h.sessionID, asked)
+	h.turns.CompleteMessage(PermissionRequestItem(request))
+	return request
 }
 
 // Answer delivers a developer's decision to one open permission request,
 // exactly once. A second answer is refused and delivers nothing.
 func (h *AgentHost) Answer(requestID string, decision PermissionDecision, decidedBy string) error {
-	return h.permissions.Answer(requestID, decision, decidedBy)
+	_, err := h.answerWithOutcome(requestID, decision, decidedBy)
+	return err
+}
+
+// answerWithOutcome delivers the decision and records its outcome as the Item
+// following the request, so the Session's account holds question and answer
+// in order.
+func (h *AgentHost) answerWithOutcome(requestID string, decision PermissionDecision, decidedBy string) (PermissionRequest, error) {
+	if err := h.permissions.Answer(requestID, decision, decidedBy); err != nil {
+		return PermissionRequest{}, err
+	}
+	closed := h.permissions.closedRequest(requestID)
+	h.turns.CompleteMessage(PermissionOutcomeItem(closed))
+	return closed, nil
 }
 
 // AwaitPermission blocks in the agent's own tool call until the request is
@@ -375,7 +526,10 @@ func (h *AgentHost) readVendorEvents(process *agentHostProcess, events io.Reader
 		}
 		h.applyManagedEvent(event)
 	}
-	h.permissions.CloseUnanswerable(h.sessionID, process.exitReason())
+	closed := h.permissions.CloseUnanswerable(h.sessionID, process.exitReason())
+	for _, request := range closed {
+		h.turns.CompleteMessage(PermissionOutcomeItem(request))
+	}
 }
 
 // applyManagedEvent folds one parsed protocol line into the Session's turn.
@@ -437,7 +591,10 @@ func (h *AgentHost) Close() error {
 		if process != nil {
 			_ = process.stop()
 		}
-		h.permissions.CloseUnanswerable(h.sessionID, process.exitReason())
+		closed := h.permissions.CloseUnanswerable(h.sessionID, process.exitReason())
+		for _, request := range closed {
+			h.turns.CompleteMessage(PermissionOutcomeItem(request))
+		}
 		err = h.listener.Close()
 		_ = os.Remove(h.path)
 	})

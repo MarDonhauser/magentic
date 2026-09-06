@@ -118,7 +118,7 @@ func serveControlObservations(ctx context.Context, service *core.ControlService)
 	for {
 		state, err := LoadState()
 		if err == nil {
-			service.Observed(state.Agents, core.Observe(ctx, state.Agents))
+			service.Observed(state.Agents, observeSessionsWithManaged(ctx, state.Agents))
 		}
 		select {
 		case <-ctx.Done():

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { queuedMessages, queuedHeadline } from './queued-state.js';
+import { queuedBadge, queuedMessages, queuedHeadline } from './queued-state.js';
 
 test('Queued messages normalize kind wording and drop entries without an ID', () => {
   const messages = queuedMessages({
@@ -53,4 +53,29 @@ test('Queue headline counts waiting messages and names the uncertain ones', () =
     queuedHeadline('', bothStuck),
     '2 Nachrichten warten auf diese Session. Bei 2 davon ist ungewiss, ob die Session sie erhalten hat.',
   );
+});
+
+test('Queue badge stays empty without waiting messages and labels the count otherwise', () => {
+  assert.equal(queuedBadge({}), null);
+  assert.equal(queuedBadge(null), null);
+  assert.equal(queuedBadge({ queued: [] }), null);
+
+  const one = queuedBadge({ name: 'alpha', queued: [{ id: 'a', kind: 'message', preview: 'Hallo' }] });
+  assert.equal(one.count, 1);
+  assert.equal(one.stuck, 0);
+  assert.equal(one.label, '1 wartet');
+  assert.match(one.title, /Eine Nachricht wartet auf „alpha“/);
+  assert.match(one.title, /Hallo/);
+
+  const many = queuedBadge({
+    name: 'alpha',
+    queued: [
+      { id: 'a', kind: 'message', preview: 'Hallo', stuck: true },
+      { id: 'b', kind: 'message', preview: 'Noch etwas' },
+    ],
+  });
+  assert.equal(many.count, 2);
+  assert.equal(many.stuck, 1);
+  assert.equal(many.label, '2 warten');
+  assert.match(many.title, /ungewiss/);
 });

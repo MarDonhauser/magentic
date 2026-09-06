@@ -13,7 +13,7 @@ import {
   SessionAutomation, SaveSessionAutomation, DeleteSessionAutomation,
   DeployStatus, AzLogin, ArgoLogin, AzAccounts, AzSetSubscription,
   WorktreeDiff, SessionPreview, SearchTranscripts, SessionLinks, SetActiveTerm,
-  SessionConversation, WatchConversation,
+  SessionConversation, WatchConversation, ManagedSessionState, InterruptManagedTurn, AnswerManagedPermission,
   PickFolder, AddProject, RemoveProject, SaveImage, Timeline,
   AddDivider, RenameDivider, RemoveDivider, SetDividerCollapsed, MoveSidebarItem,
   Zeitgeist, ZeitgeistStart, ZeitgeistPause, ZeitgeistResume, ZeitgeistStop,
@@ -23,6 +23,8 @@ import {
   CompleteFiles, CompleteCommands, PromptLinePattern,
 } from '../wailsjs/go/main/App';
 import { createConversationView } from './conversation.js';
+import { canShowTerminal, defaultSessionSurface } from './conversation-state.js';
+import { canSendComposer, composeMessage } from './composer-attachments.js';
 import { usagePages, clampUsagePage } from './usage-state.js';
 import { buildSidebar, flattenSidebar, canPlace, planMove } from './sidebar-layout.js';
 import { EventsOn, EventsOff, BrowserOpenURL, ClipboardSetText } from '../wailsjs/runtime/runtime';
@@ -41,13 +43,13 @@ import { promptCoverRows } from './features/composer/prompt-cover.js';
 import { checkoutChips } from './features/checkout/checkout-chips.js';
 import { renderBoard } from './board.js';
 import { renderStats } from './stats.js';
-import { mountDock, toggleDock, isDockOpen, closeDockTab, dockTabs, refitDock } from './dock.js';
+import { mountDock, toggleDock, isDockOpen, closeDockTab, dockTabs, refitDock, openDockTabSplit } from './dock.js';
 import { mountBreaks, updateBreaks, openBreak, openBreakSettings, isBreakOpen } from './breaks.js';
 import { initThemeToggle, onThemeChange, terminalTheme, terminalContrastFloor } from './theme.js';
 import { TERMINAL_OPTIONS, setUpTerminal } from './terminal-setup.js';
 import { createHydraHandoff } from './hydra-handoff.js';
 import { createVendorSwitchCoordinator } from './vendor-switch.js';
-import { queuedMessages, queuedHeadline } from './queued-state.js';
+import { queuedBadge, queuedMessages, queuedHeadline } from './queued-state.js';
 import {
   deliveryLabel,
   excerptLabel,
@@ -64,6 +66,7 @@ const STATUS = {
   agents:  { color: 'var(--info)', label: 'Agents' },
   shell:   { color: 'var(--accent)', label: 'Shell läuft' },
   blocked: { color: 'var(--warning)', label: 'wartet' },
+  'awaiting-decision': { color: 'var(--warning)', ico: 'lock', label: 'wartet auf Entscheidung' },
   done:    { color: 'var(--good)', ico: 'check', label: 'fertig' },
   idle:    { color: 'var(--muted)', label: 'idle' },
   term:    { color: 'var(--info)', label: 'Terminal' },
@@ -71,6 +74,13 @@ const STATUS = {
   dead:    { color: 'var(--critical)', label: 'tot' },
   unknown: { color: 'var(--muted)', label: '?' },
 };
+
+// needsInputStatus fasst beide Warte-Status zusammen: den tmux-Dialog und die
+// verwaltete Freigabe. Überall dort, wo die Oberfläche auf eine Antwort
+// wartet, zählen beide.
+function needsInputStatus(status) {
+  return status === 'blocked' || status === 'awaiting-decision';
+}
 
 const PHASE = {
   deploy:    { color: 'var(--accent)',  ico: 'rocket', label: 'deployt' },
@@ -105,11 +115,11 @@ function agentVisual(a, project) {
     return { color: p.color, ico: p.ico, label: p.label };
   }
   const ph = PHASE[a?.phase];
-  if (ph && !['blocked', 'dead', 'exited'].includes(a?.status)) {
+  if (ph && !['blocked', 'awaiting-decision', 'dead', 'exited'].includes(a?.status)) {
     const label = ph.label && a.phaseLabel ? `${ph.label} ${a.phaseLabel}` : (a.phaseLabel || ph.label);
     return { color: ph.color, ico: ph.ico, label };
   }
-  if (a?.status === 'blocked' && a?.detail) {
+  if (needsInputStatus(a?.status) && a?.detail) {
     return { color: st.color, ico: 'lock', label: a.detail };
   }
   if (a?.status === 'done') {
@@ -179,6 +189,7 @@ const ICONS = {
   more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   server: '<rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><path d="M6 6.5h.01"/><path d="M6 17.5h.01"/>',
   chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  split: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 3v18"/>',
 };
 
 function icon(name) {
@@ -461,7 +472,7 @@ function setInputMode(mode) {
 // oder hat das Terminal den Fokus, bleibt alles sichtbar.
 function updatePromptCover(t, status) {
   if (!t?.cover) return;
-  const reveal = status === 'blocked' || t.userFocused || inputMode === 'terminal';
+  const reveal = needsInputStatus(status) || t.userFocused || inputMode === 'terminal';
   const screen = t.term.element?.querySelector('.xterm-screen');
   if (reveal || !t.promptPattern || !screen) { t.cover.style.height = '0px'; return; }
   const buffer = t.term.buffer.active;
@@ -487,6 +498,7 @@ const termStateTitleEl = $('term-state-title');
 const termStateDetailEl = $('term-state-detail');
 const termComposerEl = $('term-composer');
 const termPromptEl = $('term-prompt');
+const termAttachmentsEl = $('term-attachments');
 const termSendEl = $('term-send');
 const termAttachEl = $('term-attach');
 const termImageEl = $('term-image');
@@ -498,6 +510,40 @@ const termQueueTextEl = $('term-queue-text');
 // Das Menü lebt allein von der Schreibmarke im Textfeld. token verwirft
 // Antworten, die zu einer älteren Eingabe gehören.
 let completionState = { trigger: null, items: [], index: 0, token: 0 };
+let composerAttachments = [];
+let attachmentSessionID = null;
+
+function renderComposerAttachments() {
+  termAttachmentsEl.hidden = composerAttachments.length === 0;
+  termsEl.classList.toggle('has-attachments', composerAttachments.length > 0);
+  termAttachmentsEl.innerHTML = composerAttachments.map((attachment, index) => `
+    <figure class="term-attachment">
+      <img src="${esc(attachment.preview)}" alt="">
+      <figcaption title="${esc(attachment.name)}">${esc(attachment.name)}</figcaption>
+      <button type="button" data-attachment-index="${index}" aria-label="${esc(attachment.name)} entfernen" title="Bild entfernen">${icon('x')}</button>
+    </figure>`).join('');
+}
+
+function clearComposerAttachments() {
+  for (const attachment of composerAttachments) {
+    if (attachment.preview) URL.revokeObjectURL(attachment.preview);
+  }
+  composerAttachments = [];
+  attachmentSessionID = activeSessionID;
+  renderComposerAttachments();
+}
+
+termAttachmentsEl.addEventListener('click', event => {
+  const button = event.target.closest('[data-attachment-index]');
+  if (!button) return;
+  const index = Number(button.dataset.attachmentIndex);
+  const [removed] = composerAttachments.splice(index, 1);
+  if (removed?.preview) URL.revokeObjectURL(removed.preview);
+  renderComposerAttachments();
+  const a = agentInfo(activeTerm, activeSessionID);
+  updateComposerControls(!a || ['exited', 'dead'].includes(a.status));
+  termPromptEl.focus();
+});
 
 function renderCompletions() {
   const { items, index } = completionState;
@@ -645,12 +691,14 @@ function wireVendorSwitch(sessionID, sessionName) {
   }
 }
 
-// Die Conversation-Oberfläche liegt neben dem Terminal derselben Session. Sie
-// liest nur: Umschalten rührt weder die Auswahl noch die Laufzeit der Session
-// an, und sie bietet nichts an, was eine Berechtigungsfrage beantworten würde.
-let termSurface = 'terminal';
+// Die Conversation-Oberfläche liegt neben dem Terminal derselben Session.
+// Für verwaltete Sessions bietet sie die Steuerung an, die der Agent-Host
+// tatsächlich ausführt: Turn unterbrechen und offene Freigaben entscheiden.
+// Für tmux-Sessions bleibt sie lesend — dort wird im Pane geantwortet.
+let termSurface = 'conversation';
 let conversationView = null;
 let conversationSessionID = null;
+let managedPollTimer = null;
 
 function ensureConversationView() {
   if (conversationView) return conversationView;
@@ -662,30 +710,134 @@ function ensureConversationView() {
   conversationView = createConversationView({
     host: surface,
     onOpenTerminal: () => showTermSurface('terminal'),
+    onInterrupt: () => interruptManagedSession(),
+    onPermissionDecision: (requestID, decision) => answerManagedSession(requestID, decision),
   });
   return conversationView;
 }
 
-async function showTermSurface(next) {
+async function refreshManagedState(sessionID) {
+  if (!conversationView || String(conversationSessionID) !== String(sessionID)) return;
+  try {
+    const result = await ManagedSessionState(String(sessionID));
+    if (String(conversationSessionID) !== String(sessionID)) return;
+    conversationView.setManagedState(result);
+  } catch {
+    // Ohne Host bleibt die Fläche lesend statt eine Steuerung vorzutäuschen.
+  }
+}
+
+function startManagedPoll(sessionID) {
+  stopManagedPoll();
+  refreshManagedState(sessionID);
+  managedPollTimer = setInterval(() => {
+    if (termSurface !== 'conversation' || String(conversationSessionID) !== String(sessionID)) {
+      stopManagedPoll();
+      return;
+    }
+    refreshManagedState(sessionID);
+  }, 2000);
+}
+
+function stopManagedPoll() {
+  if (managedPollTimer) clearInterval(managedPollTimer);
+  managedPollTimer = null;
+}
+
+async function interruptManagedSession() {
+  const sessionID = conversationSessionID;
+  if (!sessionID) return;
+  try {
+    await InterruptManagedTurn(String(sessionID));
+    toast('Turn unterbrochen — die Session bleibt bereit');
+  } catch (err) {
+    toast('Unterbrechen fehlgeschlagen: ' + errorText(err), true);
+  } finally {
+    refreshManagedState(sessionID);
+    await refresh(true);
+  }
+}
+
+async function answerManagedSession(requestID, decision) {
+  const sessionID = conversationSessionID;
+  if (!sessionID || !requestID) return;
+  try {
+    await AnswerManagedPermission(String(sessionID), String(requestID), String(decision));
+    toast(decision === 'allow' ? 'Freigabe erteilt' : 'Freigabe verweigert');
+  } catch (err) {
+    toast('Entscheidung fehlgeschlagen: ' + errorText(err), true);
+  } finally {
+    refreshManagedState(sessionID);
+    await refresh(true);
+  }
+}
+
+async function ensureSessionTerminal(sessionID, name) {
+  if (!sessionID || !name) return null;
+  let t = terms.get(name);
+  if (t && t.sessionID !== sessionID) {
+    EventsOff('term:data:' + t.connectionKey);
+    EventsOff('term:closed:' + t.connectionKey);
+    CloseTerm(t.connectionKey);
+    try { t.term.dispose(); } catch { /* bereits beendet */ }
+    t.wrap.remove();
+    terms.delete(name);
+    t = null;
+  }
+  const fresh = !t;
+  if (!t) t = makeTerm(sessionID, name);
+  else t.sessionID = sessionID;
+  t.term.options.fontFamily = TERM_FONTS[termFontFamily];
+  t.term.options.fontSize = termFontSize;
+  t.term.options.lineHeight = 1.35;
+  if (t.wrap.parentElement !== termsEl) termsEl.appendChild(t.wrap);
+  for (const [termName, entry] of terms) entry.wrap.classList.toggle('active', termName === name);
+  t.fit.fit();
+  if (fresh) {
+    try { await OpenTerm(sessionID, name, t.term.cols, t.term.rows); }
+    catch (err) { t.term.write('\x1b[31m' + err + '\x1b[0m\r\n'); }
+    try { t.promptPattern = await PromptLinePattern(String(sessionID)); }
+    catch { t.promptPattern = ''; }
+  } else {
+    ResizeTerm(t.connectionKey, t.term.cols, t.term.rows);
+  }
+  t.term.focus();
+  requestAnimationFrame(() => {
+    if (!t.wrap.classList.contains('active')) return;
+    t.term.clearTextureAtlas?.();
+    t.term.refresh(0, t.term.rows - 1);
+  });
+  return t;
+}
+
+async function showTermSurface(next, force = false) {
   const surface = next === 'conversation' ? 'conversation' : 'terminal';
-  if (termSurface === surface) return;
+  const a = agentInfo(activeTerm, activeSessionID);
+  if (surface === 'terminal' && !canShowTerminal(a)) {
+    toast('Diese Agent-Session läuft ohne Terminal. Nutze die Agentenansicht.', true);
+    return;
+  }
+  if (!force && termSurface === surface) return;
   termSurface = surface;
   termsEl.classList.toggle('showing-conversation', surface === 'conversation');
   updateTermBar();
 
   if (surface !== 'conversation') {
     conversationSessionID = null;
+    stopManagedPoll();
     WatchConversation('').catch(() => {});
-    const t = terms.get(activeTerm);
-    t?.fit?.fit();
-    t?.term?.focus();
+    await ensureSessionTerminal(activeSessionID, activeTerm);
     return;
   }
 
   const sessionID = activeSessionID;
+  for (const entry of terms.values()) entry.wrap.classList.remove('active');
   conversationSessionID = sessionID;
   const surfaceView = ensureConversationView();
+  surfaceView.setWaiting(needsInputStatus(a?.status));
+  surfaceView.setTerminalAvailable(canShowTerminal(a));
   WatchConversation(String(sessionID)).catch(() => {});
+  startManagedPoll(sessionID);
   try {
     const reading = await SessionConversation(String(sessionID));
     if (conversationSessionID === sessionID) surfaceView.setReading(reading);
@@ -698,11 +850,9 @@ async function showTermSurface(next) {
   }
 }
 
-// resetTermSurface bringt beim Sessionwechsel das Terminal zurück, damit die
-// Oberfläche nie die Conversation einer anderen Session zeigt.
 function resetTermSurface() {
   conversationSessionID = null;
-  if (termSurface === 'terminal') return;
+  stopManagedPoll();
   termSurface = 'terminal';
   termsEl.classList.remove('showing-conversation');
   WatchConversation('').catch(() => {});
@@ -730,6 +880,16 @@ function updateTermBar() {
   const automationActive = !a?.term && automation?.enabled
     ? `<button class="btn tiny tb-automation is-active" id="tb-automation"${disabled} title="Automatisierung aktiv · nächster Lauf ${esc(formatAutomationDate(automation.nextRunAt))}">${icon('clock')}<span>Geplant</span></button>`
     : '';
+  // Die Warteschlange bekommt dieselbe Badge-Sprache wie „Geplant“: solange
+  // etwas eingereiht ist, steht die Anzahl in der Leiste — direkt neben der
+  // Automatisierung, weil beides künftige Arbeit ankündigt. Ein Klick öffnet
+  // die Liste mit Verwerfen und erneutem Senden, statt nur das Formular.
+  const queue = !a?.term ? queuedBadge(a) : null;
+  const queueActive = queue
+    ? `<button class="btn tiny tb-queue is-active${queue.stuck ? ' is-stuck' : ''} submenu-anchor" id="tb-queue"${disabled} ` +
+      `title="${esc(queue.title)}" aria-label="${esc(queue.count === 1 ? '1 eingereihte Nachricht — Details anzeigen' : `${queue.count} eingereihte Nachrichten — Details anzeigen`)}">` +
+      `${icon('hourglass')}<span>${esc(queue.label)}</span></button>`
+    : '';
   termBarEl.innerHTML =
     `<button class="btn tiny" id="tb-back" title="Übersicht (⌘0)">‹ Übersicht</button>` +
     `<span class="tb-avatar">${agentPortrait(activeTerm, 24, a)}</span>` +
@@ -741,7 +901,7 @@ function updateTermBar() {
     (a?.service ? `<span class="tb-service" title="Service-Session — hält nur einen Dienst am Laufen und bleibt im Hydra-Modus ausgeblendet">${icon('server')}Service</span>` : '') +
     `<span class="tb-st">${visHtml(v)}</span>` +
     (a?.project && a.project !== '(ohne Projekt)' ? `<span class="tb-proj">${esc(a.project)}</span>` : '') +
-    `<span class="tb-actions">` + finishActions + automationActive +
+    `<span class="tb-actions">` + finishActions + automationActive + queueActive +
     surfaceSwitchHtml(a) +
     `<button class="btn tiny submenu-anchor" id="tb-more" title="Weitere Aktionen — einreihen, Zeitplan, Links, Service, schließen" aria-label="Weitere Aktionen">${icon('more')}</button></span>`;
   $('tb-back').onclick = showOverview;
@@ -754,12 +914,15 @@ function updateTermBar() {
       act(DoneAgent(sessionID), `/done an „${sessionName}" gesendet — Plan in der Session bestätigen`).catch(() => {});
     $('tb-done-more').onclick = e => openFinishMenu(e.currentTarget, sessionID, sessionName);
     if (automationActive) $('tb-automation').onclick = () => openAutomationDialog(sessionID, sessionName);
+    if (queueActive) $('tb-queue').onclick = e => openQueueMenu(e.currentTarget, sessionID, sessionName);
   }
   wireVendorSwitch(sessionID, sessionName);
   $('tb-more').onclick = e => openSessionActionsMenu(e.currentTarget, sessionID, sessionName, a, gone);
-  // Die Berechtigungsfrage selbst steht in keiner Conversation. Die Oberfläche
-  // sagt nur, dass gewartet wird, und weist auf das Terminal.
-  conversationView?.setWaiting(a?.status === 'blocked');
+  // Solange eine Runtime ihre offene Frage noch nicht als Item liefert, bleibt
+  // der Wartezustand trotzdem sichtbar. Ein Terminal-Link erscheint nur dort,
+  // wo die Runtime tatsächlich ein Terminal anbietet.
+  conversationView?.setWaiting(needsInputStatus(a?.status));
+  conversationView?.setTerminalAvailable(canShowTerminal(a));
   updateTermComposer(a, v, gone);
 }
 
@@ -767,10 +930,13 @@ function updateTermBar() {
 // Eine Terminal-Session hat keinen Verlauf, also auch keinen Umschalter.
 function surfaceSwitchHtml(a) {
   if (a?.term) return '';
+  if (!canShowTerminal(a)) {
+    return `<span class="tb-mode" title="Diese Session wird direkt über den Agent-Runtime gesteuert">${icon('chat')}Agent</span>`;
+  }
   const showsConversation = termSurface === 'conversation';
-  const label = showsConversation ? 'Terminal zeigen' : 'Verlauf zeigen';
+  const label = showsConversation ? 'Terminal als Fallback öffnen' : 'Agentenansicht zeigen';
   return `<button class="btn tiny" id="tb-surface" title="${esc(label)}" aria-pressed="${showsConversation}">` +
-    `${icon(showsConversation ? 'terminal' : 'chat')}<span>${showsConversation ? 'Terminal' : 'Verlauf'}</span></button>`;
+    `${icon(showsConversation ? 'terminal' : 'chat')}<span>${showsConversation ? 'Terminal' : 'Agent'}</span></button>`;
 }
 
 function checkoutChipsHtml(a) {
@@ -782,7 +948,7 @@ function updateComposerControls(gone) {
   const unavailable = composerBusy || gone || !activeTerm;
   termPromptEl.disabled = unavailable;
   termAttachEl.disabled = unavailable;
-  termSendEl.disabled = unavailable || !termPromptEl.value.trim();
+  termSendEl.disabled = unavailable || !canSendComposer(termPromptEl.value, composerAttachments);
 }
 
 function setComposerHint(message, reset = true) {
@@ -796,21 +962,21 @@ function setComposerHint(message, reset = true) {
 
 function updateTermComposer(a, visual, gone) {
   const activeStatus = a?.status;
-  const hideState = !gone
-    && (a?.term || activeStatus === 'term')
-    && !['blocked', 'running', 'agents'].includes(activeStatus);
-  termStateEl.className = hideState ? 'is-hidden' : '';
-  termsEl.classList.toggle('without-session-state', hideState);
+  const showState = gone || needsInputStatus(activeStatus);
+  termStateEl.className = showState ? '' : 'is-hidden';
+  termsEl.classList.toggle('without-session-state', !showState);
   let stateIcon = 'check';
   let title = 'Bereit für deine nächste Nachricht';
-  let detail = 'Nutze den Composer oder arbeite direkt im Terminal weiter.';
+  let detail = termSurface === 'conversation'
+    ? 'Schreibe dem Agenten direkt über das Nachrichtenfeld.'
+    : 'Nutze den Composer oder arbeite direkt im Terminal weiter.';
 
   if (gone) {
     termStateEl.className = 'is-ended';
     stateIcon = 'x';
     title = 'Session beendet';
     detail = 'Der Verlauf bleibt lesbar. Öffne die Session über die Seitenleiste erneut, um weiterzuarbeiten.';
-  } else if (a?.status === 'blocked') {
+  } else if (needsInputStatus(a?.status)) {
     termStateEl.className = 'is-waiting';
     stateIcon = 'warn';
     title = 'Deine Eingabe wird benötigt';
@@ -838,23 +1004,30 @@ function updateTermComposer(a, visual, gone) {
 }
 
 async function sendComposerMessage() {
-  const message = termPromptEl.value.trim();
   const sessionName = activeTerm;
+  const sessionID = activeSessionID;
+  const a = agentInfo(sessionName, sessionID);
   const t = sessionName && terms.get(sessionName);
-  if (!message || !t || composerBusy) return;
+  const message = composeMessage(termPromptEl.value, composerAttachments, a?.term ? ' ' : '\n');
+  if (!message || !sessionID || composerBusy || (a?.term && !t)) return;
 
   composerBusy = true;
-  updateComposerControls(false);
+  updateComposerControls(!a || ['exited', 'dead'].includes(a.status));
   termComposerEl.setAttribute('aria-busy', 'true');
   setComposerHint('Wird gesendet …', false);
   try {
-    const normalized = message.replace(/\r?\n/g, '\r');
-    const pasted = t.term.modes.bracketedPasteMode
-      ? `\x1b[200~${normalized}\x1b[201~`
-      : normalized;
-    await WriteTerm(t.connectionKey, toB64(pasted + '\r'));
+    if (a?.term) {
+      const normalized = message.replace(/\r?\n/g, '\r');
+      const pasted = t.term.modes.bracketedPasteMode
+        ? `\x1b[200~${normalized}\x1b[201~`
+        : normalized;
+      await WriteTerm(t.connectionKey, toB64(pasted + '\r'));
+      t.term.scrollToBottom();
+    } else {
+      await SendMessage(String(sessionID), message);
+    }
     termPromptEl.value = '';
-    t.term.scrollToBottom();
+    clearComposerAttachments();
     setComposerHint(`An ${sessionName} gesendet`);
   } catch (err) {
     setComposerHint('Senden fehlgeschlagen', false);
@@ -874,17 +1047,17 @@ async function insertComposerImage(file) {
   setComposerHint('Bild wird angehängt …', false);
   try {
     const path = await SaveImage(await blobToB64(file));
-    const start = termPromptEl.selectionStart ?? termPromptEl.value.length;
-    const end = termPromptEl.selectionEnd ?? start;
-    const before = termPromptEl.value.slice(0, start);
-    const after = termPromptEl.value.slice(end);
-    const prefix = before && !/\s$/.test(before) ? ' ' : '';
-    const suffix = after && !/^\s/.test(after) ? ' ' : '';
-    termPromptEl.value = before + prefix + path + suffix + after;
-    const caret = (before + prefix + path + suffix).length;
-    termPromptEl.setSelectionRange(caret, caret);
-    setComposerHint('Bild angehängt');
-    termPromptEl.dispatchEvent(new Event('input'));
+    if (attachmentSessionID !== activeSessionID) clearComposerAttachments();
+    attachmentSessionID = activeSessionID;
+    composerAttachments.push({
+      name: file.name || 'Eingefügtes Bild',
+      path,
+      preview: URL.createObjectURL(file),
+    });
+    renderComposerAttachments();
+    setComposerHint(composerAttachments.length === 1 ? '1 Bild angehängt' : `${composerAttachments.length} Bilder angehängt`);
+    const a = agentInfo(activeTerm, activeSessionID);
+    updateComposerControls(!a || ['exited', 'dead'].includes(a.status));
     termPromptEl.focus();
   } catch (err) {
     setComposerHint('Bild konnte nicht angehängt werden', false);
@@ -910,14 +1083,14 @@ termPromptEl.addEventListener('keydown', e => {
   }
 });
 termPromptEl.addEventListener('paste', e => {
-  const imageItem = [...(e.clipboardData?.items || [])].find(item => item.kind === 'file' && item.type.startsWith('image/'));
-  if (!imageItem) return;
+  const imageItems = [...(e.clipboardData?.items || [])].filter(item => item.kind === 'file' && item.type.startsWith('image/'));
+  if (!imageItems.length) return;
   e.preventDefault();
-  insertComposerImage(imageItem.getAsFile());
+  for (const imageItem of imageItems) insertComposerImage(imageItem.getAsFile());
 });
 termAttachEl.onclick = () => termImageEl.click();
 termImageEl.onchange = () => {
-  insertComposerImage(termImageEl.files?.[0]);
+  for (const file of termImageEl.files || []) insertComposerImage(file);
   termImageEl.value = '';
 };
 
@@ -954,6 +1127,47 @@ function openSessionActionsMenu(anchor, sessionID, sessionName, a, gone) {
   showSubMenu(anchor, `<div class="mi-head">${sessionToolMark(a)}${esc(sessionName)}</div>`, items);
 }
 
+// openQueueMenu zeigt, was die Badge in der Term-Leiste nur zählt: die
+// eingereihten Nachrichten mit Alter, Ungewiss-Vermerk und den Aktionen aus
+// der Übersicht (Verwerfen, erneut senden) — plus Einstieg zum Weiter-Einreihen.
+function openQueueMenu(anchor, sessionID, sessionName) {
+  if (subMenuEl.style.display === 'block' && subMenuAnchor === anchor) { hideSubMenu(); return; }
+  const a = agentInfo(sessionName, sessionID);
+  const messages = queuedMessages(a);
+  if (!messages.length) {
+    showSubMenu(anchor,
+      `<div class="mi-head">${icon('hourglass')} Eingereiht</div>`,
+      [{ icon: 'hourglass', label: 'Nachricht einreihen', hint: 'wird zugestellt, sobald die Session frei ist', run: () => toggleQueueForm(true) }]);
+    return;
+  }
+  subMenuAnchor = anchor;
+  const head = `<div class="mi-head">${icon('hourglass')} Eingereiht — ` +
+    (messages.length === 1 ? '1 Nachricht wartet' : `${messages.length} Nachrichten warten`) + `</div>`;
+  const list = messages.map(message => {
+    const age = message.age ? `<span class="qm-age">${esc(message.age)}</span>` : '';
+    const note = message.stuck ? `<span class="qm-note">Zustellung ungewiss</span>` : '';
+    const retry = message.stuck
+      ? `<button type="button" class="btn tiny" data-queue-act="requeue" data-session-id="${esc(a.id)}" data-message-id="${esc(message.id)}" ` +
+        `title="Die Nachricht noch einmal zustellen — die Session könnte sie dann doppelt erhalten">Erneut senden</button>`
+      : '';
+    return `<div class="qm-item${message.stuck ? ' is-stuck' : ''}">` +
+      `<span class="qm-text" title="${esc(message.text)}">${esc(message.text)}</span>` +
+      `<span class="qm-meta">${age}${note}</span>` +
+      `<span class="qm-actions">${retry}` +
+      `<button type="button" class="btn tiny danger" data-queue-act="drop" data-session-id="${esc(a.id)}" data-message-id="${esc(message.id)}" ` +
+      `title="Die Nachricht aus der Warteschlange entfernen">Verwerfen</button></span></div>`;
+  }).join('');
+  subMenuEl.innerHTML = head +
+    `<div class="qm-list">${list}</div>` +
+    `<div class="mi" data-queue-more>${icon('hourglass')}` +
+    `<span class="mi-body"><span class="mi-label">Weitere Nachricht einreihen</span>` +
+    `<span class="mi-hint">wird zugestellt, sobald die Session frei ist</span></span></div>`;
+  subMenuEl.style.display = 'block';
+  const r = anchor.getBoundingClientRect();
+  subMenuEl.style.left = Math.max(8, Math.min(r.right - subMenuEl.offsetWidth, window.innerWidth - subMenuEl.offsetWidth - 8)) + 'px';
+  subMenuEl.style.top = (r.bottom + 6) + 'px';
+}
+
 async function setServiceFlag(sessionID, sessionName, service) {
   try {
     await act(SetSessionService(sessionID, service), service
@@ -967,8 +1181,8 @@ function toggleQueueForm(show = termQueueEl.classList.contains('is-hidden')) {
   if (show) {
     termQueueTextEl.focus();
   } else {
-    const t = activeTerm && terms.get(activeTerm);
-    t?.term.focus();
+    if (termSurface === 'conversation') termPromptEl.focus();
+    else terms.get(activeTerm)?.term.focus();
   }
 }
 
@@ -1159,6 +1373,7 @@ async function openSession(sessionID, name) {
   const dockTab = dockTabs().find(tab => tab.id === sessionID || (!tab.id && tab.name === name));
   if (dockTab) closeDockTab(dockTab);
   if (activeSessionID && activeSessionID !== sessionID) markSeen(activeSessionID);
+  if (attachmentSessionID && attachmentSessionID !== sessionID) clearComposerAttachments();
   if (activeSessionID !== sessionID) resetTermSurface();
   markSeen(sessionID);
   activeTerm = name;
@@ -1166,44 +1381,10 @@ async function openSession(sessionID, name) {
   SetActiveTerm(sessionID);
   toggleQueueForm(false);
   showPanel('terms');
-  let t = terms.get(name);
-  if (t && t.sessionID !== sessionID) {
-    EventsOff('term:data:' + t.connectionKey);
-    EventsOff('term:closed:' + t.connectionKey);
-    CloseTerm(t.connectionKey);
-    try { t.term.dispose(); } catch { /* bereits beendet */ }
-    t.wrap.remove();
-    terms.delete(name);
-    t = null;
-  }
-  const fresh = !t;
-  if (!t) t = makeTerm(sessionID, name);
-  else t.sessionID = sessionID;
-  t.term.options.fontFamily = TERM_FONTS[termFontFamily];
-  t.term.options.fontSize = termFontSize;
-  t.term.options.lineHeight = 1.35;
-  if (t.wrap.parentElement !== termsEl) termsEl.appendChild(t.wrap);
-  for (const [n, o] of terms) o.wrap.classList.toggle('active', n === name);
-  t.fit.fit();
-  if (fresh) {
-    try { await OpenTerm(sessionID, name, t.term.cols, t.term.rows); }
-    catch (err) { t.term.write('\x1b[31m' + err + '\x1b[0m\r\n'); }
-    try { t.promptPattern = await PromptLinePattern(String(sessionID)); }
-    catch { t.promptPattern = ''; }
-  } else {
-    ResizeTerm(t.connectionKey, t.term.cols, t.term.rows);
-  }
-  t.term.focus();
-  // Beim Wechsel zwischen Sessions verliert der WebGL-Renderer Glyphen aus dem
-  // Textur-Atlas — dann fehlen ganze Textstücke, bis tmux zufällig neu zeichnet.
-  const shown = t;
-  requestAnimationFrame(() => {
-    if (!shown.wrap.classList.contains('active')) return;
-    shown.term.clearTextureAtlas?.();
-    shown.term.refresh(0, shown.term.rows - 1);
-  });
   renderSidebar();
-  updateTermBar();
+  const a = agentInfo(name, sessionID);
+  await showTermSurface(defaultSessionSurface(a), true);
+  if (termSurface === 'conversation') termPromptEl.focus();
 }
 
 const PANELS = ['overview', 'search-view', 'terms', 'inbox-view', 'graph-view', 'board-view', 'stats-view', 'settings-view'];
@@ -2075,10 +2256,10 @@ function liveSessions() {
 function attentionState() {
   const sessions = liveSessions();
   return {
-    waiting: sessions.filter(a => a.status === 'blocked'),
+    waiting: sessions.filter(a => needsInputStatus(a.status)),
     active: sessions.filter(a => a.working === true),
     finished: sessions.filter(a => a.status === 'done'),
-    unread: sessions.filter(a => a.unread && a.status !== 'blocked'),
+    unread: sessions.filter(a => a.unread && !needsInputStatus(a.status)),
     unknown: sessions.filter(a => !a.status || a.status === 'unknown'),
   };
 }
@@ -2222,7 +2403,7 @@ function sessionRow(row) {
   const div = document.createElement('div');
   div.className = 'session' +
     (active ? ' selected' : '') +
-    (a.status === 'blocked' ? ' needs-input' : '') +
+    (needsInputStatus(a.status) ? ' needs-input' : '') +
     (a.unread && !active ? ' unread' : '');
   const key = idx < 9 ? `<span class="skey">⌘${idx + 1}</span>` : '';
   const dead = ['exited', 'dead'].includes(a.status);
@@ -2243,7 +2424,7 @@ function sessionRow(row) {
         `<span class="sage">${esc(a.age)}</span>${key}` +
       `</span>` +
     `</span>` +
-    (a.status === 'blocked' ? `<span class="sflag" title="wartet auf deine Eingabe">!</span>` :
+    (needsInputStatus(a.status) ? `<span class="sflag" title="wartet auf deine Eingabe">!</span>` :
       a.unread && !active ? `<span class="sdot" title="neu seit deinem letzten Blick"></span>` : '');
   div.dataset.sessionId = String(a.id || '');
   div.onclick = () => { if (!suppressHeadClick) openSession(a.id, a.name); };
@@ -2467,7 +2648,7 @@ function agentPill(a, project) {
     ? `<button class="btn tiny" data-act="compose" data-session-id="${esc(a.id)}" data-agent="${esc(a.name)}" ` +
       `title="Nachricht an „${esc(a.name)}“ schreiben — arbeitet die Session gerade, wartet die Nachricht in der Warteschlange">${icon('pencil')}</button>`
     : '';
-  return `<span class="pill${a.status === 'blocked' ? ' waiting' : ''}${a.unread ? ' unread' : ''}">` +
+  return `<span class="pill${needsInputStatus(a.status) ? ' waiting' : ''}${a.unread ? ' unread' : ''}">` +
     `<span class="pill-avatar">${agentPortrait(a.name, 18, a)}</span>` +
     `<span class="dot" style="background:${v.color}"></span>` +
     `<span class="name">${esc(a.name)}</span>` +
@@ -2614,8 +2795,8 @@ function gitState(p, wt) {
 function worktreeActions(p, wt) {
   if (!p.path) return '';
 	const projectRef = p.id;
-  const busy = (wt.agents || []).some(a => !a.dock && ['running', 'agents', 'blocked'].includes(a.status));
-  const anySession = (wt.agents || []).some(a => !a.dock && ['running', 'agents', 'blocked', 'done', 'idle'].includes(a.status));
+  const busy = (wt.agents || []).some(a => !a.dock && ['running', 'agents', 'blocked', 'awaiting-decision'].includes(a.status));
+  const anySession = (wt.agents || []).some(a => !a.dock && ['running', 'agents', 'blocked', 'awaiting-decision', 'done', 'idle'].includes(a.status));
   let btns = '';
   if (!busy && wt.checkoutKnown && wt.divergenceKnown && p.mainBranchKnown && wt.ahead > 0 && wt.branch !== p.mainBranch) {
     btns += `<button class="btn" data-act="merge" data-project="${esc(p.id)}" data-source="${esc(wt.branch)}" data-target="${esc(p.mainBranch)}" ` +
@@ -3436,6 +3617,7 @@ function showMenu(x, y, sessionID, name, status) {
     menuEl.innerHTML =
       `<div class="mi-head">${sessionToolMark(session)}${esc(name)}</div>` +
       `<div class="mi" data-mi="open">${developerIcon('bash')} Terminal öffnen</div>` + done +
+      `<div class="mi" data-mi="splitopen">${icon('split')} Im Split öffnen</div>` +
       switchable +
       `<div class="mi" data-mi="service">${icon('server')} ${session?.service ? 'Service-Markierung entfernen' : 'Als Service markieren'}</div>` +
       `<div class="mi" data-mi="later">${icon('clock')} Für später schließen</div>` +
@@ -3562,6 +3744,7 @@ menuEl.addEventListener('click', async e => {
   if (!id) return;
   switch (mi.dataset.mi) {
     case 'open': hideMenu(); openSession(id, name); break;
+    case 'splitopen': hideMenu(); openDockTabSplit({ id, name }); break;
     case 'switchvendor':
       hideMenu();
       await requestVendorSwitch(id, name, mi.dataset.vendor);
@@ -3705,6 +3888,32 @@ subMenuEl.addEventListener('click', async e => {
   try {
     await act(AzSetSubscription(id), 'Subscription gewechselt — Status wird neu geladen');
     refreshDeployStatus();
+  } catch { /* toast zeigt den Fehler */ }
+});
+
+// Die Warteschlangen-Liste der Term-Leiste nutzt dieselben Aktionen wie die
+// Übersicht: Verwerfen und erneutes Senden laufen über act(), damit Toast und
+// Refresh (und damit die Badge-Anzahl) denselben Weg nehmen.
+subMenuEl.addEventListener('click', async e => {
+  const more = e.target.closest('[data-queue-more]');
+  if (more) {
+    hideSubMenu();
+    toggleQueueForm(true);
+    return;
+  }
+  const button = e.target.closest('[data-queue-act]');
+  if (!button) return;
+  const sessionId = button.dataset.sessionId;
+  const messageId = button.dataset.messageId;
+  if (!sessionId || !messageId) return;
+  button.disabled = true;
+  hideSubMenu();
+  try {
+    if (button.dataset.queueAct === 'requeue') {
+      await act(RetryQueuedMessage(sessionId, messageId), 'Die Nachricht wird erneut zugestellt.');
+    } else {
+      await act(DiscardQueuedMessage(sessionId, messageId), 'Die wartende Nachricht wurde verworfen.');
+    }
   } catch { /* toast zeigt den Fehler */ }
 });
 document.addEventListener('mousedown', e => {

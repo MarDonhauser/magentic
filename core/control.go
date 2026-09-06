@@ -18,6 +18,12 @@ const (
 	ControlSessionOutput ControlVerb = "session.output"
 	ControlSessionWait   ControlVerb = "session.wait"
 	ControlSessionKill   ControlVerb = "session.kill"
+	// ControlSessionInterrupt stops the running turn of a managed Session
+	// without stopping its process. A tmux Session has no turn to interrupt.
+	ControlSessionInterrupt ControlVerb = "session.interrupt"
+	// ControlSessionAnswerPermission delivers a developer's explicit decision
+	// to one open PermissionRequest of a managed Session.
+	ControlSessionAnswerPermission ControlVerb = "session.answer-permission"
 	// ControlSessionWhoami answers the caller's own identity from the
 	// environment marker facts it presents.
 	ControlSessionWhoami ControlVerb = "session.whoami"
@@ -164,6 +170,32 @@ func ControlVerbSpecs() []ControlVerbSpec {
 			},
 		},
 		{
+			Verb:    ControlSessionInterrupt,
+			Summary: "Laufenden Turn einer verwalteten Session unterbrechen",
+			Flags: []ControlFlag{
+				{Name: "session", Usage: "SessionID oder Name", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Session = v }},
+				{Name: "project", Usage: "Projekt, das einen Namen eindeutig macht", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Project = v }},
+			},
+		},
+		{
+			Verb:    ControlSessionAnswerPermission,
+			Summary: "Offene Berechtigungsanfrage einer verwalteten Session beantworten",
+			Flags: []ControlFlag{
+				{Name: "session", Usage: "SessionID oder Name", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Session = v }},
+				{Name: "project", Usage: "Projekt, das einen Namen eindeutig macht", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Project = v }},
+				{Name: "request", Usage: "Kennung der Berechtigungsanfrage", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.RequestID = v }},
+				{Name: "decision", Usage: "Entscheidung: allow oder deny", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Decision = v }},
+				{Name: "by", Usage: "Wer entscheidet (Protokoll, keine Autorität)", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.DecidedBy = v }},
+			},
+		},
+		{
 			Verb:    ControlSessionWhoami,
 			Summary: "Eigene Session aus den Marker-Angaben auflösen",
 			After: func(args *ControlArgs, _ []string) {
@@ -294,16 +326,17 @@ func ControlSuccessOutcome(outcome ControlOutcome) bool {
 type ControlStatus string
 
 const (
-	ControlStatusUnknown  ControlStatus = "unknown"
-	ControlStatusRunning  ControlStatus = "running"
-	ControlStatusAgents   ControlStatus = "agents"
-	ControlStatusShell    ControlStatus = "shell"
-	ControlStatusWaiting  ControlStatus = "waiting"
-	ControlStatusIdle     ControlStatus = "idle"
-	ControlStatusDone     ControlStatus = "done"
-	ControlStatusExited   ControlStatus = "exited"
-	ControlStatusDead     ControlStatus = "dead"
-	ControlStatusTerminal ControlStatus = "terminal"
+	ControlStatusUnknown          ControlStatus = "unknown"
+	ControlStatusRunning          ControlStatus = "running"
+	ControlStatusAgents           ControlStatus = "agents"
+	ControlStatusShell            ControlStatus = "shell"
+	ControlStatusWaiting          ControlStatus = "waiting"
+	ControlStatusAwaitingDecision ControlStatus = "waiting-decision"
+	ControlStatusIdle             ControlStatus = "idle"
+	ControlStatusDone             ControlStatus = "done"
+	ControlStatusExited           ControlStatus = "exited"
+	ControlStatusDead             ControlStatus = "dead"
+	ControlStatusTerminal         ControlStatus = "terminal"
 )
 
 // controlStatus projects an observed AgentStatus onto the API vocabulary.
@@ -317,6 +350,8 @@ func controlStatus(status AgentStatus) ControlStatus {
 		return ControlStatusShell
 	case StatusBlocked:
 		return ControlStatusWaiting
+	case StatusAwaitingDecision:
+		return ControlStatusAwaitingDecision
 	case StatusIdle:
 		return ControlStatusIdle
 	case StatusDone:
@@ -373,6 +408,13 @@ type ControlArgs struct {
 	Until     string        `json:"until,omitempty"`
 	TimeoutMS int           `json:"timeoutMs,omitempty"`
 	Marker    ControlMarker `json:"marker,omitzero"`
+	// RequestID names the PermissionRequest an answer-permission verb answers.
+	RequestID string `json:"requestId,omitempty"`
+	// Decision is the explicit developer decision: allow or deny.
+	Decision string `json:"decision,omitempty"`
+	// DecidedBy names the explicit developer action for the protocol only;
+	// it carries no authority.
+	DecidedBy string `json:"decidedBy,omitempty"`
 }
 
 // ControlRequest is one line of the protocol. The identifier is chosen by the
@@ -441,6 +483,10 @@ type ControlResult struct {
 	Occupant *ControlOccupant `json:"occupant,omitempty"`
 	// Observed is the occupant a replacement check actually found.
 	Observed *ControlOccupant `json:"observed,omitempty"`
+	// Turn is the interrupted or running turn an interrupt verb ended.
+	Turn *ManagedTurn `json:"turn,omitempty"`
+	// Permission is the closed PermissionRequest an answer verb decided.
+	Permission *PermissionRequest `json:"permission,omitempty"`
 }
 
 // ControlResponse is one line of the protocol answering one request.

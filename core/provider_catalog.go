@@ -13,7 +13,6 @@ type AgentVendorOption struct {
 var agentVendorLabels = map[AgentVendor]string{
 	AgentVendorClaude:      "Claude Code",
 	AgentVendorCodex:       "Codex",
-	AgentVendorGemini:      "Gemini CLI",
 	AgentVendorCopilot:     "GitHub Copilot",
 	AgentVendorAntigravity: "Antigravity",
 }

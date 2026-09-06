@@ -107,13 +107,13 @@ func (w *controlWait) evaluate(state State, observed SessionObservation, hasObse
 		switch status {
 		case ControlStatusIdle, ControlStatusDone:
 			return controlWaitVerdict{Ended: true, Outcome: ControlWaitDone}
-		case ControlStatusWaiting:
+		case ControlStatusWaiting, ControlStatusAwaitingDecision:
 			// The common failure of unattended delegation is a permission
 			// prompt. Absorbing it silently would make the verb untrustworthy.
 			return controlWaitVerdict{Ended: true, Outcome: ControlWaitBlocked}
 		}
 	case ControlWaitWaiting:
-		if status == ControlStatusWaiting {
+		if status == ControlStatusWaiting || status == ControlStatusAwaitingDecision {
 			return controlWaitVerdict{Ended: true, Outcome: ControlWaitWaiting}
 		}
 	}

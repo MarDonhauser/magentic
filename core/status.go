@@ -21,6 +21,12 @@ const (
 	// position, and an inserted member would silently renumber every Session
 	// the desktop app already holds.
 	StatusDone
+	// StatusAwaitingDecision is the managed runtime's own wait for a person:
+	// a PermissionRequest is open and nothing but an explicit developer
+	// decision will close it. It is distinct from StatusBlocked (a tmux pane
+	// showing a prompt), from working, and from idle. Appended last so every
+	// earlier position keeps its meaning.
+	StatusAwaitingDecision
 )
 
 func (s AgentStatus) Label() string {
@@ -33,6 +39,8 @@ func (s AgentStatus) Label() string {
 		return "Shell läuft"
 	case StatusBlocked:
 		return "wartet"
+	case StatusAwaitingDecision:
+		return "wartet auf Entscheidung"
 	case StatusDone:
 		return "fertig"
 	case StatusIdle:
@@ -57,6 +65,8 @@ func (s AgentStatus) Icon() string {
 		return "⚙"
 	case StatusBlocked:
 		return "◆"
+	case StatusAwaitingDecision:
+		return "◈"
 	case StatusDone:
 		return "✓"
 	case StatusIdle:
@@ -86,6 +96,8 @@ func (s AgentStatus) PersistedLabel() string {
 		return "shell"
 	case StatusBlocked:
 		return "blocked"
+	case StatusAwaitingDecision:
+		return "awaiting-decision"
 	case StatusDone:
 		return "done"
 	case StatusIdle:
@@ -112,6 +124,8 @@ func AgentStatusFromPersistedLabel(label string) AgentStatus {
 		return StatusShell
 	case "blocked":
 		return StatusBlocked
+	case "awaiting-decision":
+		return StatusAwaitingDecision
 	case "done":
 		return StatusDone
 	case "idle":

@@ -106,6 +106,10 @@ func (t *ManagedTurns) EndTurn(reason TurnEndReason, failReason string) (Managed
 	return *t.turn, true
 }
 
+// ErrManagedNoTurn refuses an interrupt when no turn is running. Nothing is
+// signalled and the process is untouched.
+var ErrManagedNoTurn = errors.New("für diese Session läuft kein Turn, der unterbrochen werden könnte")
+
 // InterruptTurn ends the running turn with the interrupted reason and leaves
 // everything else — the Session, its process, its conversation — untouched.
 // Interrupting with no running turn is refused and stops nothing.
@@ -113,7 +117,7 @@ func (t *ManagedTurns) InterruptTurn() (ManagedTurn, error) {
 	ended, ok := t.EndTurn(TurnEndInterrupted, "")
 	if !ok {
 		return ManagedTurn{SessionID: t.sessionID},
-			fmt.Errorf("für Session %q läuft kein Turn, der unterbrochen werden könnte", t.sessionID)
+			fmt.Errorf("%w: Session %q", ErrManagedNoTurn, t.sessionID)
 	}
 	return ended, nil
 }

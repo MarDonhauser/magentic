@@ -61,7 +61,9 @@ func (a *App) observationFor(sessions []core.Session, fresh bool) core.Observati
 			return cached
 		}
 	}
-	observe := core.Observe
+	observe := func(ctx context.Context, sessions []core.Session) core.ObservationSnapshot {
+		return core.ObserveWithManaged(ctx, sessions, core.Observe, core.DefaultManagedStateProvider)
+	}
 	if a.observeSessions != nil {
 		observe = a.observeSessions
 	}
@@ -174,7 +176,7 @@ func (a *App) watchLoop() {
 				st = current
 			}
 		}
-		snapshot := core.Observe(context.Background(), st.Agents)
+		snapshot := core.ObserveWithManaged(context.Background(), st.Agents, core.Observe, core.DefaultManagedStateProvider)
 		if _, err := core.RecordObservationStatuses(context.Background(), core.OpenRegistry(core.StatePath()), snapshot); err != nil && time.Since(lastErrLog) > time.Minute {
 			core.Logf("watchLoop: Status-Facts konnten nicht geschrieben werden: %v", err)
 			lastErrLog = time.Now()

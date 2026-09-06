@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  applyReading, applyUpdate, emptyConversationState, fnv1a, renderModel, rowSignature, scrollDecision,
+  applyReading, applyUpdate, canShowTerminal, defaultSessionSurface, emptyConversationState,
+  fnv1a, renderModel, rowSignature, scrollDecision,
 } from './conversation-state.js';
 
 // item baut die Nutzlast nach, die Go liefert: Label und Einklappbarkeit
@@ -85,6 +86,29 @@ test('Ein Aufruf ohne Detail bleibt eine Zeile ohne ausklappbaren Rumpf', () => 
   assert.equal(model.rows[0].awaiting, true);
 });
 
+test('Coding-Sessions öffnen in der Agentenansicht, reine Shells im Terminal', () => {
+  assert.equal(defaultSessionSurface({ term: false }), 'conversation');
+  assert.equal(defaultSessionSurface({ term: true }), 'terminal');
+});
+
+test('Nur eine Runtime mit Attach-Aktion bietet das eingebettete Terminal an', () => {
+  assert.equal(canShowTerminal({ runtime: 'managed', runtimeActions: ['interrupt', 'answer-permission'] }), false);
+  assert.equal(canShowTerminal({ runtime: 'tmux', runtimeActions: ['attach'] }), true);
+  assert.equal(canShowTerminal({ term: true, runtimeActions: ['attach'] }), true);
+  assert.equal(canShowTerminal({}), true, 'ältere Projektionen bleiben als tmux lesbar');
+});
+
+test('Gestreamte Agent-Nachrichten bleiben als laufend markiert', () => {
+  const model = renderModel(available([
+    item('m1', 'agent-message', { detail: 'Ich prüfe …', inProgress: true }),
+  ]));
+  assert.equal(model.rows[0].inProgress, true);
+  assert.notEqual(
+    rowSignature(model.rows[0], new Set()),
+    rowSignature({ ...model.rows[0], inProgress: false }, new Set()),
+  );
+});
+
 test('Agent-Nachrichten und Entwickler-Eingaben stehen vollständig da, ohne Umschalter', () => {
   const model = renderModel(available([
     item('m1', 'agent-message', { title: 'Erledigt', detail: 'Erledigt.\n\nDetails folgen.' }),
@@ -156,6 +180,16 @@ test('Ein wartender Agent wird benannt und der Weg zu seinem Terminal angeboten'
   assert.equal(model.waiting.waiting, true);
   assert.match(model.waiting.headline, /wartet/);
   assert.deepEqual(model.actions.map(action => action.kind), ['open-terminal']);
+});
+
+test('Eine verwaltete Agent-Session bietet kein Terminal als erfundenes Ausweichziel an', () => {
+  const model = renderModel(available([item('m1', 'agent-message')]), {
+    waiting: true,
+    terminalAvailable: false,
+  });
+  assert.equal(model.terminalReachable, false);
+  assert.deepEqual(model.actions, []);
+  assert.match(model.waiting.detail, /Agentenansicht/);
 });
 
 test('Die Oberfläche bietet keine Bedienung an, die eine Berechtigungsfrage beantworten würde', () => {

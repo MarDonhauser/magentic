@@ -841,6 +841,26 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
   color: var(--accent);
 }
 
+/* Die Warteschlangen-Badge spricht dieselbe Sprache wie „Geplant“: aktiv
+   heißt Accent. Nur die ungewisse Zustellung nach einem Absturz trägt Warnung,
+   damit sie sich von der normalen Warteschlange unterscheidet. */
+#terms:not(.hydra) #term-bar .tb-queue.is-active {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+#terms:not(.hydra) #term-bar .tb-queue.is-active.is-stuck {
+  border-color: color-mix(in srgb, var(--warning) 52%, var(--border));
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: var(--warning);
+}
+
+#term-bar .tb-queue.is-active.is-stuck {
+  border-color: color-mix(in srgb, var(--warning) 52%, var(--border));
+  color: var(--warning);
+}
+
 #terms:not(.hydra) .tb-name {
   min-width: 0;
   max-width: 240px;
@@ -909,6 +929,19 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
   border: 1px solid color-mix(in srgb, var(--good) 40%, var(--border)); border-radius: 999px; padding: 1px 8px;
 }
 .tb-service .ico { width: 11px; height: 11px; }
+.tb-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 4px 9px;
+  border-radius: var(--radius-control);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-semibold);
+}
+.tb-mode .ico { width: 14px; height: 14px; }
 
 .term-wrap { position: absolute; inset: 48px 8px 8px 10px; display: none; background: var(--term-bg); --wails-drop-target: drop; }
 .term-wrap.active { display: block; }
@@ -1639,6 +1672,50 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
 #submenu .mi.danger:hover { background: rgba(224,108,117,0.14); }
 #submenu .mi > .ico { flex: none; }
 
+/* Die Warteschlangen-Liste der Term-Leiste: dieselben Inhalte wie unter der
+   Übersichts-Zeile, aber als kompakte Karten im Menü — lange Vorschauen werden
+   nach drei Zeilen abgeschnitten, der Volltext steht im title. */
+#submenu .qm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px 2px 4px;
+}
+#submenu .qm-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--raise);
+}
+#submenu .qm-item.is-stuck { border-color: color-mix(in srgb, var(--warning) 45%, var(--border)); }
+#submenu .qm-text {
+  color: var(--ink);
+  font-size: var(--fs-label);
+  line-height: var(--lh-snug);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+#submenu .qm-item.is-stuck .qm-text { color: var(--warning); }
+#submenu .qm-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-meta);
+  color: var(--muted);
+}
+#submenu .qm-age { font-variant-numeric: tabular-nums; }
+#submenu .qm-note { color: var(--warning); }
+#submenu .qm-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+
 #search-view { position: absolute; inset: 0; display: none; flex-direction: column; padding: 4px 20px 10px; }
 #search-bar { display: flex; gap: 8px; padding: 8px 0 12px; }
 #search-results { flex: 1; overflow-y: auto; }
@@ -2282,6 +2359,11 @@ body.session-magnet-dragging * { cursor: grabbing !important; user-select: none 
   box-shadow: var(--term-composer-shadow-focus);
 }
 
+#terms.has-attachments #term-composer { height: 180px; }
+#terms:not(.hydra).without-session-state.has-attachments > .term-wrap { bottom: 208px; }
+#terms.showing-conversation.has-attachments #term-conversation { bottom: 208px; }
+#terms.has-attachments #term-queue { bottom: calc(16px + 180px + var(--space-sm)); }
+
 #term-prompt {
   min-height: 0;
   flex: 1;
@@ -2297,6 +2379,72 @@ body.session-magnet-dragging * { cursor: grabbing !important; user-select: none 
 
 #term-prompt::placeholder { color: var(--muted); opacity: 1; }
 #term-prompt:disabled { cursor: not-allowed; opacity: 0.55; }
+
+.term-attachments {
+  display: flex;
+  flex: none;
+  gap: var(--space-sm);
+  margin: -3px 0 9px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--term-scroll-thumb) transparent;
+}
+
+.term-attachments[hidden] { display: none; }
+
+.term-attachment {
+  min-width: 0;
+  max-width: 220px;
+  height: 44px;
+  flex: 0 1 220px;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 30px;
+  align-items: center;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--raise);
+}
+
+.term-attachment img {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  background: var(--page);
+}
+
+.term-attachment figcaption {
+  min-width: 0;
+  padding: 0 9px;
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.term-attachment button {
+  width: 30px;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.term-attachment button:hover {
+  background: var(--raise-2);
+  color: var(--critical);
+}
+
+.term-attachment button .ico {
+  width: 14px;
+  height: 14px;
+}
 
 .term-compose-toolbar {
   height: 40px;

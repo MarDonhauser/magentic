@@ -250,12 +250,18 @@ func (s *PermissionStore) CloseUnanswerable(sessionID SessionID, reason string) 
 }
 
 func (s *PermissionStore) closedOutcome(id string) PermissionOutcome {
+	return s.closedRequest(id).Outcome
+}
+
+// closedRequest reports the stored request by ID, or an empty unanswerable
+// one when the ID was never held.
+func (s *PermissionStore) closedRequest(id string) PermissionRequest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if entry, known := s.requests[id]; known {
-		return entry.request.Outcome
+		return entry.request
 	}
-	return PermissionUnanswerable
+	return PermissionRequest{ID: id, Outcome: PermissionUnanswerable}
 }
 
 func (s *PermissionStore) decisionOutcome(decision PermissionDecision) PermissionOutcome {

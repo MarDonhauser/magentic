@@ -164,7 +164,7 @@ func promptInputStateFromObservation(observed SessionObservation) promptInputSta
 		return promptInputUnknown
 	case StatusRunning, StatusAgents, StatusShell:
 		return promptInputBusy
-	case StatusBlocked:
+	case StatusBlocked, StatusAwaitingDecision:
 		return promptInputNeedsResponse
 	case StatusExited, StatusDead:
 		return promptInputClosed
@@ -730,7 +730,7 @@ func observationAttention(status AgentStatus) AttentionState {
 	switch status {
 	case StatusRunning, StatusAgents, StatusShell:
 		return AttentionWorking
-	case StatusBlocked:
+	case StatusBlocked, StatusAwaitingDecision:
 		return AttentionNeedsInput
 	case StatusDone, StatusIdle, StatusExited:
 		return AttentionReview
@@ -746,7 +746,7 @@ func observationUnread(status AgentStatus, seenAt, activity time.Time, activityK
 		return false
 	}
 	switch status {
-	case StatusDone, StatusIdle, StatusBlocked, StatusExited:
+	case StatusDone, StatusIdle, StatusBlocked, StatusAwaitingDecision, StatusExited:
 		return activity.After(seenAt)
 	default:
 		return false

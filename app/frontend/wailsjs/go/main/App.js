@@ -302,6 +302,18 @@ export function WatchConversation(arg1) {
   return window['go']['main']['App']['WatchConversation'](arg1);
 }
 
+export function ManagedSessionState(arg1) {
+  return window['go']['main']['App']['ManagedSessionState'](arg1);
+}
+
+export function InterruptManagedTurn(arg1) {
+  return window['go']['main']['App']['InterruptManagedTurn'](arg1);
+}
+
+export function AnswerManagedPermission(arg1, arg2, arg3) {
+  return window['go']['main']['App']['AnswerManagedPermission'](arg1, arg2, arg3);
+}
+
 export function WorktreeDiff(arg1, arg2) {
   return window['go']['main']['App']['WorktreeDiff'](arg1, arg2);
 }

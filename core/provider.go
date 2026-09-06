@@ -79,7 +79,7 @@ const (
 )
 
 func builtinAgentProviders() []AgentProvider {
-	return []AgentProvider{claudeProvider{}, codexProvider{}, geminiProvider{}, copilotProvider{}, antigravityProvider{}}
+	return []AgentProvider{claudeProvider{}, codexProvider{}, copilotProvider{}, antigravityProvider{}}
 }
 
 func providerForVendor(vendor AgentVendor) (AgentProvider, bool) {

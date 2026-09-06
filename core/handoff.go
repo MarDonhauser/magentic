@@ -255,7 +255,7 @@ func validateHandoffDeliveryReady(name string, observed promptTargetObservation)
 	switch observed.Status {
 	case StatusIdle, StatusDone:
 		// Continue with Observation's kind-specific input fact below.
-	case StatusBlocked:
+	case StatusBlocked, StatusAwaitingDecision:
 		return fmt.Errorf("Ziel-Session %q wartet auf eine Antwort — erst den offenen Dialog beantworten", name)
 	case StatusExited:
 		return fmt.Errorf("KI in Ziel-Session %q ist beendet", name)
@@ -303,7 +303,7 @@ func validateHandoffTarget(session Session, observed SessionObservation) (string
 	case StatusRunning, StatusAgents, StatusShell, StatusDone, StatusIdle:
 		waitForReady := promptTarget.Input != promptInputReady
 		return tool, waitForReady, nil
-	case StatusBlocked:
+	case StatusBlocked, StatusAwaitingDecision:
 		return "", false, fmt.Errorf("Ziel-Session %q wartet auf eine Antwort — erst den offenen Dialog beantworten", session.Name)
 	case StatusExited:
 		return "", false, fmt.Errorf("KI in Ziel-Session %q ist beendet", session.Name)

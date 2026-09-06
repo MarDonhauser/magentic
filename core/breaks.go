@@ -222,7 +222,7 @@ func rolloverDay(f *breakFile, t time.Time) bool {
 // Anwesenheit.
 func acceptsInput(st AgentStatus) bool {
 	switch st {
-	case StatusBlocked, StatusIdle, StatusExited, StatusTerm:
+	case StatusBlocked, StatusAwaitingDecision, StatusIdle, StatusExited, StatusTerm:
 		return true
 	}
 	return false
@@ -232,7 +232,7 @@ func acceptsInput(st AgentStatus) bool {
 // oder ein offenes Terminal darf einen Pausenvorschlag nicht verhindern —
 // sonst gäbe es nie einen guten Moment.
 func needsUser(st AgentStatus) bool {
-	return st == StatusBlocked
+	return st == StatusBlocked || st == StatusAwaitingDecision
 }
 
 func isBusy(st AgentStatus) bool {

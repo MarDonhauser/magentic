@@ -72,9 +72,22 @@ function toRow(item) {
     expandable: collapsible && detail !== '',
     failed: !!item.failed,
     awaiting: !!item.awaitingResult,
+    inProgress: !!item.inProgress,
     delegated: !!item.delegated,
     children: [],
   };
+}
+
+export function canShowTerminal(session) {
+  if (session?.term) return true;
+  if (Array.isArray(session?.runtimeActions)) {
+    return session.runtimeActions.includes('attach');
+  }
+  return session?.runtime !== 'managed';
+}
+
+export function defaultSessionSurface(session) {
+  return session?.term ? 'terminal' : 'conversation';
 }
 
 const NOTICES = {
@@ -108,7 +121,8 @@ export function renderModel(state, context = {}) {
   const current = state && typeof state === 'object' ? state : emptyConversationState();
   const actions = [];
   const waiting = !!context.waiting;
-  if (waiting) {
+  const terminalAvailable = context.terminalAvailable !== false;
+  if (waiting && terminalAvailable) {
     actions.push({ kind: 'open-terminal', label: 'Zum Terminal dieser Session' });
   }
 
@@ -117,7 +131,7 @@ export function renderModel(state, context = {}) {
       headline: 'Diese Conversation ist derzeit nicht verfügbar.',
       terminal: true,
     };
-    if (notice.terminal && !actions.some(action => action.kind === 'open-terminal')) {
+    if (terminalAvailable && notice.terminal && !actions.some(action => action.kind === 'open-terminal')) {
       actions.push({ kind: 'open-terminal', label: 'Zum Terminal dieser Session' });
     }
     return {
@@ -126,9 +140,9 @@ export function renderModel(state, context = {}) {
       headline: notice.headline,
       reason: current.reason || '',
       vendor: current.vendor || '',
-      terminalReachable: true,
+      terminalReachable: terminalAvailable,
       rows: [],
-      waiting: waitingModel(waiting),
+      waiting: waitingModel(waiting, terminalAvailable),
       actions,
     };
   }
@@ -140,21 +154,21 @@ export function renderModel(state, context = {}) {
     headline: rows.length ? '' : EMPTY_HEADLINE,
     reason: '',
     vendor: current.vendor || '',
-    terminalReachable: true,
+    terminalReachable: terminalAvailable,
     rows,
-    waiting: waitingModel(waiting),
+    waiting: waitingModel(waiting, terminalAvailable),
     actions,
   };
 }
 
-function waitingModel(waiting) {
+function waitingModel(waiting, terminalAvailable) {
   if (!waiting) return null;
   return {
     waiting: true,
     headline: 'Der Agent wartet auf dich.',
-    // The prompt itself is never recorded in a Conversation, so it can only be
-    // answered in the Session's terminal.
-    detail: 'Antworten lässt er sich nur im Terminal dieser Session.',
+    detail: terminalAvailable
+      ? 'Öffne das Terminal dieser Session, um die ausstehende Frage zu beantworten.'
+      : 'Die ausstehende Entscheidung erscheint direkt in der Agentenansicht, sobald sie verfügbar ist.',
   };
 }
 
@@ -237,7 +251,8 @@ export function fnv1a(text) {
 export function rowSignature(row, expanded) {
   const bits = [
     row?.id ?? '', row?.kind ?? '', row?.title ?? '', row?.detail ?? '',
-    row?.failed ? 1 : 0, row?.awaiting ? 1 : 0, row?.delegated ? 1 : 0,
+    row?.failed ? 1 : 0, row?.awaiting ? 1 : 0, row?.inProgress ? 1 : 0,
+    row?.delegated ? 1 : 0,
     expanded?.has(row?.id) ? 1 : 0,
   ];
   for (const child of row?.children || []) bits.push(rowSignature(child, expanded));

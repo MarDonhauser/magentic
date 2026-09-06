@@ -809,7 +809,7 @@ func validatePromptTargetStatus(name string, status AgentStatus) error {
 	switch status {
 	case StatusRunning, StatusAgents, StatusShell, StatusIdle, StatusDone:
 		return nil
-	case StatusBlocked:
+	case StatusBlocked, StatusAwaitingDecision:
 		return fmt.Errorf("Ziel-Session %q wartet auf eine Antwort — erst den offenen Dialog beantworten", name)
 	case StatusExited:
 		return fmt.Errorf("KI in Ziel-Session %q ist beendet", name)

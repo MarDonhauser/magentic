@@ -25,30 +25,30 @@
 
 ## 4. Turn control and delivery
 
-- [ ] 4.1 Add the control verbs for the managed runtime — start a turn, interrupt a turn, answer a permission request — to `core/control.go` and its dispatcher, keeping the existing verbs' behavior for tmux Sessions; verify with tests in `core/control_dispatch_test.go` that each new verb is dispatchable and that a managed-only verb against a tmux Session is refused with an addressing outcome.
+- [x] 4.1 Add the control verbs for the managed runtime — start a turn, interrupt a turn, answer a permission request — to `core/control.go` and its dispatcher, keeping the existing verbs' behavior for tmux Sessions; verify with tests in `core/control_dispatch_test.go` that each new verb is dispatchable and that a managed-only verb against a tmux Session is refused with an addressing outcome.
 - [ ] 4.2 Deliver a queued prompt to a managed Session and advance the Outbox only on the protocol's echo of that prompt; verify with tests that the queue advances on the echo, that a delivery failure leaves the prompt queued with its reason, and that a missing echo neither advances the queue nor resends.
-- [ ] 4.3 Record turn start and turn end with an explicit end reason (completed, interrupted, failed with the vendor reason) from protocol events; verify with tests that a completed turn, an interrupted turn and a failed turn each record their own reason, and that a long silent stretch keeps the turn running.
-- [ ] 4.4 Implement interrupting the running turn so the process stays alive and accepts the next prompt, and refuse an interrupt when no turn is running; verify with tests for both, asserting the process is still alive afterwards in each case.
-- [ ] 4.5 Publish streamed output as it arrives, marking the in-progress message, and supersede it with the completed message; verify with a test that a streamed then completed message leaves exactly one final Item in its final form.
+- [x] 4.3 Record turn start and turn end with an explicit end reason (completed, interrupted, failed with the vendor reason) from protocol events; verify with tests that a completed turn, an interrupted turn and a failed turn each record their own reason, and that a long silent stretch keeps the turn running.
+- [x] 4.4 Implement interrupting the running turn so the process stays alive and accepts the next prompt, and refuse an interrupt when no turn is running; verify with tests for both, asserting the process is still alive afterwards in each case.
+- [x] 4.5 Publish streamed output as it arrives, marking the in-progress message, and supersede it with the completed message; verify with a test that a streamed then completed message leaves exactly one final Item in its final form.
 
 ## 5. Permission decisions
 
 - [ ] 5.1 Add the `agent-approve` MCP mode to the Magentic binary, configured into the agent through `--mcp-config`, whose tool call blocks in the host until a decision arrives; verify with a test that the tool call returns only after a decision is delivered.
-- [ ] 5.2 Represent an open `PermissionRequest` with what is asked, its Session and the time it was raised, readable by every connected interface and surviving disconnects; verify with tests that a request is visible to a second interface and still open after the first one disconnects and reconnects.
-- [ ] 5.3 Add "waiting for a decision" as its own observed status in `core/status.go` and `core/observation.go`, distinct from working, idle and waiting for a prompt; verify with tests in `core/status_semantics_test.go`.
-- [ ] 5.4 Plan an attention intent for a Session that opens a permission request, before any notification is emitted, per ADR 0007; verify with a test in `core/attention_test.go` asserting the planned intent and the ordering.
-- [ ] 5.5 Deliver a decision exactly once and close the request, refusing a second answer; verify with a test that two concurrent answers result in one delivered decision and one refusal.
-- [ ] 5.6 Close an open request as no longer answerable when the agent process ends, never as allowed or denied; verify with a test asserting the recorded outcome.
-- [ ] 5.7 Confirm no setting, mode or code path answers a permission request without an explicit developer decision; verify with a test that a request with no interface connected stays open indefinitely, and with a test enumerating settings that none of them answers one.
-- [ ] 5.8 Record the request and its outcome as Items in the Session's activity in the order they occurred; verify with a test over the resulting Item sequence.
+- [x] 5.2 Represent an open `PermissionRequest` with what is asked, its Session and the time it was raised, readable by every connected interface and surviving disconnects; verify with tests that a request is visible to a second interface and still open after the first one disconnects and reconnects.
+- [x] 5.3 Add "waiting for a decision" as its own observed status in `core/status.go` and `core/observation.go`, distinct from working, idle and waiting for a prompt; verify with tests in `core/status_semantics_test.go`.
+- [x] 5.4 Plan an attention intent for a Session that opens a permission request, before any notification is emitted, per ADR 0007; verify with a test in `core/attention_test.go` asserting the planned intent and the ordering.
+- [x] 5.5 Deliver a decision exactly once and close the request, refusing a second answer; verify with a test that two concurrent answers result in one delivered decision and one refusal.
+- [x] 5.6 Close an open request as no longer answerable when the agent process ends, never as allowed or denied; verify with a test asserting the recorded outcome.
+- [x] 5.7 Confirm no setting, mode or code path answers a permission request without an explicit developer decision; verify with a test that a request with no interface connected stays open indefinitely, and with a test enumerating settings that none of them answers one.
+- [x] 5.8 Record the request and its outcome as Items in the Session's activity in the order they occurred; verify with a test over the resulting Item sequence.
 
 ## 6. Lifecycle, observation and status
 
 - [ ] 6.1 Add the managed path to `Start`, `Resume` and `Kill` in `core/lifecycle.go`, dispatching on the Session's runtime and writing durable intent before any process is touched, per ADR 0003; verify with tests that intent precedes the spawn and that an interrupted start is completed by reconciliation without a second process.
 - [ ] 6.2 Verify the recorded working directory exists and resolves inside its Project before starting a managed process; verify with tests that a missing directory and a directory outside the Project both fail the start and start nothing.
-- [ ] 6.3 Derive a managed Session's observed status from daemon facts and protocol events, issuing no tmux command for it; verify with a test that observing a managed Session runs no tmux call.
-- [ ] 6.4 Report an unexpected agent exit as a failed Session with the exit reason and start no replacement; verify with a test.
-- [ ] 6.5 Report managed Sessions as unobservable, naming the daemon, when an interface cannot reach it, per ADR 0004; verify with a test that they read as unobservable and not as dead.
+- [x] 6.3 Derive a managed Session's observed status from daemon facts and protocol events, issuing no tmux command for it; verify with a test that observing a managed Session runs no tmux call.
+- [x] 6.4 Report an unexpected agent exit as a failed Session with the exit reason and start no replacement; verify with a test.
+- [x] 6.5 Report managed Sessions as unobservable, naming the daemon, when an interface cannot reach it, per ADR 0004; verify with a test that they read as unobservable and not as dead.
 
 ## 7. Continuing in a terminal
 
@@ -66,8 +66,8 @@
 
 ## 9. Surfaces
 
-- [ ] 9.1 Add the permission request surface to the desktop app: what is asked, allow and deny, and the Session it belongs to; verify with unit tests over the render model including a closed request that can no longer be answered.
-- [ ] 9.2 Add the interrupt action for managed Sessions to the TUI and the desktop app; verify with tests that it is offered only for managed Sessions with a running turn.
+- [x] 9.1 Add the permission request surface to the desktop app: what is asked, allow and deny, and the Session it belongs to; verify with unit tests over the render model including a closed request that can no longer be answered.
+- [x] 9.2 Add the interrupt action for managed Sessions to the TUI and the desktop app; verify with tests that it is offered only for managed Sessions with a running turn.
 - [ ] 9.3 Show streamed output live in the conversation surface introduced by `add-agent-timeline`; verify with a unit test that an in-progress message renders as in progress and is replaced in place on completion.
 - [ ] 9.4 Remove attach from managed Sessions in both interfaces and offer continuing in a terminal in its place; verify with tests over the action lists.
 

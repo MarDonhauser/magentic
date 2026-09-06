@@ -32,6 +32,29 @@ export function queuedMessages(agent) {
   return out;
 }
 
+// queuedBadge fasst die Warteschlange für die Term-Leiste zusammen: dieselbe
+// Quelle wie queuedBlock in der Übersicht, aber als eine Badge wie „Geplant“.
+// Gibt null zurück, wenn nichts wartet — dann gibt es auch keine Badge.
+export function queuedBadge(agent) {
+  const messages = queuedMessages(agent);
+  if (!messages.length) return null;
+  const stuck = messages.filter(message => message.stuck).length;
+  const label = messages.length === 1 ? '1 wartet' : `${messages.length} warten`;
+  const previews = messages.map(message => message.text).filter(Boolean).slice(0, 3);
+  const extra = messages.length - previews.length;
+  const detail = previews.join(' · ') + (extra > 0 ? ` · +${extra} weitere` : '');
+  const uncertain = stuck
+    ? (stuck === 1
+      ? 'Bei einer davon ist ungewiss, ob die Session sie erhalten hat.'
+      : `Bei ${stuck} davon ist ungewiss, ob die Session sie erhalten hat.`)
+    : '';
+  const title = `${queuedHeadline(agent?.name, messages)}` +
+    (detail ? ` ${detail}` : '') +
+    (uncertain ? ` ${uncertain}` : '') +
+    ' Klicken für Details.';
+  return { count: messages.length, stuck, label, title: title.trim() };
+}
+
 // queuedHeadline states in one sentence how many messages wait and how many of
 // them have an unknown delivery outcome.
 export function queuedHeadline(sessionName, messages) {

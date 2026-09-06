@@ -24,7 +24,7 @@ func NotifyDesktop(title, message, sound string) {
 
 func StatusRank(s AgentStatus) int {
 	switch s {
-	case StatusBlocked:
+	case StatusBlocked, StatusAwaitingDecision:
 		return 0
 	case StatusRunning:
 		return 1

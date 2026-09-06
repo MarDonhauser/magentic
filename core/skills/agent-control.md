@@ -26,6 +26,8 @@ schreibt die Kommandozeile genau ein JSON-Dokument auf die Standardausgabe.
 | output | `magentic session output` | `session.output` | Sichtbaren Inhalt einer Session lesen |
 | wait | `magentic session wait` | `session.wait` | Auf die gepinnte Belegung einer Session warten |
 | kill | `magentic session kill` | `session.kill` | Runtime einer Session beenden, der Worktree bleibt |
+| interrupt | `magentic session interrupt` | `session.interrupt` | Laufenden Turn einer verwalteten Session unterbrechen |
+| answer-permission | `magentic session answer-permission` | `session.answer-permission` | Offene Berechtigungsanfrage einer verwalteten Session beantworten |
 | whoami | `magentic session whoami` | `session.whoami` | Eigene Session aus den Marker-Angaben auflösen |
 | watch | `magentic session watch` | `session.watch` | Zustandswechsel als Ereignisstrom mitlesen |
 

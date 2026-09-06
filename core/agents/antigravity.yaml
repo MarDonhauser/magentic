@@ -6,7 +6,7 @@
 # Session, tippt aber nichts hinein.
 kind: antigravity
 label: Antigravity
-tool: antigravity
+tool: gemini
 observed_version: "1.1.5"
 screens_recorded: false
 tail: 25

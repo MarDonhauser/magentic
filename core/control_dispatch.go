@@ -37,8 +37,14 @@ type ControlService struct {
 	// observations is the Seam a pending wait is fed from. The serving process
 	// wires it to the event fan-out so no second observation loop exists.
 	observations func(context.Context, Session) (<-chan ObservationSnapshot, func())
-	events       *ControlEvents
-	now          func() time.Time
+	// managedInterrupt ends the running turn of a managed Session through its
+	// agent host, leaving the process alive. Tests replace it; production
+	// dials the recorded host socket.
+	managedInterrupt func(context.Context, Session) (ManagedTurn, error)
+	// managedAnswer delivers a developer's decision to one open request.
+	managedAnswer func(context.Context, Session, string, PermissionDecision, string) (PermissionRequest, error)
+	events *ControlEvents
+	now    func() time.Time
 }
 
 type ControlServiceConfig struct {
@@ -58,12 +64,16 @@ func NewControlService(config ControlServiceConfig) *ControlService {
 		registry:     OpenRegistry(config.RegistryPath),
 		lifecycle:    OpenSessionLifecycle(SessionLifecycleConfig{RegistryPath: config.RegistryPath, LedgerPath: config.LedgerPath}),
 		repositories: NewRepositories(),
-		observe:      Observe,
-		installed:    providerBinaryAvailable,
-		events:       NewControlEvents(),
-		now:          time.Now,
+		observe: func(ctx context.Context, sessions []Session) ObservationSnapshot {
+			return ObserveWithManaged(ctx, sessions, Observe, DefaultManagedStateProvider)
+		},
+		installed: providerBinaryAvailable,
+		events:    NewControlEvents(),
+		now:       time.Now,
 	}
 	service.deliver = service.deliverThroughOutbox
+	service.managedInterrupt = interruptManagedTurnThroughHost
+	service.managedAnswer = answerManagedPermissionThroughHost
 	service.observations = func(_ context.Context, session Session) (<-chan ObservationSnapshot, func()) {
 		return service.events.Observations(session.ID)
 	}
@@ -97,6 +107,10 @@ func (s *ControlService) Dispatch(ctx context.Context, request ControlRequest) C
 		return s.sessionOutput(ctx, request)
 	case ControlSessionKill:
 		return s.sessionKill(ctx, request)
+	case ControlSessionInterrupt:
+		return s.sessionInterrupt(ctx, request)
+	case ControlSessionAnswerPermission:
+		return s.sessionAnswerPermission(ctx, request)
 	case ControlSessionWait:
 		return s.sessionWait(ctx, request)
 	case ControlSessionWhoami:

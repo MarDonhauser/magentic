@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -303,6 +304,27 @@ func TestOverviewProjectsQueuedOutboxMessages(t *testing.T) {
 	}
 	if len(toOvAgent(Session{ID: "session-2", Name: "leer"}, observed, "", SessionResumability{}).Queued) != 0 {
 		t.Fatal("an empty Outbox produced a queued projection")
+	}
+}
+
+func TestOverviewProjectsRuntimeAndAvailableActions(t *testing.T) {
+	observed := SessionObservation{
+		Availability: ObservationAvailable, Presence: SessionPresencePresent,
+		Status: StatusRunning,
+	}
+	managed := toOvAgent(
+		Session{ID: "managed", Name: "agent", Runtime: RuntimeManaged},
+		observed, "", SessionResumability{},
+	)
+	if managed.Runtime != string(RuntimeManaged) ||
+		!slices.Equal(managed.RuntimeActions, []string{RuntimeActionInterrupt, RuntimeActionAnswerPermission}) {
+		t.Fatalf("managed runtime projection = %#v", managed)
+	}
+
+	tmux := toOvAgent(Session{ID: "tmux", Name: "legacy"}, observed, "", SessionResumability{})
+	if tmux.Runtime != string(RuntimeTmux) ||
+		!slices.Equal(tmux.RuntimeActions, []string{RuntimeActionAttach}) {
+		t.Fatalf("tmux runtime projection = %#v", tmux)
 	}
 }
 

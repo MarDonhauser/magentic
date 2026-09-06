@@ -4,6 +4,9 @@ import { renderMarkdown } from './conversation-markdown.js';
 import {
   applyReading, applyUpdate, emptyConversationState, renderModel, rowSignature, fnv1a, scrollDecision,
 } from './conversation-state.js';
+import {
+  applyManagedSessionState, emptyManagedSessionState, managedControlModel,
+} from './managed-session-state.js';
 
 function esc(text) {
   return String(text ?? '')
@@ -19,12 +22,21 @@ function rowElement(row, expanded, toggle) {
   el.dataset.id = row.id;
   if (row.failed) el.classList.add('cv-failed');
   if (row.awaiting) el.classList.add('cv-awaiting');
+  if (row.inProgress) el.classList.add('cv-in-progress');
   if (row.delegated) el.classList.add('cv-delegated');
 
   if (!row.collapsed) {
     const head = document.createElement('div');
     head.className = 'cv-kind';
-    head.textContent = row.label || row.kind;
+    const label = document.createElement('span');
+    label.textContent = row.label || row.kind;
+    head.appendChild(label);
+    if (row.inProgress) {
+      const live = document.createElement('span');
+      live.className = 'cv-live';
+      live.textContent = 'schreibt';
+      head.appendChild(live);
+    }
     const body = document.createElement('div');
     body.className = 'cv-prose';
     body.innerHTML = renderMarkdown(row.detail || row.title);
@@ -35,7 +47,7 @@ function rowElement(row, expanded, toggle) {
   const line = document.createElement('button');
   line.className = 'cv-line';
   line.type = 'button';
-  const state = row.failed ? 'fehlgeschlagen' : row.awaiting ? 'läuft noch' : '';
+  const state = row.failed ? 'fehlgeschlagen' : row.inProgress ? 'läuft' : row.awaiting ? 'läuft noch' : '';
   line.innerHTML =
     `<span class="cv-kind">${esc(row.label || row.kind)}</span>` +
     `<span class="cv-title">${esc(row.title)}</span>` +
@@ -59,11 +71,15 @@ function rowElement(row, expanded, toggle) {
 
 // createConversationView renders a Session's Conversation into one host. It
 // reads only: nothing here starts, answers or writes to a Session.
-export function createConversationView({ host, onOpenTerminal } = {}) {
+export function createConversationView({
+  host, onOpenTerminal, onInterrupt, onPermissionDecision,
+} = {}) {
   const root = host || document.createElement('div');
   root.classList.add('cv-surface');
   let state = emptyConversationState();
   let waiting = false;
+  let terminalAvailable = true;
+  let managedState = emptyManagedSessionState();
   const expanded = new Set();
   const rendered = new Map();
 
@@ -91,6 +107,35 @@ export function createConversationView({ host, onOpenTerminal } = {}) {
       const reason = document.createElement('span');
       reason.textContent = model.reason;
       el.appendChild(reason);
+    }
+
+    function managedControlElement(model) {
+      const el = document.createElement('section');
+      el.className = `cv-control cv-control-${model.tone}`;
+      el.setAttribute('role', model.tone === 'permission' ? 'alert' : 'status');
+      const copy = document.createElement('span');
+      copy.className = 'cv-control-copy';
+      const headline = document.createElement('strong');
+      headline.textContent = model.title;
+      const detail = document.createElement('span');
+      detail.textContent = model.detail;
+      copy.append(headline, detail);
+      const actions = document.createElement('span');
+      actions.className = 'cv-control-actions';
+      for (const action of model.actions) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `cv-control-action cv-control-action-${action.tone}`;
+        button.textContent = action.label;
+        button.addEventListener('click', () => {
+          if (action.kind === 'interrupt-turn') onInterrupt?.();
+          if (action.kind === 'allow-permission') onPermissionDecision?.(model.requestID, 'allow');
+          if (action.kind === 'deny-permission') onPermissionDecision?.(model.requestID, 'deny');
+        });
+        actions.appendChild(button);
+      }
+      el.append(copy, actions);
+      return el;
     }
     if (model.vendor && model.availability === 'no-normalizer') {
       const vendor = document.createElement('span');
@@ -140,9 +185,11 @@ export function createConversationView({ host, onOpenTerminal } = {}) {
       scrollTop: root.scrollTop, scrollHeight: root.scrollHeight,
       clientHeight: root.clientHeight, hasNewItems,
     });
-    const model = renderModel(state, { waiting });
+    const model = renderModel(state, { waiting, terminalAvailable });
+    const controls = managedControlModel(managedState);
 
     const head = [];
+    if (controls.visible) head.push(managedControlElement(controls));
     if (model.waiting) {
       const el = document.createElement('div');
       el.className = 'cv-waiting';
@@ -194,6 +241,15 @@ export function createConversationView({ host, onOpenTerminal } = {}) {
     setWaiting(next) {
       if (waiting === !!next) return;
       waiting = !!next;
+      draw(false);
+    },
+    setTerminalAvailable(next) {
+      if (terminalAvailable === !!next) return;
+      terminalAvailable = !!next;
+      draw(false);
+    },
+    setManagedState(next) {
+      managedState = applyManagedSessionState(next);
       draw(false);
     },
   };

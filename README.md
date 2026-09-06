@@ -71,9 +71,10 @@ unten die Claude-Limits (5h/7d). Die Übersicht enthält Projekt-Karten mit
 Worktree-Zeilen (ahead/behind, Git-Status, Warnungen), Agent-Pills und alle
 Aktionen:
 
-- **⌨** — Terminal zur Session öffnen (echtes PTY-Attach, natives
-  Markieren/Kopieren, klickbare Links, Scrollback)
-- **Verlauf** — dieselbe Session als Gespräch statt als Terminal (siehe unten)
+- **Agent** — Coding-Session als strukturiertes Gespräch öffnen; Eingaben gehen
+  über die Session-/Outbox-Schicht statt über Terminal-Tastendrücke
+- **Terminal** — expliziter Fallback für tmux-Sessions sowie die primäre
+  Oberfläche reiner Shell-Sessions
 - **✓ done** — schickt `/done` an die laufende Session
 - **🔀 branch → main** — Claude-Session, die den Branch merged
 - **✨ Cleanup** — Claude-Session im verwaisten Worktree: sichten, committen, mergen
@@ -83,21 +84,21 @@ Aktionen:
 - **⌨ Terminal** — neue Session mit reiner Shell statt Claude (auch über
   ⇧-Klick auf das `+` in der Sidebar und in der Hydra-Leiste)
 
-### Verlauf statt Terminal
+### Agentenansicht statt Terminal
 
-Über dem Terminal steht ein Umschalter zwischen **Terminal** und **Verlauf**.
-Der Verlauf liest die Aufzeichnung, die der Agent ohnehin schreibt, und zeigt
-sie als Abfolge: Eingaben und Antworten in voller Länge, Befehle, Dateiänderungen
-und Werkzeugaufrufe als eine Zeile, die sich zu ihrer Ausgabe aufklappen lässt.
-Ein Fehlschlag steht schon in der eingeklappten Zeile, delegierte Arbeit steht
-unter der Aufgabe, aus der sie hervorgegangen ist.
+Coding-Sessions öffnen direkt in der **Agentenansicht**. Sie liest die
+Aufzeichnung, die der Agent ohnehin schreibt, und zeigt sie als Abfolge:
+Eingaben und Antworten in voller Länge, Befehle, Dateiänderungen und
+Werkzeugaufrufe als eine Zeile, die sich zu ihrer Ausgabe aufklappen lässt.
+Ein Fehlschlag steht schon in der eingeklappten Zeile, laufende Antworten sind
+als solche markiert und delegierte Arbeit steht unter der Aufgabe, aus der sie
+hervorgegangen ist.
 
-Der Verlauf ist eine reine Lesefläche. Er ändert nichts an der Session: das
-Umschalten rührt weder die Laufzeit noch die Auswahl an. Neue Einträge kommen im
-Takt der bestehenden Beobachtung dazu, nicht Zeichen für Zeichen — der Agent
-schreibt eine Nachricht erst auf, wenn sie fertig ist. Fragt der Agent nach einer
-Berechtigung, steht davon nichts in der Aufzeichnung; der Verlauf sagt dann, dass
-gewartet wird, und weist den Weg ins Terminal, wo geantwortet wird.
+Das Nachrichtenfeld steuert dieselbe Session über ihre Outbox. Bei
+tmux-basierten Coding-Sessions bleibt das eingebettete Terminal als bewusst
+gewählter Fallback erreichbar; verwaltete Agent-Sessions bieten es nicht an,
+weil sie keinen Terminal-Pane besitzen. Reine Terminal-Sessions öffnen
+weiterhin direkt als Terminal.
 
 Lesbar ist derzeit Claude Code. Für die anderen Agenten sagt die Fläche
 ausdrücklich, dass ihre Verläufe noch nicht gelesen werden können — eine leere
@@ -281,14 +282,16 @@ Kommandozeile ist dabei ein reiner Client dieser Adresse, damit beide Türen nie
 auseinanderlaufen.
 
 ```sh
-magentic session start    # Session in einem Projekt oder Worktree starten
-magentic session list     # Sessions mit ihrer Beobachtung auflisten
-magentic session send     # Text an den Coding-Agent einer Session senden
-magentic session output   # Sichtbaren Inhalt einer Session lesen
-magentic session wait     # Auf die gepinnte Belegung einer Session warten
-magentic session kill     # Runtime einer Session beenden, der Worktree bleibt
-magentic session whoami   # Eigene Session aus den Marker-Angaben auflösen
-magentic session watch    # Zustandswechsel als Ereignisstrom mitlesen
+magentic session start              # Session in einem Projekt oder Worktree starten
+magentic session list               # Sessions mit ihrer Beobachtung auflisten
+magentic session send               # Text an den Coding-Agent einer Session senden
+magentic session output             # Sichtbaren Inhalt einer Session lesen
+magentic session wait               # Auf die gepinnte Belegung einer Session warten
+magentic session kill               # Runtime einer Session beenden, der Worktree bleibt
+magentic session interrupt          # Laufenden Turn einer verwalteten Session unterbrechen
+magentic session answer-permission   # Offene Berechtigungsanfrage einer verwalteten Session beantworten
+magentic session whoami             # Eigene Session aus den Marker-Angaben auflösen
+magentic session watch              # Zustandswechsel als Ereignisstrom mitlesen
 ```
 
 Mit `--json` schreibt jedes Verb genau ein JSON-Dokument auf die Standardausgabe;

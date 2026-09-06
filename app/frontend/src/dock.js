@@ -891,6 +891,28 @@ export function isDockOpen() {
   return open;
 }
 
+// openDockTabSplit öffnet eine Session als neuen Dock-Tab und splittet sie
+// sofort neben das fokussierte Panel — der Sidebar-Einstieg für die sonst nur
+// per Rechtsklick/Drag innerhalb des Docks erreichbare Split-View.
+export function openDockTabSplit(value, edge = 'right') {
+  const ref = normalizeDockRef(value);
+  const key = dockRefKey(ref);
+  if (!mounted || !ref || !key) return;
+  if (!tabs.has(key)) addTab(ref);
+  if (!open) {
+    open = true;
+    applyOpen();
+    notifyLayout();
+  }
+  const target = focusedLeaf();
+  rootNode = target.tabs.length === 0
+    ? addTabToLeaf(rootNode, target.id, ref)
+    : moveTabToEdge(rootNode, ref, target.id, edge);
+  focusedLeafId = findLeafByTabKey(rootNode, key)?.id || focusedLeafId;
+  renderTree();
+  activate(key);
+}
+
 function openDockTab(value) {
   const ref = normalizeDockRef(value);
   const key = dockRefKey(ref);

@@ -95,6 +95,7 @@
             </section>
             <form id="term-composer">
                 <div id="term-completions" class="term-completions" role="listbox" aria-label="Vorschläge" hidden></div>
+                <div id="term-attachments" class="term-attachments" aria-label="Angehängte Bilder" aria-live="polite" hidden></div>
                 <label class="sr-only" for="term-prompt">Nachricht an die aktive Session</label>
                 <textarea id="term-prompt" name="term-prompt" rows="3" spellcheck="true" placeholder="Nachricht an die Session …"></textarea>
                 <div class="term-compose-toolbar">
@@ -107,7 +108,7 @@
                     <button type="submit" id="term-send" aria-label="Nachricht senden" title="Nachricht senden (Enter)" disabled>
                         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>
                     </button>
-                    <input id="term-image" type="file" accept="image/*" hidden>
+                    <input id="term-image" type="file" accept="image/*" multiple hidden>
                 </div>
             </form>
             <form id="term-queue" class="is-hidden">
