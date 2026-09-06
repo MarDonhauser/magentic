@@ -18,8 +18,8 @@ func TestAttentionPlansManagedPermissionBeforeNotify(t *testing.T) {
 		Activity: start, ActivityKnown: true,
 	}
 	planner.Plan(AttentionInput{
-		Now:         start,
-		Observation: ObservationSnapshot{Availability: ObservationAvailable, Sessions: []SessionObservation{working}, ObservedAt: start},
+		Now:           start,
+		Observation:   ObservationSnapshot{Availability: ObservationAvailable, Sessions: []SessionObservation{working}, ObservedAt: start},
 		SessionLabels: map[SessionID]string{"session-m": "managed"},
 	})
 	observed := SessionObservation{
@@ -29,8 +29,8 @@ func TestAttentionPlansManagedPermissionBeforeNotify(t *testing.T) {
 		Activity: start.Add(time.Second), ActivityKnown: true,
 	}
 	plan := planner.Plan(AttentionInput{
-		Now:         start.Add(time.Second),
-		Observation: ObservationSnapshot{Availability: ObservationAvailable, Sessions: []SessionObservation{observed}, ObservedAt: start},
+		Now:           start.Add(time.Second),
+		Observation:   ObservationSnapshot{Availability: ObservationAvailable, Sessions: []SessionObservation{observed}, ObservedAt: start},
 		SessionLabels: map[SessionID]string{"session-m": "managed"},
 	})
 	found := false

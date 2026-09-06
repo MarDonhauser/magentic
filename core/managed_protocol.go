@@ -60,10 +60,10 @@ func ParseManagedEventLine(line []byte) (ManagedEvent, bool) {
 			} `json:"delta"`
 			Text string `json:"text"`
 		} `json:"event"`
-		Result  string `json:"result"`
+		Result  string   `json:"result"`
 		Errors  []string `json:"errors"`
-		IsError bool   `json:"is_error"`
-		Error   string `json:"error"`
+		IsError bool     `json:"is_error"`
+		Error   string   `json:"error"`
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(line)))
 	if err := decoder.Decode(&envelope); err != nil || envelope.Type == "" {

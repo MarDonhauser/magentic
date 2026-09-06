@@ -39,7 +39,11 @@ type App struct {
 	observationAt    time.Time
 	observationInput map[core.SessionID]string
 	observeSessions  func(context.Context, []core.Session) core.ObservationSnapshot
-	conversationMu   sync.Mutex
+	// history öffnet die WorkHistory, die Verlauf, Suche, Links und Timeline
+	// lesen. Produktion teilt eine Instanz je Prozess; Tests injizieren eine
+	// isolierte synchrone Instanz (siehe observeSessions).
+	history        func() (*core.WorkHistory, error)
+	conversationMu sync.Mutex
 	// conversationReader keeps the presented Session's Conversation current.
 	// The Observation pass drives it; it runs no loop of its own.
 	conversationReader *core.ConversationReader

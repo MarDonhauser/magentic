@@ -19,6 +19,7 @@ type HostAPI interface {
 	AddProject(path string) (string, error)
 	AddReviewComment(sessionID, path string, oldStart, oldEnd, newStart, newEnd int, quoted, text, mode string) (core.ReviewComment, error)
 	AgentVendors() []core.AgentVendorOption
+	AnswerManagedPermission(sessionID, requestID, decision string) error
 	ArgoLogin()
 	AzAccounts() []AzAccount
 	AzLogin()
@@ -49,8 +50,10 @@ type HostAPI interface {
 	GitGraph(projectID string, limit int) (core.GitGraph, error)
 	HandoffSession(sourceID, targetID string) error
 	Inbox() core.OvInbox
+	InterruptManagedTurn(sessionID string) error
 	KillSession(sessionID, legacyDockName string) error
 	LaterSession(sessionID string) error
+	ManagedSessionState(sessionID string) ManagedSessionStateResult
 	MarkSeen(sessionID string) error
 	Merge(projectID, source, target string) (string, error)
 	MigrateDockSessions(names []string) ([]DockSessionRef, error)

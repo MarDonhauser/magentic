@@ -372,6 +372,29 @@ func TestHistoryLocationFallbackTreatsMultiProviderRunsAsOneSession(t *testing.T
 	}
 }
 
+func TestMigratedSessionKeepsRetiredProviderAttribution(t *testing.T) {
+	// Die Session wurde von Gemini nach Antigravity migriert; ihr Run zeigt
+	// noch auf die alte Gemini-Konversation. Der Gemini-Record muss weiter
+	// ihr zugeordnet werden — über die Run-Identität, nicht das Vendor-Tag.
+	associations := NewHistoryAssociations(State{
+		Projects: []Project{{ID: "project-id", Name: "Project", Path: "/work/project"}},
+		Agents: []Session{{
+			ID: "session-id", Name: "navi", ProjectID: "project-id",
+			Dir: "/work/project", SessionKind: SessionKindCodingAgent,
+			Vendor:    AgentVendorAntigravity,
+			AgentRuns: []AgentRunRef{{Vendor: AgentVendorAntigravity, ExternalID: "gemini-run"}},
+		}},
+	})
+	resolver := newHistoryAssociationResolver(associations)
+	got := resolver.resolve(historyRecord{Provider: HistoryProviderGemini, ConversationID: "gemini-run"})
+	if got.SessionKey.State != HistoryFactKnown || got.SessionKey.Value != "session-id" {
+		t.Fatalf("migrierte Session attribuiert Gemini-Record nicht: %+v", got)
+	}
+	if got.ProjectKey.State != HistoryFactKnown || got.ProjectKey.Value != "project-id" {
+		t.Fatalf("migrierte Session attribuiert Project nicht: %+v", got)
+	}
+}
+
 func TestHistoryLocationFallbackRanksOnlyProviderCompatibleSessions(t *testing.T) {
 	resolver := newHistoryAssociationResolver(HistoryAssociations{
 		Projects: []HistoryProjectAssociation{{Key: "project-id", Name: "Project", Path: "/work/project"}},

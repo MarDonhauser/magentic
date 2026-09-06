@@ -53,7 +53,13 @@ func pressKey(m model, key string) (model, tea.Cmd) {
 // Eine fortsetzbare Session steht mit eigenem Icon und Label in der Liste —
 // weder laufend noch tot — und behauptet nirgends, der Prozess hätte überlebt.
 func TestResumableAgentLine(t *testing.T) {
-	m, session := resumableUIModel(t, core.AgentVendorGemini, nil)
+	// Isoliertes HOME: Die Run-Referenz existiert beim Anbieter garantiert
+	// nicht, also bietet die Session deterministisch einen frischen Start.
+	t.Setenv("HOME", t.TempDir())
+	// Frisch startbar: Die gespeicherte Referenz liegt beim Anbieter nicht
+	// mehr (isoliertes HOME), also bietet die Session einen frischen Start.
+	m, session := resumableUIModel(t, core.AgentVendorAntigravity,
+		[]core.AgentRunRef{{Vendor: core.AgentVendorAntigravity, ExternalID: "missing-run-1"}})
 	line := m.agentLine(session, 100)
 	if !strings.Contains(line, core.ResumableStatusLabel) || !strings.Contains(line, core.ResumableStatusIcon) {
 		t.Fatalf("agent line = %q, want the resumable reading", line)
@@ -68,7 +74,9 @@ func TestResumableAgentLine(t *testing.T) {
 	}
 }
 
-func TestResumeKeyStartsFreshVendorFresh(t *testing.T) {
+func TestResumeKeyStartsFreshOnlySessionFresh(t *testing.T) {
+	// Isoliertes HOME: Die Run-Referenz existiert beim Anbieter garantiert nicht.
+	t.Setenv("HOME", t.TempDir())
 	previousResume, previousFresh := resumeSessionByID, resumeFreshSessionByID
 	t.Cleanup(func() { resumeSessionByID, resumeFreshSessionByID = previousResume, previousFresh })
 	var resumed, freshed core.SessionID
@@ -80,7 +88,8 @@ func TestResumeKeyStartsFreshVendorFresh(t *testing.T) {
 		freshed = id
 		return nil
 	}
-	m, session := resumableUIModel(t, core.AgentVendorGemini, nil)
+	m, session := resumableUIModel(t, core.AgentVendorAntigravity,
+		[]core.AgentRunRef{{Vendor: core.AgentVendorAntigravity, ExternalID: "missing-run-1"}})
 	next, cmd := pressKey(m, "R")
 	if resumed != "" || freshed != session.ID {
 		t.Fatalf("resume=%q fresh=%q, want only a fresh start", resumed, freshed)
@@ -144,6 +153,8 @@ func TestResumeKeyRefusesLiveSession(t *testing.T) {
 }
 
 func TestDiscardConfirmDropsResumableRecord(t *testing.T) {
+	// Isoliertes HOME: Die Run-Referenz existiert beim Anbieter garantiert nicht.
+	t.Setenv("HOME", t.TempDir())
 	previousDiscard, previousLoad := discardSessionByID, LoadState
 	t.Cleanup(func() { discardSessionByID, LoadState = previousDiscard, previousLoad })
 	var discarded core.SessionID
@@ -152,7 +163,8 @@ func TestDiscardConfirmDropsResumableRecord(t *testing.T) {
 		discarded, discardedObs = id, observed
 		return nil
 	}
-	m, session := resumableUIModel(t, core.AgentVendorGemini, nil)
+	m, session := resumableUIModel(t, core.AgentVendorAntigravity,
+		[]core.AgentRunRef{{Vendor: core.AgentVendorAntigravity, ExternalID: "missing-run-1"}})
 	emptied := *m.state
 	emptied.Agents = nil
 	LoadState = func() (*State, error) { return &emptied, nil }

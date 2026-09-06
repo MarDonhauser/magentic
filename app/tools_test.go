@@ -78,7 +78,8 @@ func TestTimelineUsesNormalizedWorkHistoryForAllProviders(t *testing.T) {
 		`{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"` + antigravityAt + `","content":"Antigravity output"}`,
 	}, "\n")+"\n")
 
-	got, err := (&App{}).Timeline()
+	app := historyTestApp(t, home, codexHome)
+	got, err := app.Timeline()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +112,7 @@ func TestTimelineUsesNormalizedWorkHistoryForAllProviders(t *testing.T) {
 	if strings.Contains(strings.Join([]string{got.Entries[0].Text, got.Entries[1].Text, got.Entries[2].Text, got.Entries[3].Text, got.Entries[4].Text}, "|"), "delegated") {
 		t.Fatalf("Timeline included delegated coding-agent work: %#v", got)
 	}
-	search, err := (&App{}).SearchTranscripts("prompt")
+	search, err := app.SearchTranscripts("prompt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +134,7 @@ func TestTimelineUsesNormalizedWorkHistoryForAllProviders(t *testing.T) {
 }
 
 func TestStoredLinksAndSearchUseWorkHistory(t *testing.T) {
-	home, _, projectPath, statePath := configureHistoryAppTest(t)
+	home, codexHome, projectPath, statePath := configureHistoryAppTest(t)
 	state := core.State{
 		Projects: []core.Project{{ID: core.ProjectID("project-id"), Name: "Search project", Path: projectPath}},
 		Agents: []core.Session{{
@@ -148,14 +149,15 @@ func TestStoredLinksAndSearchUseWorkHistory(t *testing.T) {
 		`{"type":"assistant","timestamp":"` + now.Format(time.RFC3339Nano) + `","cwd":"` + projectPath + `","sessionId":"claude-run","message":{"content":"See https://example.test/result"}}`,
 	}, "\n")+"\n")
 
-	search, err := (&App{}).SearchTranscripts("normalized phrase")
+	app := historyTestApp(t, home, codexHome)
+	search, err := app.SearchTranscripts("normalized phrase")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(search.Hits) != 1 || search.Hits[0].Project != "Search project" || search.Hits[0].Role != "user" || !strings.Contains(search.Hits[0].Full, "normalized phrase") {
 		t.Fatalf("normalized search hits = %#v", search.Hits)
 	}
-	links, err := (&App{}).SessionLinks("session-id")
+	links, err := app.SessionLinks("session-id")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +170,7 @@ func TestStoredLinksAndSearchUseWorkHistory(t *testing.T) {
 }
 
 func TestSessionLinksPreservesHistoryAndRuntimeCoverageWithNoKnownLinks(t *testing.T) {
-	home, _, projectPath, statePath := configureHistoryAppTest(t)
+	home, codexHome, projectPath, statePath := configureHistoryAppTest(t)
 	session := core.Session{
 		ID: "session-id", Name: "coverage", RuntimeName: "opaque-runtime",
 		ProjectID: "project-id", Project: "project", Dir: projectPath,
@@ -180,7 +182,8 @@ func TestSessionLinksPreservesHistoryAndRuntimeCoverageWithNoKnownLinks(t *testi
 	})
 	writeAppFixture(t, filepath.Join(home, ".claude", "projects", "broken", "broken-run.jsonl"), "{malformed}\n")
 	writeAppFixture(t, filepath.Join(home, ".gemini", "tmp"), "not a directory")
-	app := &App{observeSessions: func(_ context.Context, sessions []core.Session) core.ObservationSnapshot {
+	app := historyTestApp(t, home, codexHome)
+	app.observeSessions = func(_ context.Context, sessions []core.Session) core.ObservationSnapshot {
 		return core.ObservationSnapshot{
 			Availability: core.ObservationPartial,
 			Sessions: []core.SessionObservation{{
@@ -192,7 +195,7 @@ func TestSessionLinksPreservesHistoryAndRuntimeCoverageWithNoKnownLinks(t *testi
 				Operation: "capture-pane", Message: "capture unavailable",
 			}},
 		}
-	}}
+	}
 
 	result, err := app.SessionLinks(string(session.ID))
 	if err != nil {
@@ -217,7 +220,7 @@ func TestSessionLinksPreservesHistoryAndRuntimeCoverageWithNoKnownLinks(t *testi
 }
 
 func TestSearchTranscriptsPreservesDegradedCoverageWithNoKnownHits(t *testing.T) {
-	home, _, _, statePath := configureHistoryAppTest(t)
+	home, codexHome, _, statePath := configureHistoryAppTest(t)
 	writeAppState(t, statePath, core.State{})
 
 	// A discovered but malformed Claude transcript is partial. A provider root
@@ -225,7 +228,7 @@ func TestSearchTranscriptsPreservesDegradedCoverageWithNoKnownHits(t *testing.T)
 	writeAppFixture(t, filepath.Join(home, ".claude", "projects", "broken", "session.jsonl"), "{malformed}\n")
 	writeAppFixture(t, filepath.Join(home, ".gemini", "tmp"), "not a directory")
 
-	result, err := (&App{}).SearchTranscripts("needle")
+	result, err := historyTestApp(t, home, codexHome).SearchTranscripts("needle")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,6 +248,21 @@ func TestSearchTranscriptsPreservesDegradedCoverageWithNoKnownHits(t *testing.T)
 	if gemini.State != string(core.HistorySourceUnavailable) || len(gemini.Problems) == 0 {
 		t.Fatalf("unavailable Gemini coverage was lost: %#v", gemini)
 	}
+}
+
+// historyTestApp gibt der App eine isolierte, synchrone WorkHistory: Abfragen
+// sehen sofort vollständige Ergebnisse, statt den Hintergrundlauf der
+// geteilten Instanz abzuwarten.
+func historyTestApp(t *testing.T, home, codexHome string) *App {
+	t.Helper()
+	history, err := core.OpenWorkHistory(core.WorkHistoryConfig{
+		HomeDir: home, CodexHome: codexHome, SynchronousIndex: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { history.Close() })
+	return &App{history: func() (*core.WorkHistory, error) { return history, nil }}
 }
 
 func configureHistoryAppTest(t *testing.T) (home, codexHome, projectPath, statePath string) {

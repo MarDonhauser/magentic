@@ -23,6 +23,7 @@ const LIFECYCLE_BINDINGS = [
   'NewSession', 'NewTermSession', 'NewDockSession', 'DoneAgent', 'Deploy',
   'Cleanup', 'Merge', 'LaterSession', 'ReopenSession', 'SendMessage',
   'SendSkill', 'HandoffSession', 'SetActiveTerm', 'MarkSeen',
+  'AnswerManagedPermission', 'InterruptManagedTurn',
 ];
 
 test('Der Wechsel der Oberfläche löst keinen Lifecycle- und keinen tmux-Aufruf aus', () => {
@@ -50,8 +51,14 @@ test('Die Oberfläche selbst ruft nichts auf, was eine Session verändern würde
     'die Oberfläche bindet keine Anwendungsaufrufe ein');
 });
 
-test('Die Oberfläche kennt keine Bedienung für eine Berechtigungsfrage', () => {
-  for (const word of ['approve', 'genehmig', 'erlauben', 'ablehnen', 'deny']) {
-    assert.equal(surface.toLowerCase().includes(word), false, `conversation.js nennt „${word}"`);
+test('Die Oberfläche ruft für Berechtigungsfragen keine Bindings auf', () => {
+  // Die Bedienung (Zustimmen/Ablehnen/Unterbrechen) darf die Oberfläche
+  // zeigen — auslösen tut sie nichts: Entscheidungen fließen über injizierte
+  // Rückrufe an den Wirt, der die Bindings hält.
+  for (const binding of ['AnswerManagedPermission', 'InterruptManagedTurn']) {
+    assert.equal(new RegExp('\\b' + binding + '\\s*\\(').test(surface), false,
+      `conversation.js ruft ${binding} auf`);
   }
+  assert.ok(surface.includes('onPermissionDecision'), 'Entscheidungen erreichen den Wirt');
+  assert.ok(surface.includes('onInterrupt'), 'Unterbrechungen erreichen den Wirt');
 });

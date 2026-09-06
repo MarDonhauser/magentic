@@ -10,6 +10,13 @@ import (
 	"magentic/core"
 )
 
+func (a *App) workHistory() (*core.WorkHistory, error) {
+	if a.history != nil {
+		return a.history()
+	}
+	return core.SharedWorkHistory()
+}
+
 func resolveWorktreeTarget(ctx context.Context, projectID, reference string) (*core.State, core.RepositoryWorktreeTarget, error) {
 	st, err := core.LoadState()
 	if err != nil {
@@ -117,7 +124,7 @@ func (a *App) SessionLinks(sessionID string) (SessionLinksResult, error) {
 		seen[l.URL] = true
 		out = append(out, l)
 	}
-	history, historyErr := core.SharedWorkHistory()
+	history, historyErr := a.workHistory()
 	if historyErr != nil {
 		sources = append(sources, unavailableTimelineSource("work-history", historyErr))
 	} else {
@@ -183,7 +190,7 @@ func (a *App) SearchTranscripts(query string) (SearchResult, error) {
 	if err != nil {
 		return SearchResult{}, err
 	}
-	history, err := core.SharedWorkHistory()
+	history, err := a.workHistory()
 	if err != nil {
 		return SearchResult{}, err
 	}
@@ -342,7 +349,7 @@ func (a *App) Timeline() (TimelineResult, error) {
 	if err != nil {
 		return TimelineResult{}, err
 	}
-	history, err := core.SharedWorkHistory()
+	history, err := a.workHistory()
 	if err != nil {
 		return TimelineResult{}, err
 	}

@@ -660,6 +660,9 @@ Tabelle — Doku und Durchsetzung können nicht auseinanderlaufen:
 <!-- policy: RemoveProject restricted -->
 <!-- policy: AddProject restricted -->
 <!-- policy: KillSession restricted -->
+<!-- policy: ManagedSessionState restricted -->
+<!-- policy: AnswerManagedPermission permitted -->
+<!-- policy: InterruptManagedTurn permitted -->
 
 Erlaubt sind außerdem: BoardArchive, SessionAutomation, CompleteCommands,
 PromptLinePattern, SessionConversation, SessionPreview, SessionLinks,

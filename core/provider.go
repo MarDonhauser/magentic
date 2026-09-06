@@ -82,15 +82,40 @@ func builtinAgentProviders() []AgentProvider {
 	return []AgentProvider{claudeProvider{}, codexProvider{}, copilotProvider{}, antigravityProvider{}}
 }
 
-// retiredVendorAlias maps a removed vendor to the vendor that continues it,
-// so records written before the removal keep resolving instead of failing
-// as unknown. Gemini CLI was retired in favor of Antigravity CLI (agy):
-// both read the same ~/.gemini history, and Antigravity owns new runs.
+// retiredVendorAliases maps each removed vendor to the vendor that continues
+// it, so records written before the removal keep resolving and attributing
+// instead of failing as unknown. Gemini CLI was retired in favor of
+// Antigravity CLI (agy): both read the same ~/.gemini history, and
+// Antigravity owns new runs.
+var retiredVendorAliases = []struct {
+	retired   AgentVendor
+	successor AgentVendor
+}{
+	{retired: AgentVendorGemini, successor: AgentVendorAntigravity},
+}
+
+// retiredVendorAlias resolves a removed vendor to the vendor that continues
+// it. Every other vendor resolves to itself.
 func retiredVendorAlias(vendor AgentVendor) AgentVendor {
-	if vendor == AgentVendorGemini {
-		return AgentVendorAntigravity
+	for _, alias := range retiredVendorAliases {
+		if alias.retired == vendor {
+			return alias.successor
+		}
 	}
 	return vendor
+}
+
+// retiredVendorPredecessors lists the removed vendors a vendor continues, so
+// migrated Sessions keep attributing the retired providers' stored
+// conversations by run identity.
+func retiredVendorPredecessors(vendor AgentVendor) []AgentVendor {
+	var out []AgentVendor
+	for _, alias := range retiredVendorAliases {
+		if alias.successor == vendor {
+			out = append(out, alias.retired)
+		}
+	}
+	return out
 }
 
 func providerForVendor(vendor AgentVendor) (AgentProvider, bool) {

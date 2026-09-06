@@ -225,6 +225,14 @@ func NewHistoryAssociations(state State) HistoryAssociations {
 			association.ConversationID = run.ExternalID
 			association.LocationEvidence = HistoryLocationProviderRun
 			out.Sessions = append(out.Sessions, association)
+			// Sessions migrated from a retired vendor keep attributing the
+			// retired provider's stored conversations: the run identity is
+			// the durable link, the vendor tag was rewritten by migration.
+			for _, predecessor := range retiredVendorPredecessors(run.Vendor) {
+				compat := association
+				compat.Provider = HistoryProvider(predecessor)
+				out.Sessions = append(out.Sessions, compat)
+			}
 			addedRun = true
 		}
 		// Legacy state stored only Claude's run ID. Keep it readable without

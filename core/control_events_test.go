@@ -112,14 +112,6 @@ func TestControlEventsDropStalledSubscriber(t *testing.T) {
 	events := NewControlEvents()
 	sessions := controlEventSessions()
 	stalled := events.Subscribe(ControlEventFilter{SessionID: "session-a"})
-	reading := events.Subscribe(ControlEventFilter{SessionID: "session-a"})
-
-	drained := make(chan struct{})
-	go func() {
-		defer close(drained)
-		for range reading.Events() {
-		}
-	}()
 
 	now := time.Now()
 	done := make(chan struct{})
@@ -148,12 +140,31 @@ func TestControlEventsDropStalledSubscriber(t *testing.T) {
 		for range stalled.Events() {
 		}
 	}
-	// The subscriber that keeps reading is unaffected.
+	// A subscriber that keeps reading is unaffected. It subscribes after the
+	// burst on purpose: racing a drainer against an unbounded burst could
+	// drop even an active reader under load, which is by design (bounded
+	// buffer, the pass never awaits a consumer) and not what this test pins.
+	reading := events.Subscribe(ControlEventFilter{SessionID: "session-a"})
+	received := make(chan struct{})
+	go func() {
+		defer close(received)
+		for range reading.Events() {
+			return
+		}
+	}()
+	// The burst ends on Running (even iterations); Idle below always emits.
+	events.Publish(sessions, controlEventPass(now.Add(time.Hour),
+		controlEventReading("session-a", StatusIdle, ObservationAvailable),
+	))
+	select {
+	case <-received:
+	case <-time.After(5 * time.Second):
+		t.Fatal("der lesende Abonnent erhielt kein Ereignis")
+	}
 	if reading.Stalled() {
 		t.Fatal("ein lesender Abonnent wurde mitbeendet")
 	}
 	events.Release(reading)
-	<-drained
 }
 
 func TestControlWaitIsDrivenByObservationEvents(t *testing.T) {
