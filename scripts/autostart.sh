@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 LABEL="de.donhauser.magentic"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 # Installierte Version hat Vorrang — sonst startet nach der Anmeldung ein
-# alter Repo-Build statt des Updates aus ./start.sh.
+# alter Repo-Build statt des Updates aus ./update.sh.
 if [ -d "/Applications/magentic.app" ]; then
   APP="/Applications/magentic.app"
 else

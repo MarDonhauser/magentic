@@ -82,7 +82,19 @@ func builtinAgentProviders() []AgentProvider {
 	return []AgentProvider{claudeProvider{}, codexProvider{}, copilotProvider{}, antigravityProvider{}}
 }
 
+// retiredVendorAlias maps a removed vendor to the vendor that continues it,
+// so records written before the removal keep resolving instead of failing
+// as unknown. Gemini CLI was retired in favor of Antigravity CLI (agy):
+// both read the same ~/.gemini history, and Antigravity owns new runs.
+func retiredVendorAlias(vendor AgentVendor) AgentVendor {
+	if vendor == AgentVendorGemini {
+		return AgentVendorAntigravity
+	}
+	return vendor
+}
+
 func providerForVendor(vendor AgentVendor) (AgentProvider, bool) {
+	vendor = retiredVendorAlias(vendor)
 	for _, provider := range builtinAgentProviders() {
 		if provider.Vendor() == vendor {
 			return provider, true

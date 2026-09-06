@@ -346,6 +346,7 @@ export namespace core {
 	    branches: GraphBranch[];
 	    truncated: boolean;
 	    availability: string;
+	    historyAvailability: string;
 	    problems?: RepositoryProblem[];
 	    err?: string;
 	
@@ -363,6 +364,7 @@ export namespace core {
 	        this.branches = this.convertValues(source["branches"], GraphBranch);
 	        this.truncated = source["truncated"];
 	        this.availability = source["availability"];
+	        this.historyAvailability = source["historyAvailability"];
 	        this.problems = this.convertValues(source["problems"], RepositoryProblem);
 	        this.err = source["err"];
 	    }
@@ -473,6 +475,9 @@ export namespace core {
 	    parentTaskId?: string;
 	    failed?: boolean;
 	    awaitingResult?: boolean;
+	    inProgress?: boolean;
+	    label: string;
+	    collapsible: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Item(source);
@@ -491,6 +496,9 @@ export namespace core {
 	        this.parentTaskId = source["parentTaskId"];
 	        this.failed = source["failed"];
 	        this.awaitingResult = source["awaitingResult"];
+	        this.inProgress = source["inProgress"];
+	        this.label = source["label"];
+	        this.collapsible = source["collapsible"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -608,6 +616,8 @@ export namespace core {
 	    name: string;
 	    tool?: string;
 	    vendor?: string;
+	    runtime: string;
+	    runtimeActions: string[];
 	    status: string;
 	    label: string;
 	    detail: string;
@@ -629,6 +639,12 @@ export namespace core {
 	    queued?: OvQueuedMessage[];
 	    automation?: OvAutomation;
 	    statusLine?: OvStatusLine;
+	    live: boolean;
+	    working: boolean;
+	    resumable?: boolean;
+	    resumeFresh?: boolean;
+	    resumeReason?: string;
+	    lastSeen?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new OvAgent(source);
@@ -640,6 +656,8 @@ export namespace core {
 	        this.name = source["name"];
 	        this.tool = source["tool"];
 	        this.vendor = source["vendor"];
+	        this.runtime = source["runtime"];
+	        this.runtimeActions = source["runtimeActions"];
 	        this.status = source["status"];
 	        this.label = source["label"];
 	        this.detail = source["detail"];
@@ -661,6 +679,12 @@ export namespace core {
 	        this.queued = this.convertValues(source["queued"], OvQueuedMessage);
 	        this.automation = this.convertValues(source["automation"], OvAutomation);
 	        this.statusLine = this.convertValues(source["statusLine"], OvStatusLine);
+	        this.live = source["live"];
+	        this.working = source["working"];
+	        this.resumable = source["resumable"];
+	        this.resumeFresh = source["resumeFresh"];
+	        this.resumeReason = source["resumeReason"];
+	        this.lastSeen = source["lastSeen"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1037,6 +1061,57 @@ export namespace core {
 		}
 	}
 	
+	export class ReviewComment {
+	    id: string;
+	    path: string;
+	    old_start?: number;
+	    old_end?: number;
+	    new_start?: number;
+	    new_end?: number;
+	    quoted?: string;
+	    text: string;
+	    mode: string;
+	    // Go type: time
+	    created_at: any;
+	    lineRef?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ReviewComment(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.path = source["path"];
+	        this.old_start = source["old_start"];
+	        this.old_end = source["old_end"];
+	        this.new_start = source["new_start"];
+	        this.new_end = source["new_end"];
+	        this.quoted = source["quoted"];
+	        this.text = source["text"];
+	        this.mode = source["mode"];
+	        this.created_at = this.convertValues(source["created_at"], null);
+	        this.lineRef = source["lineRef"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class SessionAutomation {
 	    id: string;
 	    name: string;
@@ -1061,6 +1136,41 @@ export namespace core {
 	        this.next_run_at = this.convertValues(source["next_run_at"], null);
 	        this.last_run_at = this.convertValues(source["last_run_at"], null);
 	        this.enabled = source["enabled"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class SessionReview {
+	    id: string;
+	    comments?: ReviewComment[];
+	    // Go type: time
+	    sent_at: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new SessionReview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.comments = this.convertValues(source["comments"], ReviewComment);
+	        this.sent_at = this.convertValues(source["sent_at"], null);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1395,6 +1505,143 @@ export namespace core {
 	
 	
 	
+	export class StructuredDiffLine {
+	    kind: string;
+	    oldLine?: number;
+	    newLine?: number;
+	    text: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StructuredDiffLine(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.oldLine = source["oldLine"];
+	        this.newLine = source["newLine"];
+	        this.text = source["text"];
+	    }
+	}
+	export class StructuredDiffHunk {
+	    oldStart: number;
+	    oldCount: number;
+	    newStart: number;
+	    newCount: number;
+	    lines: StructuredDiffLine[];
+	
+	    static createFrom(source: any = {}) {
+	        return new StructuredDiffHunk(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.oldStart = source["oldStart"];
+	        this.oldCount = source["oldCount"];
+	        this.newStart = source["newStart"];
+	        this.newCount = source["newCount"];
+	        this.lines = this.convertValues(source["lines"], StructuredDiffLine);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class StructuredDiffFile {
+	    path: string;
+	    oldPath?: string;
+	    added?: boolean;
+	    deleted?: boolean;
+	    renamed?: boolean;
+	    binary?: boolean;
+	    capped?: boolean;
+	    hunks?: StructuredDiffHunk[];
+	
+	    static createFrom(source: any = {}) {
+	        return new StructuredDiffFile(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.oldPath = source["oldPath"];
+	        this.added = source["added"];
+	        this.deleted = source["deleted"];
+	        this.renamed = source["renamed"];
+	        this.binary = source["binary"];
+	        this.capped = source["capped"];
+	        this.hunks = this.convertValues(source["hunks"], StructuredDiffHunk);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class StructuredDiff {
+	    mode: string;
+	    base?: string;
+	    files: StructuredDiffFile[];
+	
+	    static createFrom(source: any = {}) {
+	        return new StructuredDiff(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mode = source["mode"];
+	        this.base = source["base"];
+	        this.files = this.convertValues(source["files"], StructuredDiffFile);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	
 	export class ZgProject {
 	    id: string;
 	    name: string;
@@ -1491,47 +1738,6 @@ export namespace core {
 
 export namespace main {
 	
-	export class ConversationItemsResult {
-	    sessionId: string;
-	    availability: string;
-	    vendor: string;
-	    reason?: string;
-	    items: core.Item[];
-	    itemsKnown: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new ConversationItemsResult(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.sessionId = source["sessionId"];
-	        this.availability = source["availability"];
-	        this.vendor = source["vendor"];
-	        this.reason = source["reason"];
-	        this.items = this.convertValues(source["items"], core.Item);
-	        this.itemsKnown = source["itemsKnown"];
-	    }
-
-	    convertValues(a: any, classs: any, asMap: boolean = false): any {
-	        if (!a) {
-	            return a;
-	        }
-	        if (a.slice && a.map) {
-	            return (a as any[]).map(elem => this.convertValues(elem, classs));
-	        } else if ("object" === typeof a) {
-	            if (asMap) {
-	                for (const key of Object.keys(a)) {
-	                    a[key] = new classs(a[key]);
-	                }
-	                return a;
-	            }
-	            return new classs(a);
-	        }
-	        return a;
-	    }
-	}
-	
 	export class ArgoApp {
 	    name: string;
 	    namespace: string;
@@ -1589,6 +1795,46 @@ export namespace main {
 	        this.age = source["age"];
 	        this.url = source["url"];
 	    }
+	}
+	export class ConversationItemsResult {
+	    sessionId: string;
+	    availability: string;
+	    vendor: string;
+	    reason?: string;
+	    items: core.Item[];
+	    itemsKnown: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ConversationItemsResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sessionId = source["sessionId"];
+	        this.availability = source["availability"];
+	        this.vendor = source["vendor"];
+	        this.reason = source["reason"];
+	        this.items = this.convertValues(source["items"], core.Item);
+	        this.itemsKnown = source["itemsKnown"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class DeployRemoteProblem {
 	    project: string;
@@ -1720,6 +1966,66 @@ export namespace main {
 	        this.url = source["url"];
 	        this.time = source["time"];
 	    }
+	}
+	export class ManagedPermissionView {
+	    id: string;
+	    asked: string;
+	    raisedAt: string;
+	    open: boolean;
+	    outcome?: string;
+	    closeReason?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ManagedPermissionView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.asked = source["asked"];
+	        this.raisedAt = source["raisedAt"];
+	        this.open = source["open"];
+	        this.outcome = source["outcome"];
+	        this.closeReason = source["closeReason"];
+	    }
+	}
+	export class ManagedSessionStateResult {
+	    sessionId: string;
+	    availability: string;
+	    reason?: string;
+	    turnRunning: boolean;
+	    permission?: ManagedPermissionView;
+	
+	    static createFrom(source: any = {}) {
+	        return new ManagedSessionStateResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sessionId = source["sessionId"];
+	        this.availability = source["availability"];
+	        this.reason = source["reason"];
+	        this.turnRunning = source["turnRunning"];
+	        this.permission = this.convertValues(source["permission"], ManagedPermissionView);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class NotchOption {
 	    id: string;

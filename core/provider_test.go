@@ -157,8 +157,10 @@ func TestVendorStartCommands(t *testing.T) {
 		{name: "copilot neu mit Run", vendor: AgentVendorCopilot, runID: "abc-123", mode: "new", want: "copilot --name 'mgt-navi' --session-id='abc-123'"},
 		{name: "copilot resume mit Run", vendor: AgentVendorCopilot, runID: "abc-123", mode: "resume", want: "copilot --name 'mgt-navi' --resume='abc-123'"},
 		{name: "copilot resume ohne Run", vendor: AgentVendorCopilot, mode: "resume", want: "copilot --name 'mgt-navi' --continue"},
-		{name: "gemini neu", vendor: AgentVendorGemini, mode: "new", want: "gemini"},
-		{name: "gemini resume", vendor: AgentVendorGemini, runID: "abc-123", mode: "resume", want: "gemini"},
+		// Gemini ist entfernt und löst kompatibel auf Antigravity auf: Eine
+		// als Gemini adressierte Session startet als Antigravity-Kommando.
+		{name: "gemini neu", vendor: AgentVendorGemini, mode: "new", want: "agy"},
+		{name: "gemini resume", vendor: AgentVendorGemini, runID: "abc-123", mode: "resume", want: "agy --conversation 'abc-123'"},
 		{name: "antigravity neu", vendor: AgentVendorAntigravity, mode: "new", want: "agy"},
 		{name: "antigravity neu mit Run", vendor: AgentVendorAntigravity, runID: "abc-123", mode: "new", want: "agy"},
 		{name: "antigravity resume mit Run", vendor: AgentVendorAntigravity, runID: "abc-123", mode: "resume", want: "agy --conversation 'abc-123'"},
@@ -342,6 +344,47 @@ func TestRegistryMigrationDefaultsVendor(t *testing.T) {
 	}
 }
 
+func TestRetiredGeminiVendorResolvesToAntigravity(t *testing.T) {
+	provider, known := providerForVendor(AgentVendorGemini)
+	if !known {
+		t.Fatal("gemini muss kompatibel auf Antigravity auflösen")
+	}
+	if provider.Vendor() != AgentVendorAntigravity {
+		t.Fatalf("gemini löst auf %q, want %q", provider.Vendor(), AgentVendorAntigravity)
+	}
+	if _, err := resolveSessionProvider(Session{
+		Name: "magentic", SessionKind: SessionKindCodingAgent, Vendor: AgentVendorGemini,
+	}); err != nil {
+		t.Fatalf("gespeicherte Gemini-Session muss startbar bleiben: %v", err)
+	}
+}
+
+func TestRegistryMigrationMapsGeminiToAntigravity(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	state := &State{Agents: []Session{{
+		ID: "s1", Name: "magentic", RuntimeName: "mgt-magentic", Dir: "/work/magentic",
+		SessionKind: SessionKindCodingAgent, Vendor: AgentVendorGemini,
+		AgentRuns: []AgentRunRef{{Vendor: AgentVendorGemini, ExternalID: "gemini-run-1"}},
+	}}}
+	normalizeRegistryState(state)
+	session := state.Agents[0]
+	if session.Vendor != AgentVendorAntigravity {
+		t.Fatalf("Vendor nach Migration = %q, want %q", session.Vendor, AgentVendorAntigravity)
+	}
+	run, ok := session.AgentRun(AgentVendorAntigravity)
+	if !ok || run.ExternalID != "gemini-run-1" {
+		t.Fatalf("Run ging bei der Ummappung verloren: %+v", session.AgentRuns)
+	}
+	got, err := startCommandForSession(session, "new")
+	if err != nil {
+		t.Fatalf("migrierte Session muss ein Startkommando liefern: %v", err)
+	}
+	if got != "agy" {
+		t.Fatalf("Startkommando = %q, want %q", got, "agy")
+	}
+}
+
 func TestResolveSessionProvider(t *testing.T) {
 	if _, err := resolveSessionProvider(Session{Name: "navi", SessionKind: SessionKindCodingAgent}); err != nil {
 		t.Fatalf("Claude-Standard muss auflösbar sein: %v", err)
@@ -379,7 +422,6 @@ func TestEveryBuiltinVendorDeclaresANormalizerAnswer(t *testing.T) {
 	want := map[AgentVendor]bool{
 		AgentVendorClaude:      true,
 		AgentVendorCodex:       false,
-		AgentVendorGemini:      false,
 		AgentVendorCopilot:     false,
 		AgentVendorAntigravity: false,
 	}
@@ -486,7 +528,6 @@ func TestBuiltinVendorsPinTheirResumeBehavior(t *testing.T) {
 		AgentVendorClaude:      ResumeByRunRef,
 		AgentVendorCodex:       ResumeByRunRef,
 		AgentVendorCopilot:     ResumeByRunRef,
-		AgentVendorGemini:      ResumeFreshOnly,
 		AgentVendorAntigravity: ResumeByRunRef,
 	}
 	providers := builtinAgentProviders()
@@ -529,7 +570,6 @@ func TestOnlyClaudeDeclaresManagedRuntimeSupport(t *testing.T) {
 	want := map[AgentVendor]bool{
 		AgentVendorClaude:      true,
 		AgentVendorCodex:       false,
-		AgentVendorGemini:      false,
 		AgentVendorCopilot:     false,
 		AgentVendorAntigravity: false,
 	}
@@ -560,9 +600,9 @@ func TestResumeCommandPerVendorUsesRecordedRun(t *testing.T) {
 		{vendor: AgentVendorCodex, want: "codex resume 'abc 123'"},
 		{vendor: AgentVendorCopilot, want: "copilot --name 'mgt-navi' --resume='abc 123'"},
 		{vendor: AgentVendorAntigravity, want: "agy --conversation 'abc 123'"},
-		// Gemini hat keine verifizierte Resume-Form: frischer Start, die
-		// gespeicherte Referenz wird nie in die Kommandozeile übernommen.
-		{vendor: AgentVendorGemini, want: "gemini"},
+		// Gemini ist entfernt und löst kompatibel auf Antigravity auf: Eine
+		// gespeicherte Gemini-Referenz startet als Antigravity-Kommando.
+		{vendor: AgentVendorGemini, want: "agy --conversation 'abc 123'"},
 	}
 	for _, test := range tests {
 		t.Run(string(test.vendor), func(t *testing.T) {

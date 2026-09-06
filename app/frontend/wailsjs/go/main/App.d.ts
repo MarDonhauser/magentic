@@ -7,7 +7,11 @@ export function AddDivider(arg1:string):Promise<string>;
 
 export function AddProject(arg1:string):Promise<string>;
 
+export function AddReviewComment(arg1:string,arg2:string,arg3:number,arg4:number,arg5:number,arg6:number,arg7:string,arg8:string,arg9:string):Promise<core.ReviewComment>;
+
 export function AgentVendors():Promise<Array<core.AgentVendorOption>>;
+
+export function AnswerManagedPermission(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function ArgoLogin():Promise<void>;
 
@@ -41,6 +45,8 @@ export function CompleteCommands(arg1:string,arg2:string):Promise<Array<core.Sla
 
 export function CompleteFiles(arg1:string,arg2:string):Promise<Array<string>>;
 
+export function DeleteReviewComment(arg1:string,arg2:string):Promise<void>;
+
 export function DeleteSessionAutomation(arg1:string,arg2:string):Promise<void>;
 
 export function Deploy(arg1:string):Promise<string>;
@@ -49,9 +55,17 @@ export function DeployStatus():Promise<main.DeployStatus>;
 
 export function DiscardQueuedMessage(arg1:string,arg2:string):Promise<void>;
 
+export function DiscardSentReview(arg1:string,arg2:string):Promise<void>;
+
+export function DiscardSession(arg1:string):Promise<void>;
+
 export function DoneAgent(arg1:string):Promise<void>;
 
+export function EditReviewComment(arg1:string,arg2:string,arg3:string):Promise<void>;
+
 export function EndBreak():Promise<void>;
+
+export function FreshStartSession(arg1:string):Promise<void>;
 
 export function GitGraph(arg1:string,arg2:number):Promise<core.GitGraph>;
 
@@ -59,9 +73,13 @@ export function HandoffSession(arg1:string,arg2:string):Promise<void>;
 
 export function Inbox():Promise<core.OvInbox>;
 
+export function InterruptManagedTurn(arg1:string):Promise<void>;
+
 export function KillSession(arg1:string,arg2:string):Promise<void>;
 
 export function LaterSession(arg1:string):Promise<void>;
+
+export function ManagedSessionState(arg1:string):Promise<main.ManagedSessionStateResult>;
 
 export function MarkSeen(arg1:string):Promise<void>;
 
@@ -82,6 +100,8 @@ export function NewTermSession(arg1:string,arg2:boolean,arg3:string):Promise<str
 export function NewTermSessionFor(arg1:string):Promise<string>;
 
 export function NotificationsEnabled():Promise<boolean>;
+
+export function OpenReview(arg1:string):Promise<core.SessionReview>;
 
 export function OpenTerm(arg1:string,arg2:string,arg3:number,arg4:number):Promise<void>;
 
@@ -105,7 +125,11 @@ export function ResizeTerm(arg1:string,arg2:number,arg3:number):Promise<void>;
 
 export function RespondToNotch(arg1:main.NotchResponse):Promise<void>;
 
+export function ResumeSession(arg1:string):Promise<void>;
+
 export function RetryQueuedMessage(arg1:string,arg2:string):Promise<void>;
+
+export function ReviewPreview(arg1:string):Promise<string>;
 
 export function SaveImage(arg1:string):Promise<string>;
 
@@ -115,7 +139,11 @@ export function SearchTranscripts(arg1:string):Promise<main.SearchResult>;
 
 export function SendMessage(arg1:string,arg2:string):Promise<void>;
 
+export function SendReview(arg1:string):Promise<void>;
+
 export function SendSkill(arg1:string,arg2:string):Promise<void>;
+
+export function SentReviews(arg1:string):Promise<Array<core.SessionReview>>;
 
 export function SessionAutomation(arg1:string):Promise<core.SessionAutomation>;
 
@@ -145,6 +173,8 @@ export function StartBoardItem(arg1:string,arg2:string):Promise<string>;
 
 export function Stats(arg1:number):Promise<core.Stats>;
 
+export function StructuredDiff(arg1:string,arg2:string,arg3:string):Promise<core.StructuredDiff>;
+
 export function SwitchSessionVendor(arg1:string,arg2:string,arg3:boolean):Promise<void>;
 
 export function TakeBreak():Promise<void>;
@@ -152,12 +182,6 @@ export function TakeBreak():Promise<void>;
 export function Timeline():Promise<main.TimelineResult>;
 
 export function WatchConversation(arg1:string):Promise<void>;
-
-export function ManagedSessionState(arg1:string):Promise<any>;
-
-export function InterruptManagedTurn(arg1:string):Promise<void>;
-
-export function AnswerManagedPermission(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function WorktreeDiff(arg1:string,arg2:string):Promise<string>;
 

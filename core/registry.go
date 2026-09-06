@@ -483,10 +483,11 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 			if _, known := providerForVendor(change.vendor); !known {
 				return false, "", "", fmt.Errorf("unbekannter Agent-Vendor %q", change.vendor)
 			}
-			if session.Vendor == change.vendor {
+			vendor := retiredVendorAlias(change.vendor)
+			if session.Vendor == vendor {
 				return false, "", session.ID, nil
 			}
-			session.Vendor = change.vendor
+			session.Vendor = vendor
 		case registrySetService:
 			if session.Service == change.service {
 				return false, "", session.ID, nil
@@ -890,6 +891,17 @@ func normalizeSession(session *Session) {
 	}
 	if !session.IsTerm() && session.Vendor == "" {
 		session.Vendor = AgentVendorClaude
+	}
+	// Gemini CLI wurde zugunsten von Antigravity CLI entfernt: gespeicherte
+	// Records laufen unter dem Nachfolger weiter, statt als unbekannt zu
+	// scheitern (siehe retiredVendorAlias).
+	if session.Vendor == AgentVendorGemini {
+		session.Vendor = AgentVendorAntigravity
+	}
+	for i := range session.AgentRuns {
+		if session.AgentRuns[i].Vendor == AgentVendorGemini {
+			session.AgentRuns[i].Vendor = AgentVendorAntigravity
+		}
 	}
 	if session.SessionID != "" {
 		hasLegacy := false

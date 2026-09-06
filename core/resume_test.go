@@ -313,8 +313,8 @@ func TestOverviewRendersResumableInProjectGroup(t *testing.T) {
 	overview := BuildOverviewFromObservation(state, ObservationSnapshot{
 		ObservedAt: time.Now(), Availability: ObservationAvailable, Sessions: readings,
 	})
-	if overview.Counts["resumable"] != 2 || overview.Counts["dead"] != 1 {
-		t.Fatalf("counts = %v, want resumable 2 and dead 1", overview.Counts)
+	if overview.Counts["resumable"] != 1 || overview.Counts["dead"] != 2 {
+		t.Fatalf("counts = %v, want resumable 1 and dead 2", overview.Counts)
 	}
 	if len(overview.Projects) != 1 {
 		t.Fatalf("projects = %d, want the one Project group", len(overview.Projects))
@@ -338,8 +338,14 @@ func TestOverviewRendersResumableInProjectGroup(t *testing.T) {
 		t.Fatalf("hera Detail = %q, want the last-seen reading", hera.Detail)
 	}
 	geo := byName["geo"]
-	if !geo.Resumable || !geo.ResumeFresh || geo.Status != "resumable" {
-		t.Fatalf("geo = %+v, want fresh-start rendering", geo)
+	// Gemini ist entfernt und läuft kompatibel als Antigravity
+	// (ResumeByRunRef): ohne gespeicherte Run-Referenz bleibt die Session
+	// tot — mit genanntem Grund statt als unbekannter Vendor zu scheitern.
+	if geo.Resumable || geo.Status != "dead" {
+		t.Fatalf("geo = %+v, want dead without a stored run", geo)
+	}
+	if !strings.Contains(geo.ResumeReason, "gespeicherte Konversation") || !strings.Contains(geo.Detail, "gespeicherte Konversation") {
+		t.Fatalf("geo reason = %q, want the stated dead reason", geo.ResumeReason)
 	}
 	oid := byName["oid"]
 	if oid.Resumable || oid.Status != "dead" {

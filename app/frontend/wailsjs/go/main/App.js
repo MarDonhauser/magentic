@@ -10,8 +10,16 @@ export function AddProject(arg1) {
   return window['go']['main']['App']['AddProject'](arg1);
 }
 
+export function AddReviewComment(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9) {
+  return window['go']['main']['App']['AddReviewComment'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9);
+}
+
 export function AgentVendors() {
   return window['go']['main']['App']['AgentVendors']();
+}
+
+export function AnswerManagedPermission(arg1, arg2, arg3) {
+  return window['go']['main']['App']['AnswerManagedPermission'](arg1, arg2, arg3);
 }
 
 export function ArgoLogin() {
@@ -78,6 +86,10 @@ export function CompleteFiles(arg1, arg2) {
   return window['go']['main']['App']['CompleteFiles'](arg1, arg2);
 }
 
+export function DeleteReviewComment(arg1, arg2) {
+  return window['go']['main']['App']['DeleteReviewComment'](arg1, arg2);
+}
+
 export function DeleteSessionAutomation(arg1, arg2) {
   return window['go']['main']['App']['DeleteSessionAutomation'](arg1, arg2);
 }
@@ -94,12 +106,28 @@ export function DiscardQueuedMessage(arg1, arg2) {
   return window['go']['main']['App']['DiscardQueuedMessage'](arg1, arg2);
 }
 
+export function DiscardSentReview(arg1, arg2) {
+  return window['go']['main']['App']['DiscardSentReview'](arg1, arg2);
+}
+
+export function DiscardSession(arg1) {
+  return window['go']['main']['App']['DiscardSession'](arg1);
+}
+
 export function DoneAgent(arg1) {
   return window['go']['main']['App']['DoneAgent'](arg1);
 }
 
+export function EditReviewComment(arg1, arg2, arg3) {
+  return window['go']['main']['App']['EditReviewComment'](arg1, arg2, arg3);
+}
+
 export function EndBreak() {
   return window['go']['main']['App']['EndBreak']();
+}
+
+export function FreshStartSession(arg1) {
+  return window['go']['main']['App']['FreshStartSession'](arg1);
 }
 
 export function GitGraph(arg1, arg2) {
@@ -114,12 +142,20 @@ export function Inbox() {
   return window['go']['main']['App']['Inbox']();
 }
 
+export function InterruptManagedTurn(arg1) {
+  return window['go']['main']['App']['InterruptManagedTurn'](arg1);
+}
+
 export function KillSession(arg1, arg2) {
   return window['go']['main']['App']['KillSession'](arg1, arg2);
 }
 
 export function LaterSession(arg1) {
   return window['go']['main']['App']['LaterSession'](arg1);
+}
+
+export function ManagedSessionState(arg1) {
+  return window['go']['main']['App']['ManagedSessionState'](arg1);
 }
 
 export function MarkSeen(arg1) {
@@ -160,6 +196,10 @@ export function NewTermSessionFor(arg1) {
 
 export function NotificationsEnabled() {
   return window['go']['main']['App']['NotificationsEnabled']();
+}
+
+export function OpenReview(arg1) {
+  return window['go']['main']['App']['OpenReview'](arg1);
 }
 
 export function OpenTerm(arg1, arg2, arg3, arg4) {
@@ -206,8 +246,16 @@ export function RespondToNotch(arg1) {
   return window['go']['main']['App']['RespondToNotch'](arg1);
 }
 
+export function ResumeSession(arg1) {
+  return window['go']['main']['App']['ResumeSession'](arg1);
+}
+
 export function RetryQueuedMessage(arg1, arg2) {
   return window['go']['main']['App']['RetryQueuedMessage'](arg1, arg2);
+}
+
+export function ReviewPreview(arg1) {
+  return window['go']['main']['App']['ReviewPreview'](arg1);
 }
 
 export function SaveImage(arg1) {
@@ -226,8 +274,16 @@ export function SendMessage(arg1, arg2) {
   return window['go']['main']['App']['SendMessage'](arg1, arg2);
 }
 
+export function SendReview(arg1) {
+  return window['go']['main']['App']['SendReview'](arg1);
+}
+
 export function SendSkill(arg1, arg2) {
   return window['go']['main']['App']['SendSkill'](arg1, arg2);
+}
+
+export function SentReviews(arg1) {
+  return window['go']['main']['App']['SentReviews'](arg1);
 }
 
 export function SessionAutomation(arg1) {
@@ -286,6 +342,10 @@ export function Stats(arg1) {
   return window['go']['main']['App']['Stats'](arg1);
 }
 
+export function StructuredDiff(arg1, arg2, arg3) {
+  return window['go']['main']['App']['StructuredDiff'](arg1, arg2, arg3);
+}
+
 export function SwitchSessionVendor(arg1, arg2, arg3) {
   return window['go']['main']['App']['SwitchSessionVendor'](arg1, arg2, arg3);
 }
@@ -300,18 +360,6 @@ export function Timeline() {
 
 export function WatchConversation(arg1) {
   return window['go']['main']['App']['WatchConversation'](arg1);
-}
-
-export function ManagedSessionState(arg1) {
-  return window['go']['main']['App']['ManagedSessionState'](arg1);
-}
-
-export function InterruptManagedTurn(arg1) {
-  return window['go']['main']['App']['InterruptManagedTurn'](arg1);
-}
-
-export function AnswerManagedPermission(arg1, arg2, arg3) {
-  return window['go']['main']['App']['AnswerManagedPermission'](arg1, arg2, arg3);
 }
 
 export function WorktreeDiff(arg1, arg2) {
