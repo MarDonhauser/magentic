@@ -892,16 +892,11 @@ func normalizeSession(session *Session) {
 	if !session.IsTerm() && session.Vendor == "" {
 		session.Vendor = AgentVendorClaude
 	}
-	// Gemini CLI wurde zugunsten von Antigravity CLI entfernt: gespeicherte
-	// Records laufen unter dem Nachfolger weiter, statt als unbekannt zu
-	// scheitern (siehe retiredVendorAlias).
-	if session.Vendor == AgentVendorGemini {
-		session.Vendor = AgentVendorAntigravity
-	}
+	// Entfernte Vendors laufen unter ihrem Nachfolger weiter, statt als
+	// unbekannt zu scheitern (siehe retiredVendorAliases).
+	session.Vendor = retiredVendorAlias(session.Vendor)
 	for i := range session.AgentRuns {
-		if session.AgentRuns[i].Vendor == AgentVendorGemini {
-			session.AgentRuns[i].Vendor = AgentVendorAntigravity
-		}
+		session.AgentRuns[i].Vendor = retiredVendorAlias(session.AgentRuns[i].Vendor)
 	}
 	if session.SessionID != "" {
 		hasLegacy := false

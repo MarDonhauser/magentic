@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -102,18 +103,14 @@ func TestSwitchVendorRejectsUnknownVendor(t *testing.T) {
 }
 
 func TestSwitchVendorRequiresBinary(t *testing.T) {
-	provider, ok := providerForVendor(AgentVendorGemini)
-	if !ok {
-		t.Fatal("kein Gemini-Provider")
-	}
-	if providerBinaryAvailable(provider) {
-		t.Skip("gemini ist auf dieser Maschine installiert")
-	}
 	lifecycle, runtime, _, project := newRecordingLifecycle(t)
 	session := provisionSessionFor(t, lifecycle, project, AgentVendorClaude)
 	runtime.reset()
-	if _, err := lifecycle.SwitchVendor(context.Background(), session.ID, AgentVendorGemini); err == nil {
-		t.Fatal("ein Vendor ohne Binary darf nicht übernommen werden")
+	// Leerer PATH: Kein Vendor-Binary ist auflösbar, auf jedem Rechner gleich.
+	t.Setenv("PATH", t.TempDir())
+	_, err := lifecycle.SwitchVendor(context.Background(), session.ID, AgentVendorAntigravity)
+	if err == nil || !strings.Contains(err.Error(), "nicht installiert") {
+		t.Fatalf("Wechsel ohne Binary = %v, want Installationsfehler", err)
 	}
 	if runtime.stopCalls != 0 {
 		t.Fatal("die laufende Session muss unberührt bleiben")

@@ -1,5 +1,6 @@
 // Keep runtime identity separate from how a session was originally launched.
-// A KindTerm session may host Codex, Claude, Gemini, or Copilot later on.
+// A KindTerm session may host Codex, Claude, Gemini, Copilot, or Antigravity
+// later on.
 export function sessionToolCandidates(session) {
   return [
     session?.tool,

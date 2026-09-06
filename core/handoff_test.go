@@ -293,6 +293,10 @@ func TestHandoffVendorResolutionCoversToolAndPaneCommand(t *testing.T) {
 			t.Fatalf("handoffVendorForTool(%q) = %q, %v", identity, vendor, ok)
 		}
 	}
+	// Entferntes Gemini löst kompatibel auf Antigravity auf.
+	if vendor, ok := handoffVendorForTool("gemini"); !ok || vendor != AgentVendorAntigravity {
+		t.Fatalf("handoffVendorForTool(%q) = %q, %v", "gemini", vendor, ok)
+	}
 	if kind, ok := agentKindForTool("antigravity"); !ok || kind.id != "antigravity" {
 		t.Fatalf("agentKindForTool(antigravity) = %#v, %v", kind, ok)
 	}

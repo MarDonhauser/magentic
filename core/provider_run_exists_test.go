@@ -88,10 +88,6 @@ func TestRunExistsPerVendor(t *testing.T) {
 	if copilot.RunExists("nicht-da") {
 		t.Fatal("fehlender Copilot-Lauf wurde als vorhanden gemeldet")
 	}
-	gemini, _ := providerForVendor(AgentVendorGemini)
-	if gemini.RunExists(run) {
-		t.Fatal("Gemini kann keinen Lauf belegen und muss false liefern")
-	}
 	antigravity, _ := providerForVendor(AgentVendorAntigravity)
 	if antigravity.RunExists(run) {
 		t.Fatal("fehlender Antigravity-Lauf wurde als vorhanden gemeldet")

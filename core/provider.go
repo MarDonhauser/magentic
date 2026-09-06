@@ -359,37 +359,6 @@ func (copilotProvider) StartCommand(session Session, run *AgentRunRef, mode stri
 	return command, nil
 }
 
-type geminiProvider struct{}
-
-func (geminiProvider) Vendor() AgentVendor { return AgentVendorGemini }
-func (geminiProvider) Tool() string        { return AgentToolGemini }
-func (geminiProvider) Binary() string      { return "gemini" }
-func (geminiProvider) NewRunID() string    { return "" }
-
-// Gemini CLI's storage layout was never verified, so nothing can be
-// normalized from it.
-func (geminiProvider) Normalizer() (ConversationNormalizer, bool) { return nil, false }
-
-func (geminiProvider) Matches(paneCommand string) bool {
-	return paneCommandMatchesKind("gemini", paneCommand)
-}
-
-// Gemini CLI's storage layout was never verified, so no run can be proven to
-// exist and every start is a fresh one.
-func (geminiProvider) RunExists(string) bool { return false }
-
-func (geminiProvider) ResumeBehavior() ResumeBehavior { return ResumeFreshOnly }
-
-// Gemini CLI has no verified headless protocol yet, so it keeps the tmux
-// runtime only.
-func (geminiProvider) Runtimes() []AgentRuntime { return []AgentRuntime{RuntimeTmux} }
-
-// Gemini CLI has no verified resume form. Starting fresh is the conservative
-// contract; the run identity is discovered from ~/.gemini/tmp afterwards.
-func (geminiProvider) StartCommand(Session, *AgentRunRef, string) (string, error) {
-	return "gemini", nil
-}
-
 type antigravityProvider struct{}
 
 func (antigravityProvider) Vendor() AgentVendor { return AgentVendorAntigravity }
