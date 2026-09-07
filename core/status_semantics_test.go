@@ -12,10 +12,10 @@ import (
 func TestClaudeStatusFromManifest(t *testing.T) {
 	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	cases := []struct {
-		name       string
-		exists     bool
-		cmd        string
-		content    string
+		name    string
+		exists  bool
+		cmd     string
+		content string
 		// last ist der gespeicherte Vorstatus: Eine Shell bedeutet "beendet"
 		// nur als Übergang — ohne belegtes Vorleben bleibt sie unbekannt.
 		last       AgentStatus

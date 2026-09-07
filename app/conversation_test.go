@@ -112,16 +112,16 @@ func TestEachUnavailableReadingHasItsOwnTransportValue(t *testing.T) {
 	seen := map[string]bool{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-		app, session, record := conversationAppFixtureFor(t, "run-1", tt.shape, tt.records...)
-		if tt.deleteAfterPrime {
-			if first := app.SessionConversation(string(session.ID)); first.Availability != string(core.ConversationAvailable) {
-				t.Fatalf("Lesung vor dem Verlust = %q, want %q", first.Availability, core.ConversationAvailable)
+			app, session, record := conversationAppFixtureFor(t, "run-1", tt.shape, tt.records...)
+			if tt.deleteAfterPrime {
+				if first := app.SessionConversation(string(session.ID)); first.Availability != string(core.ConversationAvailable) {
+					t.Fatalf("Lesung vor dem Verlust = %q, want %q", first.Availability, core.ConversationAvailable)
+				}
+				if err := os.Remove(record); err != nil {
+					t.Fatal(err)
+				}
 			}
-			if err := os.Remove(record); err != nil {
-				t.Fatal(err)
-			}
-		}
-		result := app.SessionConversation(string(session.ID))
+			result := app.SessionConversation(string(session.ID))
 			if result.Availability != string(tt.want) {
 				t.Fatalf("Availability = %q, want %q", result.Availability, tt.want)
 			}
