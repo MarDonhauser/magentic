@@ -721,13 +721,21 @@ function ensureConversationView() {
 // und die Buttons dabei wieder freigeben würde.
 let managedBusy = false;
 
+// setManagedBusy ist die einzige Stelle, die die Managed-Aktionen sperrt
+// und freigibt: Flag und DOM aus einer Hand, damit Poll-Redraws und
+// Handler-Finallys nicht auseinanderlaufen können.
+function setManagedBusy(busy) {
+  managedBusy = !!busy;
+  conversationView?.setControlBusy(managedBusy);
+}
+
 async function refreshManagedState(sessionID) {
   if (!conversationView || String(conversationSessionID) !== String(sessionID)) return;
   try {
     const result = await ManagedSessionState(String(sessionID));
     if (String(conversationSessionID) !== String(sessionID)) return;
     conversationView.setManagedState(result);
-    if (managedBusy) conversationView.setControlBusy(true);
+    conversationView.setControlBusy(managedBusy);
   } catch {
     // Ohne Host bleibt die Fläche lesend statt eine Steuerung vorzutäuschen.
   }
@@ -753,16 +761,14 @@ function stopManagedPoll() {
 async function interruptManagedSession() {
   const sessionID = conversationSessionID;
   if (!sessionID || managedBusy) return;
-  managedBusy = true;
-  conversationView?.setControlBusy(true);
+  setManagedBusy(true);
   try {
     await InterruptManagedTurn(String(sessionID));
     toast('Turn unterbrochen — die Session bleibt bereit');
   } catch (err) {
     toast('Unterbrechen fehlgeschlagen: ' + errorText(err), true);
   } finally {
-    managedBusy = false;
-    conversationView?.setControlBusy(false);
+    setManagedBusy(false);
     refreshManagedState(sessionID);
     await refresh(true);
   }
@@ -771,16 +777,14 @@ async function interruptManagedSession() {
 async function answerManagedSession(requestID, decision) {
   const sessionID = conversationSessionID;
   if (!sessionID || !requestID || managedBusy) return;
-  managedBusy = true;
-  conversationView?.setControlBusy(true);
+  setManagedBusy(true);
   try {
     await AnswerManagedPermission(String(sessionID), String(requestID), String(decision));
     toast(decision === 'allow' ? 'Freigabe erteilt' : 'Freigabe verweigert');
   } catch (err) {
     toast('Entscheidung fehlgeschlagen: ' + errorText(err), true);
   } finally {
-    managedBusy = false;
-    conversationView?.setControlBusy(false);
+    setManagedBusy(false);
     refreshManagedState(sessionID);
     await refresh(true);
   }
@@ -1251,7 +1255,7 @@ function setAutomationFormBusy(busy) {
 }
 
 async function openAutomationDialog(sessionID, sessionName) {
-  automationEditor = { sessionID, sessionName, automationID: '' };
+  automationEditor = { sessionID, sessionName, automationID: '', invoker: document.activeElement };
   $('automation-session-name').textContent = sessionName;
   automationLoadingEl.hidden = false;
   automationLoadingEl.textContent = 'Zeitplan wird geladen …';
@@ -1295,10 +1299,14 @@ automationDialogEl.addEventListener('click', e => {
   if (e.target === automationDialogEl) closeAutomationDialog();
 });
 automationDialogEl.addEventListener('close', () => {
+  // Der close-Event feuert bei jedem Schließweg (Buttons, Backdrop, Speichern,
+  // natives Esc) — genau ein Ort für Fokus-Restore und State-Reset.
+  const invoker = automationEditor?.invoker;
   automationEditor = null;
   automationSaveEl.disabled = false;
   delete automationDeleteEl.dataset.confirm;
   automationDeleteEl.textContent = 'Entfernen';
+  if (invoker?.isConnected) invoker.focus();
 });
 
 automationFormEl.addEventListener('submit', async e => {
@@ -1326,6 +1334,10 @@ automationFormEl.addEventListener('submit', async e => {
     closeAutomationDialog();
     toast(`Automatisierung für „${sessionName}“ gespeichert`);
     await refresh(true);
+    // Die Leiste rendert neu (close-Restore zeigt auf den alten Knoten) —
+    // Fokus auf die frische Badge, damit Tastaturnutzer am Auslöser bleiben.
+    // Ohne aktive Automatisierung gibt es keine Badge: dann bleibt der Fokus.
+    $('tb-automation')?.focus();
   } catch (err) {
     setAutomationFormBusy(false);
     $('automation-meta').textContent = 'Speichern fehlgeschlagen: ' + errorText(err);
@@ -1797,16 +1809,23 @@ const hydraGridEl = $('hydra-grid');
 const handoffDialogEl = $('handoff-dialog');
 const handoffDialogFormEl = $('handoff-dialog-form');
 let resolveHandoffDecision = null;
+let handoffInvoker = null;
 
 function finishHandoffDecision(mode = null) {
   const resolve = resolveHandoffDecision;
+  const wasOpen = handoffDialogEl.open;
   resolveHandoffDecision = null;
-  if (handoffDialogEl.open) handoffDialogEl.close();
+  if (wasOpen) handoffDialogEl.close();
+  // Nur beim echten Schließen zurückgeben — beim Öffnen folgt sofort
+  // showModal mit eigenem Fokus, ein Zwischenstopp wäre Geflacker.
+  if (wasOpen && handoffInvoker?.isConnected) handoffInvoker.focus();
+  handoffInvoker = null;
   resolve?.(mode);
 }
 
 function chooseSwitchContext({ title, sourceLabel, targetLabel, canTransferHistory = true }) {
   finishHandoffDecision();
+  handoffInvoker = document.activeElement;
   $('handoff-dialog-title').textContent = title;
   $('handoff-dialog-route').textContent = `${sourceLabel}  →  ${targetLabel}`;
 

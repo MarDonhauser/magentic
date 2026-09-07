@@ -62,3 +62,13 @@ test('Die Oberfläche ruft für Berechtigungsfragen keine Bindings auf', () => {
   assert.ok(surface.includes('onPermissionDecision'), 'Entscheidungen erreichen den Wirt');
   assert.ok(surface.includes('onInterrupt'), 'Unterbrechungen erreichen den Wirt');
 });
+
+test('managedControlElement ist als eigenständige Funktion in createConversationView definiert', () => {
+  assert.ok(surface.includes('function managedControlElement('),
+    'managedControlElement muss in conversation.js vorhanden sein');
+  const noticeStart = surface.indexOf('function noticeElement(');
+  const managedStart = surface.indexOf('function managedControlElement(');
+  assert.ok(noticeStart !== -1 && managedStart !== -1);
+  assert.ok(managedStart > noticeStart, 'managedControlElement folgt nach noticeElement');
+});
+

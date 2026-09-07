@@ -108,40 +108,42 @@ export function createConversationView({
       reason.textContent = model.reason;
       el.appendChild(reason);
     }
-
-    function managedControlElement(model) {
-      const el = document.createElement('section');
-      el.className = `cv-control cv-control-${model.tone}`;
-      el.setAttribute('role', model.tone === 'permission' ? 'alert' : 'status');
-      const copy = document.createElement('span');
-      copy.className = 'cv-control-copy';
-      const headline = document.createElement('strong');
-      headline.textContent = model.title;
-      const detail = document.createElement('span');
-      detail.textContent = model.detail;
-      copy.append(headline, detail);
-      const actions = document.createElement('span');
-      actions.className = 'cv-control-actions';
-      for (const action of model.actions) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = `cv-control-action cv-control-action-${action.tone}`;
-        button.textContent = action.label;
-        button.addEventListener('click', () => {
-          if (action.kind === 'interrupt-turn') onInterrupt?.();
-          if (action.kind === 'allow-permission') onPermissionDecision?.(model.requestID, 'allow');
-          if (action.kind === 'deny-permission') onPermissionDecision?.(model.requestID, 'deny');
-        });
-        actions.appendChild(button);
-      }
-      el.append(copy, actions);
-      return el;
-    }
     if (model.vendor && model.availability === 'no-normalizer') {
       const vendor = document.createElement('span');
       vendor.textContent = 'Agent: ' + model.vendor;
       el.appendChild(vendor);
     }
+    return el;
+  }
+
+  function managedControlElement(model) {
+    const el = document.createElement('section');
+    el.className = `cv-control cv-control-${model.tone}`;
+    el.setAttribute('role', model.tone === 'permission' ? 'alert' : 'status');
+    const copy = document.createElement('span');
+    copy.className = 'cv-control-copy';
+    const headline = document.createElement('strong');
+    headline.textContent = model.title;
+    const detail = document.createElement('span');
+    detail.textContent = model.detail;
+    copy.append(headline, detail);
+    const actions = document.createElement('span');
+    actions.className = 'cv-control-actions';
+    for (const action of model.actions) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      // Die Aktionen sprechen die Button-Sprache der Fläche (.cv-action);
+      // .cv-control-action ist nur der Griff für die Busy-Sperre.
+      button.className = `cv-action cv-control-action${action.tone === 'primary' ? ' cv-action-primary' : ''}`;
+      button.textContent = action.label;
+      button.addEventListener('click', () => {
+        if (action.kind === 'interrupt-turn') onInterrupt?.();
+        if (action.kind === 'allow-permission') onPermissionDecision?.(model.requestID, 'allow');
+        if (action.kind === 'deny-permission') onPermissionDecision?.(model.requestID, 'deny');
+      });
+      actions.appendChild(button);
+    }
+    el.append(copy, actions);
     return el;
   }
 

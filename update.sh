@@ -32,12 +32,15 @@ quit_running() {
 }
 
 install_build() {
+  local build_marker="$1"
   echo "→ Installiere nach $INSTALL_APP (alte Version wird ersetzt)…"
-  # Erst prüfen, dann löschen: Ohne Build-Output würde das rm unten die
-  # funktionierende installierte Version vernichten und das cp danach
-  # fehlschlagen — der Rechner stünde ohne App da.
-  if [ ! -d "$BUILD_APP" ]; then
-    echo "✗ Abbruch: kein Build-Output unter $BUILD_APP — installierte Version bleibt unangetastet." >&2
+  # Erst prüfen, dann löschen: Ohne frischen Build-Output aus genau diesem Lauf
+  # würde das rm unten die funktionierende installierte Version vernichten und
+  # das cp danach eine veraltete (oder keine) App installieren — der Rechner
+  # stünde ohne lauffähige App da. Der mtime-Vergleich fängt auch einen
+  # Build ab, der erfolgreich wirkt, aber nichts (oder woandershin) schreibt.
+  if [ ! -d "$BUILD_APP" ] || [ ! "$BUILD_APP" -nt "$build_marker" ]; then
+    echo "✗ Abbruch: kein Build-Output aus diesem Lauf unter $BUILD_APP — installierte Version bleibt unangetastet." >&2
     exit 1
   fi
   # Nicht per cp über die bestehende App kopieren — macOS invalidiert dabei
@@ -62,8 +65,10 @@ case "${1:-}" in
     ;;
   *)
     quit_running
+    build_marker="$(mktemp)"
+    trap 'rm -f "$build_marker"' EXIT
     "$ROOT_DIR/scripts/build-app.sh" "$@"
-    install_build
+    install_build "$build_marker"
     refresh_autostart
     echo "→ Starte installierte Version…"
     open "$INSTALL_APP"

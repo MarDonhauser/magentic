@@ -340,38 +340,21 @@
 }
 .cv-control-unavailable { opacity: .85; }
 .cv-control-actions { display: flex; gap: var(--space-sm); flex-wrap: wrap; }
-.cv-control-action {
-  min-height: 36px;
-  padding: 7px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  background: var(--surface);
-  color: var(--ink);
-  font: inherit;
-  font-weight: var(--fw-medium);
-  cursor: pointer;
-}
-.cv-control-action:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.cv-control-action:focus-visible {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.cv-control-action:disabled { opacity: .45; cursor: not-allowed; }
-.cv-control-action-primary {
+/* Basis, Hover, Fokus und Disabled kommen aus .cv-action — eine Quelle für
+   alle Aktions-Buttons der Fläche. .cv-control-action bleibt als Griff für
+   die Busy-Sperre im Markup, braucht aber keine eigenen Regeln. */
+.cv-action-primary {
   border-color: var(--term-action-hover);
   background: var(--term-action-hover);
   color: var(--term-action-text);
   font-weight: var(--fw-semibold);
 }
-.cv-control-action-primary:hover:not(:disabled) {
+.cv-action-primary:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--term-action-hover) 86%, black);
   background: color-mix(in srgb, var(--term-action-hover) 86%, black);
   color: var(--term-action-text);
 }
-.cv-control-action-primary:focus-visible {
+.cv-action-primary:focus-visible {
   border-color: color-mix(in srgb, var(--term-action-hover) 86%, black);
   color: var(--term-action-text);
 }

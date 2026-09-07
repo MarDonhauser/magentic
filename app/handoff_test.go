@@ -118,6 +118,7 @@ func handoffTestState(t *testing.T, source, target core.Session) {
 	t.Helper()
 	statePath := filepath.Join(t.TempDir(), "state.json")
 	t.Setenv("MAGENTIC_STATE", statePath)
+	t.Cleanup(core.ResetSharedWorkHistoryForTest)
 	registry := core.OpenRegistry(statePath)
 	for _, session := range []core.Session{source, target} {
 		if _, err := registry.Change(context.Background(), core.RegisterSession(session)); err != nil {

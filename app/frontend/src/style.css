@@ -817,7 +817,14 @@ body.dk-open { --br-bottom: calc(var(--dk-h, 280px) + 16px); }
   border-bottom-color: var(--term-divider);
   background: var(--term-toolbar);
   box-shadow: var(--term-toolbar-shadow);
+  /* Volle Leiste (done, Geplant, Wartet …) auf schmalem Fenster: lieber
+     scrollbar als lautlos abgeschnitten — sonst wäre gerade die Warn-Badge
+     unsichtbar. Selbe Sprache wie die ≤1050px-Regel weiter unten. */
+  overflow-x: auto;
+  scrollbar-width: none;
 }
+
+#terms:not(.hydra) #term-bar::-webkit-scrollbar { display: none; }
 
 #terms:not(.hydra) #term-bar .btn {
   min-height: 32px;

@@ -501,9 +501,17 @@ func SharedWorkHistory() (*WorkHistory, error) {
 	return sharedWorkHistory, sharedWorkHistoryErr
 }
 
-func resetSharedWorkHistoryForTest() {
+// ResetSharedWorkHistoryForTest closes and clears any process-shared WorkHistory instance.
+func ResetSharedWorkHistoryForTest() {
+	if sharedWorkHistory != nil {
+		_ = sharedWorkHistory.Close()
+	}
 	sharedWorkHistoryOnce = sync.Once{}
 	sharedWorkHistory, sharedWorkHistoryErr = nil, nil
+}
+
+func resetSharedWorkHistoryForTest() {
+	ResetSharedWorkHistoryForTest()
 }
 
 func ensurePrivateHistoryDir(path string) error {

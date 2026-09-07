@@ -128,7 +128,7 @@ function badgesHtml(item, multi) {
 function actionsHtml(item, opts) {
   const out = [];
   if (typeof opts.onStart === 'function' && item.startToken) {
-    out.push(`<button type="button" class="bd-act bd-act-start" data-act="start">${developerIcon('claude')}Arbeiten</button>`);
+    out.push(`<button type="button" class="bd-act bd-act-start" data-act="start">${icon('play')}Arbeiten</button>`);
   }
   if (!out.length) return '';
   return `<div class="bd-actions">${out.join('')}</div>`;
@@ -298,6 +298,12 @@ function toggle(card) {
   if (panel) panel.hidden = !open;
 }
 
+export function itemColumn(it) {
+  const col = String(it?.column || '').trim();
+  if (col === 'active' || col === 'review' || col === 'done') return col;
+  return 'backlog';
+}
+
 function bind(el) {
   if (bound.has(el)) return;
   bound.set(el, {});
@@ -319,13 +325,15 @@ function bind(el) {
       else if (act.dataset.act === 'start' && item) opts.onStart?.(item);
       return;
     }
+    if (ev.target.closest('button, a, input, select, textarea, .bd-tasks, .bd-card-foot')) return;
     const card = ev.target.closest('.bd-card');
     if (card && el.contains(card)) toggle(card);
   });
   el.addEventListener('keydown', ev => {
     if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    if (ev.target.closest('button, a, input, select, textarea, [data-act]')) return;
     const card = ev.target.closest?.('.bd-card');
-    if (!card || !el.contains(card) || ev.target.closest('[data-act]')) return;
+    if (!card || !el.contains(card)) return;
     ev.preventDefault();
     toggle(card);
   });
@@ -360,7 +368,7 @@ export function renderBoard(el, board, opts = {}) {
     : '';
 
   const cols = COLUMNS.map(col => {
-    const inCol = sortItems(items.filter(it => (it.column || 'backlog') === col.key));
+    const inCol = sortItems(items.filter(it => itemColumn(it) === col.key));
     return columnHtml(col, inCol, opts, multi);
   }).join('');
 
