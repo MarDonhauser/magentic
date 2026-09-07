@@ -292,6 +292,7 @@
   margin-bottom: 14px;
   box-shadow: 0 1px 2px var(--shadow);
   min-width: 0;
+  overflow-x: auto;
 }
 .st-card-head {
   display: flex;
