@@ -1559,3 +1559,46 @@ func TestResumeAfterRestartReconcileRejectsForgottenConversation(t *testing.T) {
 		t.Fatalf("failed resume rewrote the record: %+v", got)
 	}
 }
+
+func TestTmuxLifecycleRuntimeStartShieldsCommandFromShellInitKeyReads(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	binDir := filepath.Join(home, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+
+	var calls [][]string
+	runtime := tmuxLifecycleRuntime{command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, append([]string{name}, args...))
+		return nil, nil
+	}}
+	session := Session{
+		Name: "navi", RuntimeName: "mgt-navi", SessionKind: SessionKindCodingAgent,
+		Vendor: AgentVendorClaude, Dir: home,
+	}
+	if err := runtime.Start(context.Background(), session, "new"); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	var literal []string
+	for _, call := range calls {
+		if len(call) == 6 && call[1] == "send-keys" && call[4] == "-l" {
+			literal = call
+		}
+	}
+	if literal == nil {
+		t.Fatalf("no literal send-keys call: %#v", calls)
+	}
+	want, err := startCommandForSession(session, "new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if literal[5] != " "+want {
+		t.Fatalf("start input = %q, want one leading space before %q", literal[5], want)
+	}
+}
