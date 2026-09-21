@@ -2002,6 +2002,7 @@ function hydraAgents() {
 
 function enterHydra(project) {
   hydraHandoff.leave();
+  resetTermSurface();
   view = 'hydra';
   markSeen(activeSessionID);
   activeTerm = null;
