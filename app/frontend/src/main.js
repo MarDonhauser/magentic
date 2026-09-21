@@ -48,6 +48,7 @@ import { mountBreaks, updateBreaks, openBreak, openBreakSettings, isBreakOpen } 
 import { initThemeToggle, onThemeChange, terminalTheme, terminalContrastFloor } from './theme.js';
 import { TERMINAL_OPTIONS, setUpTerminal } from './terminal-setup.js';
 import { createHydraHandoff } from './hydra-handoff.js';
+import { createHydraOrder, placeInOrder } from './hydra-order.js';
 import { createVendorSwitchCoordinator } from './vendor-switch.js';
 import { queuedBadge, queuedMessages, queuedHeadline } from './queued-state.js';
 import {
@@ -1805,6 +1806,7 @@ for (const id of ['graph-view', 'board-view']) {
 }
 
 const hydraGridEl = $('hydra-grid');
+const hydraOrder = createHydraOrder();
 
 const handoffDialogEl = $('handoff-dialog');
 const handoffDialogFormEl = $('handoff-dialog-form');
@@ -1983,7 +1985,7 @@ function hydraAgents() {
       if (a.status !== 'dead' && !a.dock && !a.service) out.push(a);
     }
   }
-  return out.slice(0, 6);
+  return hydraOrder.order(hydraProject, out).slice(0, 6);
 }
 
 function enterHydra(project) {
@@ -2120,7 +2122,6 @@ async function syncHydra() {
     t.term.options.fontSize = 13;
     t.term.options.lineHeight = 1.1;
     ensureHydraHead(t);
-    if (t.wrap.parentElement !== hydraGridEl) hydraGridEl.appendChild(t.wrap);
     t.wrap.dataset.termName = t.name;
     t.wrap.dataset.sessionId = String(a.id || '');
     updateHydraHead(t, a);
@@ -2128,6 +2129,7 @@ async function syncHydra() {
     t.head.querySelector('.dot').style.background = v.color;
     t.head.querySelector('.hh-status').innerHTML = `${visHtml(v)} · ${esc(a.age)}`;
   }
+  placeInOrder(hydraGridEl, agents.map(a => terms.get(a.name).wrap));
   hydraGridEl.classList.toggle('single', agents.length === 1);
   hydraGridEl.classList.toggle('odd', agents.length % 2 === 1 && agents.length > 1);
   hydraHandoff.reconcile(agents);
