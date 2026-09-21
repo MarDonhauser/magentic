@@ -47,6 +47,7 @@ import { mountDock, toggleDock, isDockOpen, closeDockTab, dockTabs, refitDock, o
 import { mountBreaks, updateBreaks, openBreak, openBreakSettings, isBreakOpen } from './breaks.js';
 import { initThemeToggle, onThemeChange, terminalTheme, terminalContrastFloor } from './theme.js';
 import { TERMINAL_OPTIONS, setUpTerminal } from './terminal-setup.js';
+import { clearTextureAtlases } from './texture-atlas.js';
 import { createHydraHandoff } from './hydra-handoff.js';
 import { createHydraOrder, placeInOrder } from './hydra-order.js';
 import { HYDRA_MAX_TILES, hydraColumns } from './hydra-layout.js';
@@ -278,6 +279,7 @@ onThemeChange(theme => {
     entry.term.options.theme = nextTheme;
     entry.term.options.minimumContrastRatio = nextFloor;
   }
+  clearTextureAtlases();
 });
 
 function makeTerm(sessionID, name) {
@@ -430,8 +432,8 @@ function applyTermFont() {
   for (const t of terms.values()) {
     t.term.options.fontFamily = TERM_FONTS[termFontFamily];
     if (t.wrap.parentElement === termsEl) t.term.options.fontSize = termFontSize;
-    t.term.clearTextureAtlas?.();
   }
+  clearTextureAtlases();
   const refit = [];
   if (view === 'hydra') {
     for (const t of terms.values()) {
@@ -846,7 +848,7 @@ async function ensureSessionTerminal(sessionID, name) {
   t.term.focus();
   requestAnimationFrame(() => {
     if (!t.wrap.classList.contains('active')) return;
-    t.term.clearTextureAtlas?.();
+    clearTextureAtlases();
     t.term.refresh(0, t.term.rows - 1);
   });
   return t;
