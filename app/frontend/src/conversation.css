@@ -55,8 +55,7 @@
 .cv-head,
 .cv-list,
 .cv-foot {
-  width: min(100%, 880px);
-  margin-inline: auto;
+  width: 100%;
 }
 
 .cv-head,
@@ -130,7 +129,7 @@
 
 .cv-developer-prompt .cv-prose {
   width: fit-content;
-  max-width: 74ch;
+  max-width: 100%;
   padding: 10px 14px;
   border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
   border-radius: 14px 14px 4px 14px;
@@ -385,4 +384,21 @@
 @media (prefers-reduced-motion: reduce) {
   .cv-line { transition: none; }
   .cv-live::before { animation: none; }
+}
+
+.cv-pending .cv-prose {
+  border-style: dashed;
+  opacity: 0.85;
+}
+
+.cv-pending-state {
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  opacity: 0.7;
+}
+
+.cv-pending-state::before {
+  content: "·";
+  margin: 0 6px;
 }

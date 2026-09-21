@@ -105,6 +105,7 @@ func (a *App) startup(ctx context.Context) {
 	startControlAPI()
 	go a.watchLoop()
 	go a.hookReportLoop()
+	go a.conversationLoop()
 }
 
 func (a *App) onFileDrop(x, y int, paths []string) {

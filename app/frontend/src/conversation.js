@@ -2,11 +2,14 @@ import './conversation.css';
 
 import { renderMarkdown } from './conversation-markdown.js';
 import {
-  applyReading, applyUpdate, emptyConversationState, renderModel, rowSignature, fnv1a, scrollDecision,
+  applyReading, applyUpdate, addPending, reconcilePending, emptyConversationState, renderModel, rowSignature,
+  fnv1a, scrollDecision,
 } from './conversation-state.js';
 import {
   applyManagedSessionState, emptyManagedSessionState, managedControlModel,
 } from './managed-session-state.js';
+
+const PENDING_STATES = { queued: 'wartet auf die Session', stuck: 'Zustellung ungewiss', sent: 'gesendet' };
 
 function esc(text) {
   return String(text ?? '')
@@ -31,6 +34,13 @@ function rowElement(row, expanded, toggle) {
     const label = document.createElement('span');
     label.textContent = row.label || row.kind;
     head.appendChild(label);
+    if (row.pending) {
+      el.classList.add('cv-pending');
+      const pending = document.createElement('span');
+      pending.className = 'cv-pending-state';
+      pending.textContent = PENDING_STATES[row.pendingState] || PENDING_STATES.sent;
+      head.appendChild(pending);
+    }
     if (row.inProgress) {
       const live = document.createElement('span');
       live.className = 'cv-live';
@@ -79,6 +89,7 @@ export function createConversationView({
   let state = emptyConversationState();
   let waiting = false;
   let terminalAvailable = true;
+  let queued = [];
   let managedState = emptyManagedSessionState();
   const expanded = new Set();
   const rendered = new Map();
@@ -187,7 +198,7 @@ export function createConversationView({
       scrollTop: root.scrollTop, scrollHeight: root.scrollHeight,
       clientHeight: root.clientHeight, hasNewItems,
     });
-    const model = renderModel(state, { waiting, terminalAvailable });
+    const model = renderModel(state, { waiting, terminalAvailable, queued });
     const controls = managedControlModel(managedState);
 
     const head = [];
@@ -228,6 +239,7 @@ export function createConversationView({
     element: root,
     setReading(result) {
       state = applyReading(result);
+      queued = [];
       expanded.clear();
       rendered.clear();
       listEl.replaceChildren();
@@ -238,7 +250,7 @@ export function createConversationView({
         rendered.clear();
         listEl.replaceChildren();
       }
-      state = applyUpdate(state, event);
+      state = reconcilePending(applyUpdate(state, event));
       draw(true);
     },
     setWaiting(next) {
@@ -249,6 +261,16 @@ export function createConversationView({
     setTerminalAvailable(next) {
       if (terminalAvailable === !!next) return;
       terminalAvailable = !!next;
+      draw(false);
+    },
+    addPending(entry) {
+      state = addPending(state, entry);
+      draw(true);
+      root.scrollTop = root.scrollHeight;
+    },
+    setQueued(next) {
+      queued = Array.isArray(next) ? next : [];
+      state = reconcilePending(state);
       draw(false);
     },
     setManagedState(next) {

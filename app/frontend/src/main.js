@@ -742,6 +742,11 @@ async function refreshManagedState(sessionID) {
   }
 }
 
+function syncConversationQueue() {
+  if (!conversationView || !conversationSessionID || termSurface !== 'conversation') return;
+  conversationView.setQueued(queuedMessages(agentInfo(activeTerm, conversationSessionID)));
+}
+
 function startManagedPoll(sessionID) {
   stopManagedPoll();
   refreshManagedState(sessionID);
@@ -859,7 +864,10 @@ async function showTermSurface(next, force = false) {
   startManagedPoll(sessionID);
   try {
     const reading = await SessionConversation(String(sessionID));
-    if (conversationSessionID === sessionID) surfaceView.setReading(reading);
+    if (conversationSessionID === sessionID) {
+      surfaceView.setReading(reading);
+      syncConversationQueue();
+    }
   } catch (err) {
     if (conversationSessionID !== sessionID) return;
     surfaceView.setReading({
@@ -1045,6 +1053,10 @@ async function sendComposerMessage() {
       t.term.scrollToBottom();
     } else {
       await SendMessage(String(sessionID), message);
+      if (conversationView && termSurface === 'conversation' && String(conversationSessionID) === String(sessionID)) {
+        conversationView.addPending({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text: message });
+      }
+      refresh(true).catch(() => {});
     }
     termPromptEl.value = '';
     clearComposerAttachments();
@@ -3308,6 +3320,7 @@ async function refreshOnce(force) {
   try {
     const o = await Overview(!!force);
     ov = o;
+    syncConversationQueue();
     overviewSync = {
       kind: 'fresh',
       error: '',

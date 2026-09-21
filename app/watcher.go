@@ -263,3 +263,21 @@ var platformAttentionExecutor = core.AttentionExecutor{
 func executeAttentionPlan(plan core.AttentionPlan) {
 	core.ExecuteAttentionPlan(plan, platformAttentionExecutor)
 }
+
+const conversationPollInterval = time.Second
+
+// conversationLoop reads the presented Conversation between Observation
+// passes. Nothing is read while no Session is being presented.
+func (a *App) conversationLoop() {
+	for {
+		time.Sleep(conversationPollInterval)
+		if !a.conversations().WatchesAny() {
+			continue
+		}
+		st, err := core.LoadState()
+		if err != nil {
+			continue
+		}
+		a.publishConversationUpdates(st.Agents)
+	}
+}

@@ -121,6 +121,13 @@ func (r *ConversationReader) Watch(sessionIDs ...SessionID) {
 	}
 }
 
+// WatchesAny reports whether any Session is currently being presented.
+func (r *ConversationReader) WatchesAny() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.watched) > 0
+}
+
 // Watching reports whether this Session is currently being presented.
 func (r *ConversationReader) Watching(sessionID SessionID) bool {
 	r.mu.Lock()
