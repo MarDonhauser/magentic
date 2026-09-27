@@ -17,11 +17,18 @@ var agentVendorLabels = map[AgentVendor]string{
 	AgentVendorAntigravity: "Antigravity",
 }
 
-// AgentVendorCatalog lists the selectable vendors in presentation order.
+// AgentVendorCatalog lists the selectable vendors in presentation order. omp
+// is deliberately absent: this catalog backs the vendor-choosing creation
+// flow the omp runtime is not offered through yet — it is reached only by an
+// explicit Runtime opt-in (task 1.3), not by picking a vendor here. Section 6
+// replaces this picker with a model picker.
 func AgentVendorCatalog() []AgentVendorOption {
 	providers := builtinAgentProviders()
 	catalog := make([]AgentVendorOption, 0, len(providers))
 	for _, provider := range providers {
+		if provider.Vendor() == AgentVendorOmp {
+			continue
+		}
 		label := agentVendorLabels[provider.Vendor()]
 		if label == "" {
 			label = string(provider.Vendor())

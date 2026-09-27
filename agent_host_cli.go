@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"magentic/core"
 )
@@ -32,6 +33,13 @@ func cliAgentHost(args []string) {
 	if token == "" {
 		fmt.Fprintln(os.Stderr, "MAGENTIC_AGENT_HOST_TOKEN fehlt — der Daemon muss das beim Start des Hosts setzen")
 		os.Exit(2)
+	}
+
+	// An omp host is fully described by the record the daemon wrote before
+	// starting it; the Session is registered only after its runtime is up,
+	// so it cannot be looked up here yet.
+	if record, found, recordErr := core.NewManagedHostRegistry().RecordFor(core.SessionID(*sessionID)); recordErr == nil && found && len(record.LaunchArgv) > 0 {
+		os.Exit(runOmpAgentHost(record, token, *dir))
 	}
 
 	state, err := core.LoadState()
@@ -100,6 +108,65 @@ var installedClaudeCLIVersion = func() (string, error) {
 		return "", err
 	}
 	return firstLine(string(out)), nil
+}
+
+// runOmpAgentHost owns one omp Session's process. It launches exactly the
+// argument list the daemon recorded before starting this host, and only after
+// the installed omp's approval gate is verified; anything it cannot prove
+// refuses the Session with the reason and starts nothing.
+func runOmpAgentHost(record core.ManagedHostRecord, token core.AgentHostToken, dir string) int {
+	if record.Token != token {
+		fmt.Fprintf(os.Stderr, "für Session %q ist kein passender Host-Intent verzeichnet\n", record.SessionID)
+		return 1
+	}
+	if !core.OmpLaunchArgvHasGate(record.LaunchArgv) {
+		fmt.Fprintf(os.Stderr, "die verzeichneten Startargumente von Session %q erzwingen das Freigabe-Gate nicht\n", record.SessionID)
+		return 1
+	}
+	if cwd := core.OmpLaunchCwd(record.LaunchArgv); cwd != dir {
+		fmt.Fprintf(os.Stderr, "Arbeitsverzeichnis %q weicht vom verzeichneten %q ab\n", dir, cwd)
+		return 1
+	}
+
+	// The verification must not run in any Project or in the Session's own
+	// directory; a missing state only narrows what it can rule out.
+	roots := []string{dir}
+	if state, err := core.LoadState(); err == nil {
+		for _, project := range state.Projects {
+			roots = append(roots, project.Path)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	result, err := core.EnsureInstalledOmpGateVerified(ctx, roots)
+	cancel()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if result.Outcome != core.OmpVerifyOutcomeVerified {
+		fmt.Fprintln(os.Stderr, core.OmpGateRefusal(result))
+		return 1
+	}
+
+	host, err := core.StartAgentHost(record.SessionID, token)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer host.Close()
+	if _, err := host.StartOmpProcess(record.LaunchArgv, dir); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
+	fmt.Printf("Agent-Host für Session %q hört auf %s\n", record.SessionID, host.Path())
+	signals, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	select {
+	case <-signals.Done():
+	case <-host.Done():
+	}
+	return 0
 }
 
 func firstLine(s string) string {

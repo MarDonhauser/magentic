@@ -101,6 +101,24 @@ type Item struct {
 	// (see Conversation.Apply), so a streamed message is never presented as
 	// finished and never appears twice.
 	InProgress bool `json:"inProgress,omitempty"`
+	// Model and ModelProvider carry which model actually served this
+	// activity, e.g. "claude-opus-4" served by "anthropic". This is a fact
+	// about the turn, not an identity: it is never carried on ConversationRef
+	// and never selects a normalizer (omp-runtime/conversation-normalization).
+	// A vendor that does not record which model produced an activity leaves
+	// both empty.
+	Model         string `json:"model,omitempty"`
+	ModelProvider string `json:"modelProvider,omitempty"`
+	// Cost and CostKnown carry what the source itself reported this turn
+	// cost, attributed to whichever provider served it (ModelProvider) —
+	// never priced from a table keyed by vendor, since one agent can front
+	// many providers (omp-runtime/vendor-retirement). CostKnown is false,
+	// and Cost is meaningless, whenever the source reported no determinable
+	// figure; an undeterminable cost is never represented as Cost==0 with
+	// CostKnown==true. A vendor that never reports cost at all leaves both
+	// at their zero value, same as Model/ModelProvider above.
+	Cost      float64 `json:"cost,omitempty"`
+	CostKnown bool    `json:"costKnown,omitempty"`
 	// Label und Collapsible tragen die Darstellung des Items. Sie werden beim
 	// Eintritt in eine Conversation aus der Art gefüllt, damit eine Oberfläche
 	// Titel, Detail und Einklappbarkeit rendert, ohne die Art zu kennen: eine

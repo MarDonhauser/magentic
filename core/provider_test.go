@@ -424,6 +424,7 @@ func TestEveryBuiltinVendorDeclaresANormalizerAnswer(t *testing.T) {
 		AgentVendorCodex:       false,
 		AgentVendorCopilot:     false,
 		AgentVendorAntigravity: false,
+		AgentVendorOmp:         true,
 	}
 	providers := builtinAgentProviders()
 	if len(providers) != len(want) {
@@ -529,6 +530,7 @@ func TestBuiltinVendorsPinTheirResumeBehavior(t *testing.T) {
 		AgentVendorCodex:       ResumeByRunRef,
 		AgentVendorCopilot:     ResumeByRunRef,
 		AgentVendorAntigravity: ResumeByRunRef,
+		AgentVendorOmp:         ResumeByRunRef,
 	}
 	providers := builtinAgentProviders()
 	if len(providers) != len(want) {
@@ -556,6 +558,11 @@ func TestEveryVendorDeclaresARuntimeSetContainingTmux(t *testing.T) {
 		t.Fatal("keine Builtin-Provider registriert")
 	}
 	for _, provider := range providers {
+		// omp has no tmux path at all: the daemon owns its process directly
+		// and speaks its own protocol, so it is the one declared exception.
+		if provider.Vendor() == AgentVendorOmp {
+			continue
+		}
 		runtimes := provider.Runtimes()
 		if len(runtimes) == 0 {
 			t.Errorf("%q erklärt keine AgentRuntimes", provider.Vendor())
@@ -572,6 +579,7 @@ func TestOnlyClaudeDeclaresManagedRuntimeSupport(t *testing.T) {
 		AgentVendorCodex:       false,
 		AgentVendorCopilot:     false,
 		AgentVendorAntigravity: false,
+		AgentVendorOmp:         false,
 	}
 	providers := builtinAgentProviders()
 	if len(providers) != len(want) {
@@ -619,5 +627,32 @@ func TestResumeCommandPerVendorUsesRecordedRun(t *testing.T) {
 				t.Fatalf("StartCommand = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+// TestOmpIsTheSoleProviderDeclaringRuntimeOmp hält fest, dass RuntimeOmp genau
+// einen Vendor hat: den omp-Provider selbst. Kein anderer Vendor darf diesen
+// Runtime aus Versehen mit-erklären.
+func TestOmpIsTheSoleProviderDeclaringRuntimeOmp(t *testing.T) {
+	want := map[AgentVendor]bool{
+		AgentVendorClaude:      false,
+		AgentVendorCodex:       false,
+		AgentVendorCopilot:     false,
+		AgentVendorAntigravity: false,
+		AgentVendorOmp:         true,
+	}
+	providers := builtinAgentProviders()
+	if len(providers) != len(want) {
+		t.Fatalf("%d Builtin-Provider, der Test deckt %d ab", len(providers), len(want))
+	}
+	for _, provider := range providers {
+		vendor := provider.Vendor()
+		declaresOmp, covered := want[vendor]
+		if !covered {
+			t.Fatalf("Vendor %q ist im Test nicht abgedeckt", vendor)
+		}
+		if got := SupportsRuntime(provider, RuntimeOmp); got != declaresOmp {
+			t.Errorf("%q erklärt RuntimeOmp = %v, want %v", vendor, got, declaresOmp)
+		}
 	}
 }

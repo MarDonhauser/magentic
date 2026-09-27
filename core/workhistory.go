@@ -37,6 +37,11 @@ var historyProviders = func() []HistoryProvider {
 	providers := builtinAgentProviders()
 	out := make([]HistoryProvider, 0, len(providers))
 	for _, provider := range providers {
+		// omp keeps no record Magentic may read; its history is what
+		// Magentic itself persists from the stream, not an on-disk format.
+		if provider.Vendor() == AgentVendorOmp {
+			continue
+		}
 		out = append(out, HistoryProvider(provider.Vendor()))
 	}
 	return out

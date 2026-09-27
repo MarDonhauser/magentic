@@ -18,17 +18,21 @@ const (
 	AgentVendorGemini      AgentVendor = "gemini"
 	AgentVendorCopilot     AgentVendor = "copilot"
 	AgentVendorAntigravity AgentVendor = "antigravity"
+	AgentVendorOmp         AgentVendor = "omp"
 )
 
 // AgentRuntime names what owns a Session's coding-agent process: the tmux
-// runtime, driving it by keystrokes in a pane, or the managed runtime, where
-// the daemon owns the process directly and speaks its protocol. It is chosen
-// when a Session is created and does not change for that Session's life.
+// runtime, driving it by keystrokes in a pane; the managed runtime, where the
+// daemon owns the process directly and speaks its protocol; or the omp
+// runtime, where the daemon owns an omp process and speaks its own RPC
+// protocol. It is chosen when a Session is created and does not change for
+// that Session's life.
 type AgentRuntime string
 
 const (
 	RuntimeTmux    AgentRuntime = "tmux"
 	RuntimeManaged AgentRuntime = "managed"
+	RuntimeOmp     AgentRuntime = "omp"
 )
 
 // Runtime action identities offered for a live Session, derived from its
@@ -41,17 +45,24 @@ const (
 )
 
 // RuntimeActionsFor lists the actions a Session's AgentRuntime offers while
-// it is live. Attach is offered only for tmux, because a managed Session has
-// no pane to attach to. Interrupting a turn and answering a permission
-// decision are offered only for managed, because a tmux Session answers both
-// in its own pane. An action absent from this list MUST NOT be offered for
-// that runtime; it does not fail at execution time as the way of
-// communicating that.
+// it is live. Attach is offered only for tmux, because a managed or omp
+// Session has no pane to attach to. Interrupting a turn and answering a
+// permission decision are offered only for managed and omp, because a tmux
+// Session answers both in its own pane. An action absent from this list MUST
+// NOT be offered for that runtime; it does not fail at execution time as the
+// way of communicating that.
 func RuntimeActionsFor(runtime AgentRuntime) []string {
-	if runtime == RuntimeManaged {
+	if runtime == RuntimeManaged || runtime == RuntimeOmp {
 		return []string{RuntimeActionInterrupt, RuntimeActionAnswerPermission}
 	}
 	return []string{RuntimeActionAttach}
+}
+
+// RuntimeHasAgentHost reports whether a Session of this runtime is owned by
+// an agent host rather than by a tmux pane: it is observed, interrupted and
+// answered through the host's socket, and no tmux command is issued for it.
+func RuntimeHasAgentHost(runtime AgentRuntime) bool {
+	return runtime == RuntimeManaged || runtime == RuntimeOmp
 }
 
 // RuntimeOffersAction reports whether the given AgentRuntime offers action.
@@ -197,11 +208,16 @@ type Session struct {
 	BaseDirty        []string            `json:"base_dirty,omitempty"`
 	SessionID        string              `json:"session_id,omitempty"` // legacy Claude run identifier
 	Vendor           AgentVendor         `json:"vendor,omitempty"`
-	Runtime          AgentRuntime        `json:"runtime,omitempty"`
-	AgentRuns        []AgentRunRef       `json:"agent_runs,omitempty"`
-	DeployAt         time.Time           `json:"deploy_at,omitzero"`
-	LaterAt          time.Time           `json:"later_at,omitzero"`
-	SeenAt           time.Time           `json:"seen_at,omitzero"`
+	// Model is the model selected when this Session was created, distinct
+	// from Vendor. A record written before this field existed carries no
+	// Model; SessionModel reports that as explicitly unknown rather than
+	// defaulting it.
+	Model     string        `json:"model,omitempty"`
+	Runtime   AgentRuntime  `json:"runtime,omitempty"`
+	AgentRuns []AgentRunRef `json:"agent_runs,omitempty"`
+	DeployAt  time.Time     `json:"deploy_at,omitzero"`
+	LaterAt   time.Time     `json:"later_at,omitzero"`
+	SeenAt    time.Time     `json:"seen_at,omitzero"`
 	// LastStatus is the last status an Observation pass reported while the
 	// Session's runtime still existed, with the time it was observed. It
 	// answers "what was it doing, and when" after a reboot, before the first
@@ -362,6 +378,17 @@ func (a Session) SessionVendor() AgentVendor {
 		return a.Vendor
 	}
 	return AgentVendorClaude
+}
+
+// SessionModel is the model recorded at this Session's creation. An empty
+// stored value reads as explicitly unknown — never defaulted to any model —
+// which is also what every Session record written before this field existed
+// yields.
+func (a Session) SessionModel() (string, bool) {
+	if a.Model == "" {
+		return "", false
+	}
+	return a.Model, true
 }
 
 // SessionRuntime is the durable AgentRuntime that owns this Session's

@@ -1,0 +1,9 @@
+{"type": "tool_execution_start", "toolCallId": "call_task_1", "toolName": "task", "args": {"description": "Recherche zu X"}, "intent": "Recherche zu X"}
+{"type": "subagent_lifecycle", "payload": {"id": "sub_1", "index": 0, "agent": "researcher", "agentSource": "bundled", "description": "Recherche zu X", "status": "started", "parentToolCallId": "call_task_1"}}
+{"type": "subagent_progress", "payload": {"index": 0, "agent": "researcher", "agentSource": "bundled", "task": "Recherche zu X", "parentToolCallId": "call_task_1", "progress": {"id": "sub_1", "lastIntent": "Suche nach X"}}}
+{"type": "subagent_event", "payload": {"id": "sub_1", "event": {"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "X wurde gefunden."}], "provider": "anthropic", "model": "claude-opus-4", "timestamp": 1790104100000, "responseId": "resp_sub_1"}}}}
+{"type": "subagent_lifecycle", "payload": {"id": "sub_1", "index": 0, "agent": "researcher", "agentSource": "bundled", "description": "Recherche zu X", "status": "completed", "parentToolCallId": "call_task_1"}}
+{"type": "tool_execution_end", "toolCallId": "call_task_1", "toolName": "task", "result": {"content": [{"type": "text", "text": "Recherche abgeschlossen."}]}, "isError": false}
+{"type": "subagent_lifecycle", "payload": {"id": "sub_2", "index": 1, "agent": "researcher", "agentSource": "bundled", "description": "Ohne bekannten Elternteil", "status": "started"}}
+{"type": "subagent_event", "payload": {"id": "sub_2", "event": {"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "Ohne Kontext gearbeitet."}], "provider": "anthropic", "model": "claude-opus-4", "timestamp": 1790104200000, "responseId": "resp_sub_2"}}}}
+{"type": "subagent_lifecycle", "payload": {"id": "sub_2", "index": 1, "agent": "researcher", "agentSource": "bundled", "description": "Ohne bekannten Elternteil", "status": "completed"}}

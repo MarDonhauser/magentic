@@ -53,7 +53,7 @@ func ObserveWithManaged(ctx context.Context, sessions []Session, tmuxObserve obs
 	}
 	var tmuxSessions, managedSessions []Session
 	for _, session := range sessions {
-		if session.SessionRuntime() == RuntimeManaged {
+		if RuntimeHasAgentHost(session.SessionRuntime()) {
 			managedSessions = append(managedSessions, session)
 		} else {
 			tmuxSessions = append(tmuxSessions, session)
@@ -127,6 +127,9 @@ func observeManagedSession(ctx context.Context, session Session, provider Manage
 	}
 	observed.Tool = string(session.Vendor)
 	status, source, detail, activity, known := managedStatusFromHostState(session, state)
+	if session.SessionRuntime() == RuntimeOmp && source == StatusSourceSnapshot {
+		source = StatusSourceOmpProtocol
+	}
 	observed.Status = status
 	observed.StatusSource = source
 	observed.Detail = detail
@@ -159,6 +162,14 @@ func managedStatusFromHostState(session Session, state AgentHostState) (AgentSta
 	}
 	if state.TurnKnown && state.Turn.Running {
 		at := state.Turn.StartedAt
+		// omp reports finer-grained turn_start/turn_end boundaries within
+		// one agent run (tool round trips); between a turn_end and the next
+		// turn_start, nothing is currently running even though the run as a
+		// whole has not ended. Claude-managed has no such finer boundary —
+		// its Turn.Running already is its "working" signal.
+		if session.SessionRuntime() == RuntimeOmp && !state.ProtocolTurnRunning {
+			return StatusIdle, StatusSourceSnapshot, "", at, !at.IsZero()
+		}
 		return StatusRunning, StatusSourceSnapshot, "", at, !at.IsZero()
 	}
 	if state.TurnKnown && !state.Turn.Running && !state.Turn.EndedAt.IsZero() {

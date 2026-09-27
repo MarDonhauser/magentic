@@ -151,6 +151,7 @@ const (
 	AgentToolGemini      = "gemini"
 	AgentToolCopilot     = "copilot"
 	AgentToolAntigravity = "antigravity"
+	AgentToolOmp         = "omp"
 	AgentToolBash        = "bash"
 )
 
