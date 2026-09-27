@@ -388,3 +388,18 @@ func TestApplyingALongConversationStaysLinear(t *testing.T) {
 		t.Fatalf("erneutes Anwenden wächst auf %d Items", len(conversation.Items))
 	}
 }
+
+func TestWatchesAnyFollowsTheWatchedSet(t *testing.T) {
+	reader := NewConversationReader()
+	if reader.WatchesAny() {
+		t.Fatal("ein frischer Reader beobachtet nichts")
+	}
+	reader.Watch("s-1")
+	if !reader.WatchesAny() {
+		t.Fatal("nach Watch muss der Reader beobachten")
+	}
+	reader.Watch()
+	if reader.WatchesAny() {
+		t.Fatal("nach Watch() ohne Sessions beobachtet der Reader nichts mehr")
+	}
+}

@@ -84,7 +84,7 @@ func singleLineTmuxDiagnostic(message string) bool {
 	return message != "" && !strings.ContainsAny(message, "\r\n") && strings.TrimSpace(message) == message
 }
 
-func (tmuxLifecycleRuntime) Start(ctx context.Context, session Session, mode string) error {
+func (r tmuxLifecycleRuntime) Start(ctx context.Context, session Session, mode string) error {
 	if info, err := os.Stat(session.Dir); err != nil || !info.IsDir() {
 		return fmt.Errorf("Session directory %q is unavailable", session.Dir)
 	}
@@ -100,7 +100,7 @@ func (tmuxLifecycleRuntime) Start(ctx context.Context, session Session, mode str
 		}
 	}
 	args := tmuxNewSessionArgs(session)
-	if out, err := exec.CommandContext(ctx, "tmux", args...).CombinedOutput(); err != nil {
+	if out, err := r.combinedOutput(ctx, "tmux", args...); err != nil {
 		return fmt.Errorf("tmux new-session: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	TmuxConfigureUX()
@@ -111,13 +111,21 @@ func (tmuxLifecycleRuntime) Start(ctx context.Context, session Session, mode str
 	if err != nil {
 		return err
 	}
-	if _, err := exec.CommandContext(ctx, "tmux", "send-keys", "-t", TargetPane(session.TmuxName()), "-l", command).CombinedOutput(); err != nil {
+	if _, err := r.combinedOutput(ctx, "tmux", "send-keys", "-t", TargetPane(session.TmuxName()), "-l", shellStartInput(command)); err != nil {
 		return fmt.Errorf("start coding agent: %w", err)
 	}
-	if _, err := exec.CommandContext(ctx, "tmux", "send-keys", "-t", TargetPane(session.TmuxName()), "Enter").CombinedOutput(); err != nil {
+	if _, err := r.combinedOutput(ctx, "tmux", "send-keys", "-t", TargetPane(session.TmuxName()), "Enter"); err != nil {
 		return fmt.Errorf("submit coding-agent command: %w", err)
 	}
 	return nil
+}
+
+// shellStartInput prefixes the command with one space. The keys reach the
+// pane while the shell is still initialising, and an init step that reads a
+// single key (oh-my-zsh: "Would you like to update? [Y/n]") would otherwise
+// swallow the first letter of the command. The shell ignores a leading space.
+func shellStartInput(command string) string {
+	return " " + command
 }
 
 // tmuxNewSessionArgs builds the command that creates a Session runtime. Every

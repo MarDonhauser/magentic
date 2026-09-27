@@ -72,3 +72,10 @@ test('managedControlElement ist als eigenständige Funktion in createConversatio
   assert.ok(managedStart > noticeStart, 'managedControlElement folgt nach noticeElement');
 });
 
+
+test('Der Hydra-Modus räumt die Conversation-Fläche ab, sonst verdeckt sie das Raster', () => {
+  // #terms.showing-conversation blendet jede .term-wrap aus und zeigt den
+  // Chat darüber — im Hydra-Raster bliebe sonst kein Terminal sichtbar.
+  const source = functionSource(main, 'enterHydra');
+  assert.ok(source.includes('resetTermSurface('), 'enterHydra muss die Terminal-Fläche zurücksetzen');
+});

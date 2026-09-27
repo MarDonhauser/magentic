@@ -23,7 +23,7 @@ import {
   CompleteFiles, CompleteCommands, PromptLinePattern,
 } from '../wailsjs/go/main/App';
 import { createConversationView } from './conversation.js';
-import { canShowTerminal, defaultSessionSurface } from './conversation-state.js';
+import { canShowTerminal, defaultSessionSurface, resolveSessionView } from './conversation-state.js';
 import { canSendComposer, composeMessage } from './composer-attachments.js';
 import { usagePages, clampUsagePage } from './usage-state.js';
 import { buildSidebar, flattenSidebar, canPlace, planMove } from './sidebar-layout.js';
@@ -47,7 +47,10 @@ import { mountDock, toggleDock, isDockOpen, closeDockTab, dockTabs, refitDock, o
 import { mountBreaks, updateBreaks, openBreak, openBreakSettings, isBreakOpen } from './breaks.js';
 import { initThemeToggle, onThemeChange, terminalTheme, terminalContrastFloor } from './theme.js';
 import { TERMINAL_OPTIONS, setUpTerminal } from './terminal-setup.js';
+import { clearTextureAtlases } from './texture-atlas.js';
 import { createHydraHandoff } from './hydra-handoff.js';
+import { createHydraOrder, placeInOrder } from './hydra-order.js';
+import { HYDRA_MAX_TILES, hydraColumns } from './hydra-layout.js';
 import { createVendorSwitchCoordinator } from './vendor-switch.js';
 import { queuedBadge, queuedMessages, queuedHeadline } from './queued-state.js';
 import {
@@ -276,6 +279,7 @@ onThemeChange(theme => {
     entry.term.options.theme = nextTheme;
     entry.term.options.minimumContrastRatio = nextFloor;
   }
+  clearTextureAtlases();
 });
 
 function makeTerm(sessionID, name) {
@@ -379,12 +383,14 @@ function makeTerm(sessionID, name) {
 // Blende wissen, in welchen Zustand sie zurückfällt.
 const lastStatus = new Map();
 
-const INPUT_MODE_KEY = 'magentic-input-mode';
-let inputMode = 'composer';
+const SESSION_VIEW_KEY = 'magentic-session-view';
+const LEGACY_INPUT_MODE_KEY = 'magentic-input-mode';
+let sessionView = 'magentic';
 try {
-  if (localStorage.getItem(INPUT_MODE_KEY) === 'terminal') inputMode = 'terminal';
-} catch { /* Speicher gesperrt — dann bleibt der Composer */ }
-termsEl.classList.toggle('terminal-input', inputMode === 'terminal');
+  sessionView = resolveSessionView(localStorage.getItem(SESSION_VIEW_KEY), localStorage.getItem(LEGACY_INPUT_MODE_KEY));
+  localStorage.removeItem(LEGACY_INPUT_MODE_KEY);
+} catch { /* Speicher gesperrt — dann bleibt die magentic-Ansicht */ }
+termsEl.classList.toggle('cli-view', sessionView === 'cli');
 
 const TERM_FONT_SIZE_KEY = 'magentic-term-font-size';
 const TERM_FONT_KEY = 'magentic-term-font';
@@ -426,8 +432,8 @@ function applyTermFont() {
   for (const t of terms.values()) {
     t.term.options.fontFamily = TERM_FONTS[termFontFamily];
     if (t.wrap.parentElement === termsEl) t.term.options.fontSize = termFontSize;
-    t.term.clearTextureAtlas?.();
   }
+  clearTextureAtlases();
   const refit = [];
   if (view === 'hydra') {
     for (const t of terms.values()) {
@@ -453,18 +459,33 @@ function setTermFont(family, size) {
   applyTermFont();
 }
 
-function setInputMode(mode) {
-  inputMode = mode;
-  try { localStorage.setItem(INPUT_MODE_KEY, mode); } catch { /* gilt dann nur für diese Sitzung */ }
-  termsEl.classList.toggle('terminal-input', inputMode === 'terminal');
+// cliViewFor sagt, ob die aktive Session in der Harness-CLI-Ansicht läuft:
+// die Einstellung allein reicht nicht, eine verwaltete Session ohne Terminal
+// behält ihr Nachrichtenfeld.
+function cliViewFor(a) {
+  return sessionView === 'cli' && canShowTerminal(a);
+}
+
+function applySessionView() {
+  termsEl.classList.toggle('cli-view', cliViewFor(agentInfo(activeTerm, activeSessionID)));
+}
+
+function setSessionView(mode) {
+  sessionView = resolveSessionView(mode, null);
+  try { localStorage.setItem(SESSION_VIEW_KEY, sessionView); } catch { /* gilt dann nur für diese Sitzung */ }
+  applySessionView();
   for (const [name, t] of terms) updatePromptCover(t, lastStatus.get(name));
-  const t = activeTerm && terms.get(activeTerm);
-  if (t && t.wrap.parentElement === termsEl) {
-    t.fit.fit();
-    ResizeTerm(t.connectionKey, t.term.cols, t.term.rows);
-    if (inputMode === 'terminal') t.term.focus();
+  if (view !== 'term' || !activeTerm || !activeSessionID) return;
+  showTermSurface(defaultSessionSurface(agentInfo(activeTerm, activeSessionID), sessionView), true)
+    .then(focusSessionInput);
+}
+
+function focusSessionInput() {
+  if (termSurface === 'conversation') {
+    if (!termsEl.classList.contains('cli-view')) termPromptEl.focus();
+    return;
   }
-  updateTermBar();
+  terms.get(activeTerm)?.term.focus();
 }
 
 // updatePromptCover legt die Eingabezeile des Agenten unter eine Blende,
@@ -472,7 +493,7 @@ function setInputMode(mode) {
 // oder hat das Terminal den Fokus, bleibt alles sichtbar.
 function updatePromptCover(t, status) {
   if (!t?.cover) return;
-  const reveal = needsInputStatus(status) || t.userFocused || inputMode === 'terminal';
+  const reveal = needsInputStatus(status) || t.userFocused || sessionView === 'cli';
   const screen = t.term.element?.querySelector('.xterm-screen');
   if (reveal || !t.promptPattern || !screen) { t.cover.style.height = '0px'; return; }
   const buffer = t.term.buffer.active;
@@ -741,6 +762,11 @@ async function refreshManagedState(sessionID) {
   }
 }
 
+function syncConversationQueue() {
+  if (!conversationView || !conversationSessionID || termSurface !== 'conversation') return;
+  conversationView.setQueued(queuedMessages(agentInfo(activeTerm, conversationSessionID)));
+}
+
 function startManagedPoll(sessionID) {
   stopManagedPoll();
   refreshManagedState(sessionID);
@@ -822,7 +848,7 @@ async function ensureSessionTerminal(sessionID, name) {
   t.term.focus();
   requestAnimationFrame(() => {
     if (!t.wrap.classList.contains('active')) return;
-    t.term.clearTextureAtlas?.();
+    clearTextureAtlases();
     t.term.refresh(0, t.term.rows - 1);
   });
   return t;
@@ -838,6 +864,7 @@ async function showTermSurface(next, force = false) {
   if (!force && termSurface === surface) return;
   termSurface = surface;
   termsEl.classList.toggle('showing-conversation', surface === 'conversation');
+  applySessionView();
   updateTermBar();
 
   if (surface !== 'conversation') {
@@ -858,7 +885,10 @@ async function showTermSurface(next, force = false) {
   startManagedPoll(sessionID);
   try {
     const reading = await SessionConversation(String(sessionID));
-    if (conversationSessionID === sessionID) surfaceView.setReading(reading);
+    if (conversationSessionID === sessionID) {
+      surfaceView.setReading(reading);
+      syncConversationQueue();
+    }
   } catch (err) {
     if (conversationSessionID !== sessionID) return;
     surfaceView.setReading({
@@ -887,6 +917,7 @@ function updateTermBar() {
   const sessionID = activeSessionID;
   const sessionName = activeTerm;
   const a = agentInfo(sessionName, sessionID);
+  termsEl.classList.toggle('cli-view', cliViewFor(a));
   const v = agentVisual(a, a?.project);
   const gone = !a || ['exited', 'dead'].includes(a.status);
   const disabled = gone ? ' disabled' : '';
@@ -952,7 +983,9 @@ function surfaceSwitchHtml(a) {
     return `<span class="tb-mode" title="Diese Session wird direkt über den Agent-Runtime gesteuert">${icon('chat')}Agent</span>`;
   }
   const showsConversation = termSurface === 'conversation';
-  const label = showsConversation ? 'Terminal als Fallback öffnen' : 'Agentenansicht zeigen';
+  const label = showsConversation
+    ? (cliViewFor(a) ? 'Zurück zum Terminal der Session' : 'Terminal als Fallback öffnen')
+    : 'Agentenansicht zeigen';
   return `<button class="btn tiny" id="tb-surface" title="${esc(label)}" aria-pressed="${showsConversation}">` +
     `${icon(showsConversation ? 'terminal' : 'chat')}<span>${showsConversation ? 'Terminal' : 'Agent'}</span></button>`;
 }
@@ -1044,6 +1077,10 @@ async function sendComposerMessage() {
       t.term.scrollToBottom();
     } else {
       await SendMessage(String(sessionID), message);
+      if (conversationView && termSurface === 'conversation' && String(conversationSessionID) === String(sessionID)) {
+        conversationView.addPending({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text: message });
+      }
+      refresh(true).catch(() => {});
     }
     termPromptEl.value = '';
     clearComposerAttachments();
@@ -1183,8 +1220,7 @@ function toggleQueueForm(show = termQueueEl.classList.contains('is-hidden')) {
   if (show) {
     termQueueTextEl.focus();
   } else {
-    if (termSurface === 'conversation') termPromptEl.focus();
-    else terms.get(activeTerm)?.term.focus();
+    focusSessionInput();
   }
 }
 
@@ -1381,7 +1417,7 @@ async function openSession(sessionID, name) {
   hydraHandoff.leave();
   view = 'term';
   hydraProject = null;
-  termsEl.classList.remove('hydra');
+  setHydraChrome(false);
   const dockTab = dockTabs().find(tab => tab.id === sessionID || (!tab.id && tab.name === name));
   if (dockTab) closeDockTab(dockTab);
   if (activeSessionID && activeSessionID !== sessionID) markSeen(activeSessionID);
@@ -1395,8 +1431,8 @@ async function openSession(sessionID, name) {
   showPanel('terms');
   renderSidebar();
   const a = agentInfo(name, sessionID);
-  await showTermSurface(defaultSessionSurface(a), true);
-  if (termSurface === 'conversation') termPromptEl.focus();
+  await showTermSurface(defaultSessionSurface(a, sessionView), true);
+  focusSessionInput();
 }
 
 const PANELS = ['overview', 'search-view', 'terms', 'inbox-view', 'graph-view', 'board-view', 'stats-view', 'settings-view'];
@@ -1425,7 +1461,7 @@ function leaveTerm() {
   activeSessionID = null;
   SetActiveTerm('');
   hydraProject = null;
-  termsEl.classList.remove('hydra');
+  setHydraChrome(false);
 }
 
 function showOverview() {
@@ -1458,11 +1494,12 @@ async function renderSettings() {
       `<span><strong>${esc(option.label)}</strong>${option.available ? '' : ' — nicht installiert'}</span></label>`).join('') +
     `<p class="settings-hint">Mit gesetztem Standard startet „+“ sofort damit. Rechtsklick auf „+“ zeigt weiterhin das Menü.</p>` +
     `</div>` +
-    `<div class="card"><div class="card-head"><h2>Eingabefeld in Sessions</h2></div>` +
-    `<label class="settings-option"><input type="radio" name="set-input-mode" value="composer"${inputMode === 'composer' ? ' checked' : ''}>` +
-    `<span><strong>magentic-Composer</strong><br>Eingabefeld unten mit @-/Slash-Menü und Bild-Anhang. Die Eingabezeile der Session wird im Terminal verdeckt.</span></label>` +
-    `<label class="settings-option"><input type="radio" name="set-input-mode" value="terminal"${inputMode === 'terminal' ? ' checked' : ''}>` +
-    `<span><strong>Eingabezeile der Session</strong><br>Du tippst direkt im Terminal in das Eingabefeld des Agenten. Composer und Blende sind aus, das Terminal nutzt die volle Höhe.</span></label>` +
+    `<div class="card"><div class="card-head"><h2>Session-Ansicht</h2></div>` +
+    `<label class="settings-option"><input type="radio" name="set-session-view" value="magentic"${sessionView === 'magentic' ? ' checked' : ''}>` +
+    `<span><strong>magentic</strong><br>Agentenansicht mit Verlauf und Nachrichtenfeld unten (@-/Slash-Menü, Bild-Anhang). Das Terminal bleibt als Fallback erreichbar.</span></label>` +
+    `<label class="settings-option"><input type="radio" name="set-session-view" value="cli"${sessionView === 'cli' ? ' checked' : ''}>` +
+    `<span><strong>Harness-CLI</strong><br>Die Session öffnet direkt im Terminal von Claude Code & Co. Du tippst in dessen eigene Eingabezeile; Nachrichtenfeld und Blende sind aus, das Terminal nutzt die volle Höhe.</span></label>` +
+    `<p class="settings-hint">Verwaltete Sessions ohne Terminal behalten in beiden Fällen die Agentenansicht mit Nachrichtenfeld.</p>` +
     `</div>` +
     `<div class="card"><div class="card-head"><h2>Terminal-Schrift</h2></div>` +
     `<label class="settings-option"><input type="radio" name="set-term-font" value="system"${termFontFamily === 'system' ? ' checked' : ''}>` +
@@ -1482,8 +1519,8 @@ async function renderSettings() {
   for (const radio of document.querySelectorAll('input[name="set-default-vendor"]')) {
     radio.onchange = () => setDefaultVendor(radio.value);
   }
-  for (const radio of document.querySelectorAll('input[name="set-input-mode"]')) {
-    radio.onchange = () => setInputMode(radio.value);
+  for (const radio of document.querySelectorAll('input[name="set-session-view"]')) {
+    radio.onchange = () => setSessionView(radio.value);
   }
   for (const radio of document.querySelectorAll('input[name="set-term-font"]')) {
     radio.onchange = () => setTermFont(radio.value, termFontSize);
@@ -1805,6 +1842,7 @@ for (const id of ['graph-view', 'board-view']) {
 }
 
 const hydraGridEl = $('hydra-grid');
+const hydraOrder = createHydraOrder();
 
 const handoffDialogEl = $('handoff-dialog');
 const handoffDialogFormEl = $('handoff-dialog-form');
@@ -1983,11 +2021,23 @@ function hydraAgents() {
       if (a.status !== 'dead' && !a.dock && !a.service) out.push(a);
     }
   }
-  return out.slice(0, 6);
+  return hydraOrder.order(hydraProject, out).slice(0, HYDRA_MAX_TILES);
+}
+
+function setHydraChrome(on) {
+  termsEl.classList.toggle('hydra', on);
+  document.body.classList.toggle('hydra', on);
+}
+
+function layoutHydraGrid(count) {
+  const columns = hydraColumns(count, hydraGridEl.clientWidth);
+  hydraGridEl.style.gridTemplateColumns = `repeat(${columns}, minmax(0, 1fr))`;
+  hydraGridEl.classList.toggle('odd', columns === 2 && count % 2 === 1);
 }
 
 function enterHydra(project) {
   hydraHandoff.leave();
+  resetTermSurface();
   view = 'hydra';
   markSeen(activeSessionID);
   activeTerm = null;
@@ -1995,7 +2045,7 @@ function enterHydra(project) {
   SetActiveTerm('');
   hydraProject = project;
   showPanel('terms');
-  termsEl.classList.add('hydra');
+  setHydraChrome(true);
   updateHydraBar();
   syncHydra();
   renderSidebar();
@@ -2036,7 +2086,7 @@ async function focusHydraSession(name) {
   await syncHydra();
   const t = terms.get(name);
   if (t?.wrap.parentElement === hydraGridEl) t.term.focus();
-  else toast(`Raster zeigt max. 6 Sessions — „${name}" läuft, ist aber nicht im Hydra-Raster`, true);
+  else toast(`Raster zeigt max. ${HYDRA_MAX_TILES} Sessions — „${name}" läuft, ist aber nicht im Hydra-Raster`, true);
 }
 
 function ensureHydraHead(t) {
@@ -2120,7 +2170,6 @@ async function syncHydra() {
     t.term.options.fontSize = 13;
     t.term.options.lineHeight = 1.1;
     ensureHydraHead(t);
-    if (t.wrap.parentElement !== hydraGridEl) hydraGridEl.appendChild(t.wrap);
     t.wrap.dataset.termName = t.name;
     t.wrap.dataset.sessionId = String(a.id || '');
     updateHydraHead(t, a);
@@ -2128,8 +2177,8 @@ async function syncHydra() {
     t.head.querySelector('.dot').style.background = v.color;
     t.head.querySelector('.hh-status').innerHTML = `${visHtml(v)} · ${esc(a.age)}`;
   }
-  hydraGridEl.classList.toggle('single', agents.length === 1);
-  hydraGridEl.classList.toggle('odd', agents.length % 2 === 1 && agents.length > 1);
+  placeInOrder(hydraGridEl, agents.map(a => terms.get(a.name).wrap));
+  layoutHydraGrid(agents.length);
   hydraHandoff.reconcile(agents);
   for (const a of agents) {
     const t = terms.get(a.name);
@@ -3306,6 +3355,7 @@ async function refreshOnce(force) {
   try {
     const o = await Overview(!!force);
     ov = o;
+    syncConversationQueue();
     overviewSync = {
       kind: 'fresh',
       error: '',
@@ -3355,6 +3405,7 @@ async function refresh(force = false) {
 
 window.addEventListener('resize', () => {
   if (view === 'hydra') {
+    layoutHydraGrid(hydraGridEl.querySelectorAll('.term-wrap').length);
     for (const t of terms.values()) {
       if (t.wrap.parentElement === hydraGridEl) {
         t.fit.fit();

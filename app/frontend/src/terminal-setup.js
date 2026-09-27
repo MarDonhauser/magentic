@@ -13,6 +13,7 @@
 //    und das Raster sitzt für den Rest der Sitzung schief.
 
 import { WebglAddon } from '@xterm/addon-webgl';
+import { clearTextureAtlases, trackTerminal } from './texture-atlas.js';
 
 export const TERMINAL_FONT = 'ui-monospace, SFMono-Regular, "Commit Mono", Menlo, monospace';
 
@@ -40,6 +41,7 @@ export const TERMINAL_OPTIONS = {
   rescaleOverlappingGlyphs: true,
 };
 
+let fontsLoaded = false;
 const fontReady = (document.fonts
   ? Promise.all([
       document.fonts.load('400 14px "Commit Mono"'),
@@ -47,11 +49,16 @@ const fontReady = (document.fonts
       document.fonts.load('italic 400 14px "Commit Mono"'),
     ]).then(() => document.fonts.ready)
   : Promise.resolve()
-).catch(() => { /* Ohne die Schrift greift der Ersatzstapel. */ });
+).catch(() => { /* Ohne die Schrift greift der Ersatzstapel. */ })
+  .finally(() => { fontsLoaded = true; });
 
 // Nach `term.open()` aufrufen: hängt den WebGL-Renderer ein und misst das
-// Raster neu, sobald die Schrift wirklich da ist.
+// Raster neu, sobald die Schrift wirklich da ist. Der Glyphen-Atlas wird
+// dabei für alle Terminals geleert, nie nur für dieses: der WebGL-Renderer
+// teilt ihn zwischen Terminals gleicher Konfiguration, und ein einseitiges
+// Leeren lässt die anderen auf verschobene Glyphen zeigen.
 export function setUpTerminal(term, refit) {
+  trackTerminal(term);
   try {
     const webgl = new WebglAddon();
     // Verliert der Kontext (Ruhezustand, GPU-Wechsel), fällt xterm.js von
@@ -61,9 +68,10 @@ export function setUpTerminal(term, refit) {
   } catch {
     // Ohne WebGL bleibt der DOM-Renderer, das Terminal funktioniert weiter.
   }
+  if (fontsLoaded) return;
   fontReady.then(() => {
     if (!term.element) return;
-    term.clearTextureAtlas?.();
+    clearTextureAtlases();
     refit?.();
   });
 }

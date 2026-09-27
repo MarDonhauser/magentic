@@ -4,7 +4,7 @@
 const AVAILABLE = 'available';
 
 export function emptyConversationState() {
-  return { availability: '', vendor: '', reason: '', itemsKnown: false, items: [] };
+  return { availability: '', vendor: '', reason: '', itemsKnown: false, items: [], pending: [] };
 }
 
 // applyReading takes the answer to "what is this Session's Conversation".
@@ -147,7 +147,7 @@ export function renderModel(state, context = {}) {
     };
   }
 
-  const rows = groupRows(current.items);
+  const rows = groupRows(current.items).concat(pendingRows(current, context.queued));
   return {
     kind: rows.length ? 'items' : 'empty',
     availability: AVAILABLE,
@@ -219,6 +219,85 @@ function groupRows(items) {
   return rows;
 }
 
+const PENDING_TTL_MS = 30 * 60 * 1000;
+
+function normalizeText(text) {
+  return String(text ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function queuedPrefix(text) {
+  return normalizeText(text).replace(/…$/, '').trim();
+}
+
+function promptMatches(item, text) {
+  if (!item || item.kind !== 'developer-prompt') return false;
+  const candidate = normalizeText(item.detail || item.title);
+  const wanted = normalizeText(text);
+  if (!candidate || !wanted) return false;
+  if (candidate === wanted) return true;
+  return wanted.length > 100 && candidate.startsWith(wanted.slice(0, 100));
+}
+
+// addPending holds a message the developer just sent until the vendor's
+// record shows it. Items known at that moment can never be mistaken for it.
+export function addPending(state, { id, text, sentAt = Date.now() } = {}) {
+  const base = state && typeof state === 'object' ? state : emptyConversationState();
+  const body = String(text ?? '');
+  if (!body.trim()) return base;
+  const key = typeof id === 'string' && id ? id : String(sentAt);
+  const before = new Set((base.items || []).map(item => item.id));
+  return { ...base, pending: [...(base.pending || []), { id: key, text: body, sentAt, before }] };
+}
+
+// reconcilePending drops a held message once a matching prompt arrived after
+// it was sent, or once it is too old to still be on its way.
+export function reconcilePending(state, now = Date.now()) {
+  const base = state && typeof state === 'object' ? state : emptyConversationState();
+  const held = base.pending || [];
+  const pending = held.filter(entry => {
+    if (now - entry.sentAt > PENDING_TTL_MS) return false;
+    return !(base.items || []).some(item => !entry.before.has(item.id) && promptMatches(item, entry.text));
+  });
+  return pending.length === held.length ? base : { ...base, pending };
+}
+
+function pendingRow(id, text, pendingState) {
+  const body = String(text ?? '').trim();
+  const firstLine = body.split(/\r?\n/)[0].trim();
+  return {
+    id, kind: 'developer-prompt', label: 'Eingabe', role: 'developer',
+    title: firstLine || 'Eingabe', detail: body,
+    collapsed: false, expandable: false, failed: false, awaiting: false, inProgress: false, delegated: false,
+    children: [], pending: true, pendingState,
+  };
+}
+
+// pendingRows shows what the developer sent before the record has it: a held
+// message reads as queued while the Outbox still lists it, as sent once it
+// left, and a queued message nobody holds locally reads from its preview.
+function pendingRows(state, queued) {
+  const list = Array.isArray(queued) ? queued : [];
+  const held = state.pending || [];
+  const claimed = new Map();
+  for (const entry of held) {
+    const match = list.find(q => !claimed.has(q.id) && (q.kind === '' || q.kind === 'message')
+      && normalizeText(entry.text).startsWith(queuedPrefix(q.text)));
+    if (match) claimed.set(match.id, entry);
+  }
+  const rows = [];
+  const inQueue = new Set(claimed.values());
+  for (const entry of held) {
+    if (!inQueue.has(entry)) rows.push(pendingRow('pending:' + entry.id, entry.text, 'sent'));
+  }
+  for (const q of list) {
+    const entry = claimed.get(q.id);
+    const pendingState = q.stuck ? 'stuck' : 'queued';
+    if (entry) rows.push(pendingRow('pending:' + entry.id, entry.text, pendingState));
+    else rows.push(pendingRow('queued:' + q.id, q.text, pendingState));
+  }
+  return rows;
+}
+
 // scrollDecision keeps the surface where the developer put it. It follows new
 // Items only while the view is at the live end.
 export function scrollDecision({ scrollTop = 0, scrollHeight = 0, clientHeight = 0, hasNewItems = false }, threshold = 24) {
@@ -252,7 +331,7 @@ export function rowSignature(row, expanded) {
   const bits = [
     row?.id ?? '', row?.kind ?? '', row?.title ?? '', row?.detail ?? '',
     row?.failed ? 1 : 0, row?.awaiting ? 1 : 0, row?.inProgress ? 1 : 0,
-    row?.delegated ? 1 : 0,
+    row?.delegated ? 1 : 0, row?.pendingState ?? '',
     expanded?.has(row?.id) ? 1 : 0,
   ];
   for (const child of row?.children || []) bits.push(rowSignature(child, expanded));
