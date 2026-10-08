@@ -9,5 +9,8 @@
   "author": {
     "name": "DONHAUSER, MARTIN",
     "email": "martin.donhauser@lhind.dlh.de"
+  },
+  "postBuildHooks": {
+    "darwin/*": "../../../scripts/sign-app.sh ${bin}"
   }
 }

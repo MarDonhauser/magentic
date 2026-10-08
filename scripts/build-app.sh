@@ -40,27 +40,14 @@ if ! can_sign; then
   ./scripts/setup-signing.sh
 fi
 
+# Signiert wird im Post-Build-Hook (app/wails.json → scripts/sign-app.sh).
 echo "→ wails build…"
 (cd app && "$WAILS_BIN" build "$@")
 
-# Kein --options runtime: Hardened Runtime verlangt für den Mikrofonzugriff
-# zusätzlich das Entitlement com.apple.security.device.audio-input, sonst
-# scheitert die Spracheingabe in den Sessions.
-#
-# Explizites Designated Requirement: für selbstsignierte Zertifikate ohne
-# Vertrauenskette generiert codesign sonst ein cdhash-Requirement — das ändert
-# sich mit jedem Build, und TCC vergisst die Mikrofon-Freigabe jedes Mal.
-CERT_SHA1="$(security find-certificate -c "$IDENTITY" -Z 2>/dev/null | awk -F': ' '/SHA-1 hash/{print $2}')"
-if [ -z "$CERT_SHA1" ]; then
-  echo "✗ Zertifikat \"$IDENTITY\" nicht im Keychain gefunden."
+if ! codesign -dv --verbose=2 "$APP" 2>&1 | grep -qx "Authority=$IDENTITY"; then
+  echo "✗ $APP ist nicht mit \"$IDENTITY\" signiert — Post-Build-Hook in app/wails.json prüfen."
   exit 1
 fi
-echo "→ Signiere mit \"$IDENTITY\"…"
-codesign --force --deep --sign "$IDENTITY" \
-  --identifier com.wails.magentic \
-  -r="designated => identifier \"com.wails.magentic\" and certificate leaf = H\"$CERT_SHA1\"" \
-  "$APP"
-
 codesign -dv --verbose=2 "$APP" 2>&1 | grep -E '^(Authority|Identifier)=' || true
 
 # Lief die App, muss sie neu starten — sonst arbeitet man weiter mit der alten
