@@ -34,7 +34,7 @@ type ManagedSessionStateResult struct {
 // managedHostOf resolves one managed Session to its agent host's address.
 // Only the durably recorded socket path and token address the host.
 func managedHostOf(session core.Session) (string, core.AgentHostToken, error) {
-	if session.SessionRuntime() != core.RuntimeManaged {
+	if !core.RuntimeHasAgentHost(session.SessionRuntime()) {
 		return "", "", fmt.Errorf("%s läuft nicht verwaltet", session.Name)
 	}
 	return core.ManagedHostEndpoint(session.ID)
@@ -49,7 +49,7 @@ func (a *App) ManagedSessionState(sessionID string) ManagedSessionStateResult {
 	}
 	socketPath, token, err := managedHostOf(session)
 	if err != nil {
-		if session.SessionRuntime() != core.RuntimeManaged {
+		if !core.RuntimeHasAgentHost(session.SessionRuntime()) {
 			return ManagedSessionStateResult{SessionID: sessionID, Availability: "not-managed"}
 		}
 		return ManagedSessionStateResult{SessionID: sessionID, Availability: "unavailable", Reason: err.Error()}
@@ -96,7 +96,7 @@ func (a *App) AnswerManagedPermission(sessionID, requestID, decision string) err
 	if err != nil {
 		return err
 	}
-	if session.SessionRuntime() != core.RuntimeManaged {
+	if !core.RuntimeHasAgentHost(session.SessionRuntime()) {
 		return fmt.Errorf("%s läuft nicht verwaltet — Freigaben gibt es nur für verwaltete Sessions", session.Name)
 	}
 	trimmed := strings.TrimSpace(strings.ToLower(decision))

@@ -211,6 +211,74 @@ func TestLoadStateWrittenBeforeRuntimeExistedReadsEveryAgentAsTmux(t *testing.T)
 	}
 }
 
+func TestSessionModelRoundTrips(t *testing.T) {
+	session := Session{ID: "session-1", Name: "hera", RuntimeName: "mgt-hera", Model: "claude-opus-4"}
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw["model"] != "claude-opus-4" {
+		t.Fatalf("model = %v, want \"claude-opus-4\": %s", raw["model"], data)
+	}
+	var back Session
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	model, known := back.SessionModel()
+	if !known || model != "claude-opus-4" {
+		t.Fatalf("round-trip lost model: SessionModel() = (%q, %v)", model, known)
+	}
+}
+
+func TestSessionRecordWithoutModelReadsAsUnknown(t *testing.T) {
+	// Genau das Format, das vor diesem Change geschrieben wurde: kein
+	// model-Feld.
+	data := []byte(`{"id":"session-1","name":"hera","runtime_name":"mgt-hera",` +
+		`"dir":"/work/hera","created_at":"2026-09-02T20:14:00Z"}`)
+	var session Session
+	if err := json.Unmarshal(data, &session); err != nil {
+		t.Fatal(err)
+	}
+	model, known := session.SessionModel()
+	if known || model != "" {
+		t.Fatalf("SessionModel() = (%q, %v), want unknown rather than a default", model, known)
+	}
+}
+
+func TestLoadStateWrittenBeforeOmpExistedKeepsRecordedRuntimes(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	pre := []byte(`{"projects":[],"agents":[` +
+		`{"id":"session-1","name":"hera","runtime_name":"mgt-hera","dir":"/work/hera","created_at":"2026-09-02T20:14:00Z"},` +
+		`{"id":"session-2","name":"zeta","runtime_name":"mgt-zeta","dir":"/work/zeta","created_at":"2026-09-02T20:15:00Z","runtime":"tmux"},` +
+		`{"id":"session-3","name":"nova","runtime_name":"mgt-nova","dir":"/work/nova","created_at":"2026-09-02T20:16:00Z","runtime":"managed"}` +
+		`]}`)
+	if err := os.WriteFile(statePath, pre, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MAGENTIC_STATE", statePath)
+	state, err := LoadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]AgentRuntime{"hera": RuntimeTmux, "zeta": RuntimeTmux, "nova": RuntimeManaged}
+	if len(state.Agents) != len(want) {
+		t.Fatalf("got %d agents, want %d", len(state.Agents), len(want))
+	}
+	for _, agent := range state.Agents {
+		if got := agent.SessionRuntime(); got != want[agent.Name] {
+			t.Fatalf("agent %q runtime = %v, want %v", agent.Name, got, want[agent.Name])
+		}
+		if agent.SessionRuntime() == RuntimeOmp {
+			t.Fatalf("agent %q silently moved onto omp: %v", agent.Name, agent.SessionRuntime())
+		}
+	}
+}
+
 func TestRuntimeActionsPerRuntime(t *testing.T) {
 	tests := []struct {
 		runtime AgentRuntime
@@ -218,6 +286,7 @@ func TestRuntimeActionsPerRuntime(t *testing.T) {
 	}{
 		{runtime: RuntimeTmux, want: []string{RuntimeActionAttach}},
 		{runtime: RuntimeManaged, want: []string{RuntimeActionInterrupt, RuntimeActionAnswerPermission}},
+		{runtime: RuntimeOmp, want: []string{RuntimeActionInterrupt, RuntimeActionAnswerPermission}},
 		// An absent runtime field reads as tmux everywhere else; the action
 		// list must agree.
 		{runtime: "", want: []string{RuntimeActionAttach}},
@@ -246,6 +315,12 @@ func TestRuntimeActionsPerRuntime(t *testing.T) {
 	}
 	if !RuntimeOffersAction(RuntimeManaged, RuntimeActionInterrupt) {
 		t.Fatal("a managed Session must offer interrupt")
+	}
+	if RuntimeOffersAction(RuntimeOmp, RuntimeActionAttach) {
+		t.Fatal("an omp Session must not offer attach")
+	}
+	if !RuntimeOffersAction(RuntimeOmp, RuntimeActionInterrupt) || !RuntimeOffersAction(RuntimeOmp, RuntimeActionAnswerPermission) {
+		t.Fatal("an omp Session must offer interrupt and answering a permission decision")
 	}
 }
 

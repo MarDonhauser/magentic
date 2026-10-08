@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // AgentHostToken is the handshake secret the daemon records when it starts an
@@ -49,6 +50,19 @@ const (
 	AgentHostInterruptMethod AgentHostMethod = "interrupt"
 	// AgentHostAnswerMethod delivers a developer's decision to one request.
 	AgentHostAnswerMethod AgentHostMethod = "answer"
+	// AgentHostDeliverMethod hands one queued Outbox prompt to the process.
+	// The answer confirms only that it was sent; delivery is confirmed later
+	// by the protocol's echo, visible in the host's state.
+	AgentHostDeliverMethod AgentHostMethod = "deliver"
+	// AgentHostShutdownMethod asks the host to stop its process and exit.
+	// Only the daemon holding the recorded token can ask for it.
+	AgentHostShutdownMethod AgentHostMethod = "shutdown"
+	// AgentHostWatchMethod blocks the connection until the host's state has
+	// changed past the caller's last-known revision, or a bounded timeout
+	// elapses, then returns the current state and revision. It is how a
+	// status transition reaches an interface without waiting for the next
+	// periodic observation cycle.
+	AgentHostWatchMethod AgentHostMethod = "watch"
 )
 
 // AgentHostRequest is one request on an agent host's socket. Token is the
@@ -63,6 +77,13 @@ type AgentHostRequest struct {
 	RequestID string             `json:"requestId,omitempty"`
 	Decision  PermissionDecision `json:"decision,omitempty"`
 	DecidedBy string             `json:"decidedBy,omitempty"`
+	// MessageID and Text carry one Outbox prompt for the deliver method.
+	MessageID string `json:"messageId,omitempty"`
+	Text      string `json:"text,omitempty"`
+	// Since and TimeoutMS parametrize the watch method: the caller's
+	// last-known revision, and how long to block for a newer one.
+	Since     uint64 `json:"since,omitempty"`
+	TimeoutMS int    `json:"timeoutMs,omitempty"`
 }
 
 // AgentHostResponse answers one request. Confirmed is true only when the
@@ -74,6 +95,11 @@ type AgentHostResponse struct {
 	State      *AgentHostState    `json:"state,omitempty"`
 	Turn       *ManagedTurn       `json:"turn,omitempty"`
 	Permission *PermissionRequest `json:"permission,omitempty"`
+	// Revision and Changed answer the watch method: the state's revision at
+	// return time, and whether it actually advanced past the request's
+	// Since (false means the bounded wait simply timed out).
+	Revision uint64 `json:"revision,omitempty"`
+	Changed  bool   `json:"changed,omitempty"`
 }
 
 // ErrAgentHostServedElsewhere reports a live agent-host socket for this
@@ -114,6 +140,28 @@ type AgentHostState struct {
 	// StreamedItems is the conversation the host produced from the vendor's
 	// protocol, completed messages in final form and in-progress ones marked.
 	StreamedItems []Item `json:"streamedItems,omitempty"`
+	// LaunchArgv is the argument list this host started its omp process
+	// with. A reclaimed host reports its own, never one inherited from a
+	// record; it is empty for a host that did not start omp.
+	LaunchArgv []string `json:"launchArgv,omitempty"`
+	// ProtocolVersion is the omp protocol version the handshake confirmed.
+	ProtocolVersion int `json:"protocolVersion,omitempty"`
+	// ProtocolTurnRunning is omp's own turn_start/turn_end boundary: true
+	// while a turn_start has been reported with no turn_end since. It is
+	// finer-grained than Turn.Running, which spans the whole agent run
+	// across tool round trips.
+	ProtocolTurnRunning bool `json:"protocolTurnRunning,omitempty"`
+	// FailedMessageID and DeliveryFailure name the last prompt the process
+	// refused and its own reason, so the Outbox can keep it queued with why.
+	FailedMessageID string `json:"failedMessageId,omitempty"`
+	DeliveryFailure string `json:"deliveryFailure,omitempty"`
+	// LoginRequired names a login omp asked the host to complete with a
+	// secret it cancelled rather than collected, naming what the developer
+	// must supply in omp's own interface. Empty once nothing is pending.
+	LoginRequired   string    `json:"loginRequired,omitempty"`
+	LoginRequiredAt time.Time `json:"loginRequiredAt,omitzero"`
+	// OmpSessionID is omp's own sessionId, once learned from get_state.
+	OmpSessionID string `json:"ompSessionId,omitempty"`
 }
 
 // AgentHost owns one managed Session's vendor process and speaks that
@@ -134,6 +182,15 @@ type AgentHost struct {
 	mu        sync.Mutex
 	process   *agentHostProcess
 	closeOnce sync.Once
+	// done is closed once the host has closed, so its owner can exit.
+	done chan struct{}
+	// revMu, revision and changed back the watch method: touch() bumps
+	// revision and closes+replaces changed under revMu, so a waiter blocked
+	// on the old channel wakes, rereads revision under the lock, and either
+	// returns or waits again on the fresh channel.
+	revMu    sync.Mutex
+	revision uint64
+	changed  chan struct{}
 	// turns is this Session's turn, its in-flight prompt and its streamed
 	// conversation. One host owns one Session, so this is that Session's
 	// state directly and not a map that would have to be addressed.
@@ -144,6 +201,10 @@ type AgentHost struct {
 	// stream is the message the running turn is producing, accumulated so a
 	// completed message supersedes its own chunks rather than truncating them.
 	stream managedStream
+	// omp is set when the owned process speaks omp's rpc-ui protocol rather
+	// than Claude Code's stream-json; it selects how prompts, interrupts and
+	// permission answers reach the process.
+	omp *ompHostState
 }
 
 // StartAgentHost claims the socket for sessionID and begins accepting
@@ -185,10 +246,47 @@ func StartAgentHost(sessionID SessionID, token AgentHostToken) (*AgentHost, erro
 	host := &AgentHost{
 		sessionID: sessionID, token: token, path: path, listener: listener,
 		turns: NewManagedTurns(sessionID), permissions: NewPermissionStore(),
+		done: make(chan struct{}), changed: make(chan struct{}),
 	}
 	go host.accept()
 	return host, nil
 }
+
+// touch bumps the state revision and wakes every goroutine blocked in
+// waitForChange. Call it after any mutation HostState() would surface
+// differently — a turn boundary, a permission opening or closing, a login
+// requirement, or a delivery failure.
+func (h *AgentHost) touch() {
+	h.revMu.Lock()
+	h.revision++
+	ch := h.changed
+	h.changed = make(chan struct{})
+	h.revMu.Unlock()
+	close(ch)
+}
+
+// waitForChange blocks until the revision differs from since, or ctx ends.
+// changed reports which: true means the returned revision is newer, false
+// means ctx ended (typically the bounded watch timeout) with nothing new.
+func (h *AgentHost) waitForChange(ctx context.Context, since uint64) (revision uint64, changed bool) {
+	for {
+		h.revMu.Lock()
+		revision, ch := h.revision, h.changed
+		h.revMu.Unlock()
+		if revision != since {
+			return revision, true
+		}
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return revision, false
+		}
+	}
+}
+
+// Done is closed once the host has closed, whether asked to by its owner or
+// by the daemon's shutdown request.
+func (h *AgentHost) Done() <-chan struct{} { return h.done }
 
 // Path is the socket a daemon is expected to find.
 func (h *AgentHost) Path() string { return h.path }
@@ -240,6 +338,29 @@ func (h *AgentHost) serve(conn *net.UnixConn) {
 			return
 		}
 		_ = encoder.Encode(AgentHostResponse{Confirmed: true, Turn: &ended})
+	case AgentHostDeliverMethod:
+		if inflight, pending := h.turns.Inflight(); pending {
+			_ = encoder.Encode(AgentHostResponse{Reason: fmt.Sprintf("Prompt %q ist noch unterwegs", inflight.MessageID)})
+			return
+		}
+		if err := h.Deliver(request.MessageID, request.Text); err != nil {
+			_ = encoder.Encode(AgentHostResponse{Reason: err.Error()})
+			return
+		}
+		_ = encoder.Encode(AgentHostResponse{Confirmed: true})
+	case AgentHostWatchMethod:
+		timeout := time.Duration(request.TimeoutMS) * time.Millisecond
+		if timeout <= 0 || timeout > agentHostWatchMaxTimeout {
+			timeout = agentHostWatchMaxTimeout
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		revision, changed := h.waitForChange(ctx, request.Since)
+		cancel()
+		state := h.HostState()
+		_ = encoder.Encode(AgentHostResponse{Confirmed: true, State: &state, Revision: revision, Changed: changed})
+	case AgentHostShutdownMethod:
+		_ = encoder.Encode(AgentHostResponse{Confirmed: true})
+		go h.Close()
 	case AgentHostAnswerMethod:
 		permission, err := h.answerWithOutcome(request.RequestID, request.Decision, request.DecidedBy)
 		if err != nil {
@@ -253,6 +374,11 @@ func (h *AgentHost) serve(conn *net.UnixConn) {
 		})
 	}
 }
+
+// agentHostWatchMaxTimeout bounds how long a watch call blocks the
+// connection when the caller asks for longer, or asks for nothing. It keeps
+// a misbehaving or absent-minded caller from pinning a goroutine forever.
+const agentHostWatchMaxTimeout = 30 * time.Second
 
 // ConnectAgentHost dials an agent host's socket and performs the identity
 // handshake with token. Two refusals are told apart, because they call for
@@ -278,11 +404,20 @@ func ConnectAgentHost(path string, token AgentHostToken) error {
 // is checked before anything is dispatched; a mismatch reads as foreign,
 // anything else unreadable as unreachable.
 func callAgentHost(path string, request AgentHostRequest) (AgentHostResponse, error) {
+	return callAgentHostTimeout(path, request, 0)
+}
+
+// callAgentHostTimeout is callAgentHost with an explicit deadline on the
+// whole round trip; zero means none, for the ordinary quick calls.
+func callAgentHostTimeout(path string, request AgentHostRequest, timeout time.Duration) (AgentHostResponse, error) {
 	conn, err := net.Dial("unix", path)
 	if err != nil {
 		return AgentHostResponse{}, fmt.Errorf("%w: %s: %v", ErrAgentHostUnreachable, path, err)
 	}
 	defer conn.Close()
+	if timeout > 0 {
+		_ = conn.SetDeadline(time.Now().Add(timeout))
+	}
 	if err := json.NewEncoder(conn).Encode(request); err != nil {
 		return AgentHostResponse{}, fmt.Errorf("%w: %s: %v", ErrAgentHostUnreachable, path, err)
 	}
@@ -317,6 +452,59 @@ func QueryAgentHostState(path string, token AgentHostToken) (AgentHostState, err
 	}
 	return *response.State, nil
 }
+
+// DeliverAgentHostPrompt hands one queued prompt to a host. A confirmed call
+// means only that the prompt was sent; it counts as delivered once the host's
+// state shows the turn it opened.
+func DeliverAgentHostPrompt(path string, token AgentHostToken, messageID, text string) error {
+	response, err := callAgentHost(path, AgentHostRequest{Token: token, Method: AgentHostDeliverMethod, MessageID: messageID, Text: text})
+	if err != nil {
+		return err
+	}
+	if !response.Confirmed {
+		return errors.New(response.Reason)
+	}
+	return nil
+}
+
+// ShutdownAgentHost asks a host to stop its process and exit.
+func ShutdownAgentHost(path string, token AgentHostToken) error {
+	response, err := callAgentHost(path, AgentHostRequest{Token: token, Method: AgentHostShutdownMethod})
+	if err != nil {
+		return err
+	}
+	if !response.Confirmed {
+		return errors.New(response.Reason)
+	}
+	return nil
+}
+
+// WatchAgentHostState blocks until the host reports a revision newer than
+// since, or timeout elapses, then returns the state it read at that point.
+// changed reports which happened: false means the timeout, not a real
+// change — the caller should not treat the returned state as new in that
+// case, only as current.
+func WatchAgentHostState(path string, token AgentHostToken, since uint64, timeout time.Duration) (state AgentHostState, revision uint64, changed bool, err error) {
+	response, err := callAgentHostTimeout(path, AgentHostRequest{
+		Token: token, Method: AgentHostWatchMethod, Since: since, TimeoutMS: int(timeout / time.Millisecond),
+	}, timeout+agentHostWatchClientMargin)
+	if err != nil {
+		return AgentHostState{}, since, false, err
+	}
+	if !response.Confirmed || response.State == nil {
+		reason := response.Reason
+		if reason == "" {
+			reason = "Agent-Host beantwortete watch nicht"
+		}
+		return AgentHostState{}, since, false, errors.New(reason)
+	}
+	return *response.State, response.Revision, response.Changed, nil
+}
+
+// agentHostWatchClientMargin is added to a watch call's own deadline before
+// the client gives up waiting for the connection, so the server's own
+// timeout is always the one that fires first.
+const agentHostWatchClientMargin = 5 * time.Second
 
 // InterruptAgentHostTurn ends the running turn of one managed Session through
 // its host. With no turn running the host refuses and nothing is signalled.
@@ -394,7 +582,7 @@ func (h *AgentHost) StartVendorProcess(binary string, argv []string, dir string)
 // HostState reads everything this host knows about its Session at once.
 func (h *AgentHost) HostState() AgentHostState {
 	h.mu.Lock()
-	process := h.process
+	process, omp := h.process, h.omp
 	h.mu.Unlock()
 	state := AgentHostState{
 		SessionID:       h.sessionID,
@@ -406,6 +594,16 @@ func (h *AgentHost) HostState() AgentHostState {
 	}
 	state.Turn, state.TurnKnown = h.turns.TurnState()
 	state.Inflight, _ = h.turns.Inflight()
+	state.FailedMessageID, state.DeliveryFailure = h.turns.LastDeliveryFailure()
+	if omp != nil {
+		h.mu.Lock()
+		state.LoginRequired, state.LoginRequiredAt = omp.loginRequired, omp.loginRequiredAt
+		state.LaunchArgv = append([]string(nil), omp.launchArgv...)
+		state.ProtocolVersion = omp.handshake.ProtocolVersion
+		state.ProtocolTurnRunning = omp.protocolTurnRunning
+		state.OmpSessionID = omp.ompSessionID
+		h.mu.Unlock()
+	}
 	return state
 }
 
@@ -415,15 +613,20 @@ func (h *AgentHost) HostState() AgentHostState {
 // its reason and resends nothing.
 func (h *AgentHost) Deliver(messageID, text string) error {
 	h.mu.Lock()
-	process := h.process
+	process, omp := h.process, h.omp
 	h.mu.Unlock()
+	if omp != nil {
+		return h.deliverOmp(process, messageID, text)
+	}
 	line, err := json.Marshal(managedPromptLine(text))
 	if err != nil {
 		return err
 	}
 	h.turns.MarkInflight(messageID, text)
+	h.touch()
 	if err := process.send(line); err != nil {
 		h.turns.FailDelivery(messageID, err.Error())
+		h.touch()
 		return err
 	}
 	return nil
@@ -438,8 +641,11 @@ func (h *AgentHost) Interrupt() (ManagedTurn, error) {
 			fmt.Errorf("%w: Session %q", ErrManagedNoTurn, h.sessionID)
 	}
 	h.mu.Lock()
-	process := h.process
+	process, omp := h.process, h.omp
 	h.mu.Unlock()
+	if omp != nil {
+		return h.interruptOmp(process)
+	}
 	if err := process.interrupt(); err != nil {
 		return ManagedTurn{SessionID: h.sessionID}, err
 	}
@@ -452,7 +658,10 @@ func (h *AgentHost) Interrupt() (ManagedTurn, error) {
 // occurred.
 func (h *AgentHost) OpenPermission(asked string) PermissionRequest {
 	request := h.permissions.Open(h.sessionID, asked)
-	h.turns.CompleteMessage(PermissionRequestItem(request))
+	item := PermissionRequestItem(request)
+	h.turns.CompleteMessage(item)
+	h.persistOmpItems(item)
+	h.touch()
 	return request
 }
 
@@ -471,7 +680,10 @@ func (h *AgentHost) answerWithOutcome(requestID string, decision PermissionDecis
 		return PermissionRequest{}, err
 	}
 	closed := h.permissions.closedRequest(requestID)
-	h.turns.CompleteMessage(PermissionOutcomeItem(closed))
+	item := PermissionOutcomeItem(closed)
+	h.turns.CompleteMessage(item)
+	h.persistOmpItems(item)
+	h.touch()
 	return closed, nil
 }
 
@@ -516,8 +728,11 @@ func (h *AgentHost) readVendorEvents(process *agentHostProcess, events io.Reader
 	}
 	closed := h.permissions.CloseUnanswerable(h.sessionID, process.exitReason())
 	for _, request := range closed {
-		h.turns.CompleteMessage(PermissionOutcomeItem(request))
+		item := PermissionOutcomeItem(request)
+		h.turns.CompleteMessage(item)
+		h.persistOmpItems(item)
 	}
+	h.touch()
 }
 
 // applyManagedEvent folds one parsed protocol line into the Session's turn.
@@ -530,6 +745,7 @@ func (h *AgentHost) applyManagedEvent(event ManagedEvent) {
 			h.mu.Lock()
 			h.stream = managedStream{messageID: messageID}
 			h.mu.Unlock()
+			h.touch()
 		}
 	case ManagedEventChunk:
 		h.mu.Lock()
@@ -537,6 +753,7 @@ func (h *AgentHost) applyManagedEvent(event ManagedEvent) {
 		item := h.stream.item()
 		h.mu.Unlock()
 		h.turns.PublishChunk(item)
+		h.touch()
 	case ManagedEventTurnEnd:
 		h.mu.Lock()
 		item, streaming := h.stream.item(), h.stream.text != ""
@@ -546,6 +763,7 @@ func (h *AgentHost) applyManagedEvent(event ManagedEvent) {
 			h.turns.CompleteMessage(item)
 		}
 		h.turns.EndTurn(event.EndReason, event.FailReason)
+		h.touch()
 	}
 }
 
@@ -585,8 +803,50 @@ func (h *AgentHost) Close() error {
 		}
 		err = h.listener.Close()
 		_ = os.Remove(h.path)
+		close(h.done)
 	})
 	return err
+}
+
+// OmpMagenticProfile is the omp profile every Session Magentic starts runs
+// under. It is dedicated rather than shared so a developer's own per-tool
+// approval policy — which omp honors in every approval mode, `always-ask`
+// included — never narrows the gate Magentic depends on (see design.md).
+const OmpMagenticProfile = "magentic"
+
+// ompApprovalGateArgv is the argument prefix every omp launch shares to keep
+// the approval gate on: --mode rpc-ui, --approval-mode always-ask, --profile
+// magentic. OmpArgv and the behavioral verifier (core/omp_verify.go) both
+// build their argv on this one place, so the verifier cannot drift from what
+// a real Session is actually launched with.
+func ompApprovalGateArgv() []string {
+	return []string{
+		"--mode", "rpc-ui",
+		"--approval-mode", "always-ask",
+		"--profile", OmpMagenticProfile,
+	}
+}
+
+// OmpArgv builds the exact argument list an omp process is launched with for
+// one Session. The approval gate rides on process provenance, so
+// --approval-mode always-ask and --profile magentic are always present and
+// never anything this function did not put there: no --auto-approve, no
+// --approval-mode yolo, no --no-session. mode "new" starts session.Dir fresh
+// with no --resume flag; any other mode resumes run.ExternalID and refuses
+// when no run ref is given. The model is passed only when SessionModel
+// reports one known; an unknown model is omitted, never defaulted.
+func OmpArgv(session Session, run *AgentRunRef, mode string) ([]string, error) {
+	argv := append(ompApprovalGateArgv(), "--cwd", session.Dir)
+	if model, ok := session.SessionModel(); ok {
+		argv = append(argv, "--model", model)
+	}
+	if mode != "new" {
+		if run == nil || strings.TrimSpace(run.ExternalID) == "" {
+			return nil, errors.New("der omp Runtime braucht eine gespeicherte Run-Referenz, um fortzusetzen")
+		}
+		argv = append(argv, "--resume", run.ExternalID)
+	}
+	return argv, nil
 }
 
 // ClaudeApprovalMCPToolName is the fully qualified MCP tool name the managed

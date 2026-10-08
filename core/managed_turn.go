@@ -45,6 +45,8 @@ type ManagedInflight struct {
 	// reason a prompt is still queued is available to the developer.
 	FailReason string    `json:"failReason,omitempty"`
 	FailedAt   time.Time `json:"failedAt,omitzero"`
+	// FailedMessageID is the prompt FailReason belongs to.
+	FailedMessageID string `json:"failedMessageId,omitempty"`
 }
 
 // ManagedTurns holds exactly one managed Session's turn, its in-flight prompt
@@ -205,9 +207,21 @@ func (t *ManagedTurns) FailDelivery(messageID, reason string) {
 		pending = &ManagedInflight{SessionID: t.sessionID, MessageID: messageID}
 	}
 	pending.MessageID = ""
+	pending.FailedMessageID = messageID
 	pending.FailReason = reason
 	pending.FailedAt = t.now()
 	t.inflight = pending
+}
+
+// LastDeliveryFailure reports which prompt last failed and why, or empty
+// strings when none did.
+func (t *ManagedTurns) LastDeliveryFailure() (messageID, reason string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.inflight == nil || t.inflight.FailReason == "" {
+		return "", ""
+	}
+	return t.inflight.FailedMessageID, t.inflight.FailReason
 }
 
 // DeliveryFailure reports the last failed delivery, if any.

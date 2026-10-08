@@ -79,7 +79,7 @@ const (
 )
 
 func builtinAgentProviders() []AgentProvider {
-	return []AgentProvider{claudeProvider{}, codexProvider{}, copilotProvider{}, antigravityProvider{}}
+	return []AgentProvider{claudeProvider{}, codexProvider{}, copilotProvider{}, antigravityProvider{}, ompProvider{}}
 }
 
 // retiredVendorAliases maps each removed vendor to the vendor that continues
@@ -408,4 +408,49 @@ func (antigravityProvider) StartCommand(_ Session, run *AgentRunRef, mode string
 		return "agy --conversation " + ShellQuote(run.ExternalID), nil
 	}
 	return "agy --continue", nil
+}
+
+type ompProvider struct{}
+
+func (ompProvider) Vendor() AgentVendor { return AgentVendorOmp }
+func (ompProvider) Tool() string        { return AgentToolOmp }
+func (ompProvider) Binary() string      { return "omp" }
+
+// omp assigns its own sessionId, discoverable only through get_state once
+// the process is talking (core/agenthost_omp.go records it as
+// AgentHostState.OmpSessionID once known), not up front the way this method
+// runs — so it never supplies one here. Provision uses the Session's own ID
+// as omp's AgentRunRef instead (core/lifecycle.go), which is what makes a
+// fresh Session's Conversation locatable from the moment it is created and
+// is what the agent host persists its durable record keyed by; it is not
+// passed to omp as --resume, since a fresh Session always starts new.
+func (ompProvider) NewRunID() string { return "" }
+
+func (ompProvider) ResumeBehavior() ResumeBehavior { return ResumeByRunRef }
+
+// omp is the only vendor that runs under the omp runtime; it has no tmux
+// path at all.
+func (ompProvider) Runtimes() []AgentRuntime { return []AgentRuntime{RuntimeOmp} }
+
+// omp Sessions have no pane: the daemon owns the process directly and speaks
+// its RPC protocol, so there is no pane command for a pane-command manifest
+// to recognize.
+func (ompProvider) Matches(string) bool { return false }
+
+// Run existence is proven through the RPC connection once the process
+// ownership seam exists (task 2.x); nothing can be proven from disk yet.
+func (ompProvider) RunExists(string) bool { return false }
+
+// Normalizer resolves through the same registry every vendor uses; no second
+// registry exists for omp's stream-based Conversations. See
+// ompConversationNormalizer in core/timeline_omp.go for why Locate never
+// finds a source and where the actual frame normalization happens.
+func (ompProvider) Normalizer() (ConversationNormalizer, bool) {
+	return ompConversationNormalizer{}, true
+}
+
+// omp never runs under tmux, so it has no send-keys command line; the actual
+// process is started at the runtime Seam once task 2.x lands.
+func (ompProvider) StartCommand(_ Session, _ *AgentRunRef, _ string) (string, error) {
+	return "", fmt.Errorf("omp läuft nicht über tmux")
 }

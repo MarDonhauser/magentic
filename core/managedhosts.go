@@ -23,6 +23,24 @@ type ManagedHostRecord struct {
 	Token      AgentHostToken `json:"token"`
 	Started    bool           `json:"started"`
 	RecordedAt time.Time      `json:"recorded_at"`
+	// LaunchArgv is the exact argument list an omp host was recorded to start
+	// its process with. It is the Session's launch provenance: the host
+	// launches exactly this, and the approval gate is proven from it only
+	// while the host's identity is confirmed by Token.
+	LaunchArgv []string `json:"launch_argv,omitempty"`
+	// GateWithdrawn, GateWithdrawnReason and GateWithdrawnAt record that a
+	// route into omp's own interface was opened for the process this record
+	// describes: from that point Magentic's proof that this process's
+	// approval gate is on no longer holds, and nothing re-establishes it by
+	// asking the session (it cannot answer). It is scoped to the recorded
+	// launch, not the Session's whole lifetime: a later RecordLaunchIntent
+	// for the same Session — a genuinely new process Magentic itself starts
+	// under the gate again — begins a fresh record with the claim not yet
+	// withdrawn, because the withdrawal was true of the process someone
+	// drove externally, which by then no longer exists.
+	GateWithdrawn       bool      `json:"gate_withdrawn,omitempty"`
+	GateWithdrawnReason string    `json:"gate_withdrawn_reason,omitempty"`
+	GateWithdrawnAt     time.Time `json:"gate_withdrawn_at,omitzero"`
 }
 
 const managedHostStoreSchema = 1
@@ -152,6 +170,59 @@ func (r *ManagedHostRegistry) RecordIntent(sessionID SessionID, socketPath strin
 	})
 }
 
+// RecordLaunchIntent records an omp host's intent together with the exact
+// argument list its process will be launched with, before any process exists
+// (ADR 0003). The host reads the argv back from this record rather than
+// deriving its own, so what was recorded is what runs.
+func (r *ManagedHostRegistry) RecordLaunchIntent(sessionID SessionID, socketPath string, token AgentHostToken, argv []string) error {
+	return r.update(func(store *managedHostStore) error {
+		store.Records[string(sessionID)] = ManagedHostRecord{
+			SessionID: sessionID, SocketPath: socketPath, Token: token,
+			Started: false, RecordedAt: time.Now(),
+			LaunchArgv: append([]string(nil), argv...),
+		}
+		return nil
+	})
+}
+
+// WithdrawGateProof records that a route into omp's own interface was
+// opened for sessionID's current process, naming the route. From this call
+// on, hostProvenanceEstablished reports false for this record until a fresh
+// RecordLaunchIntent replaces it with a new process Magentic itself
+// started. Nothing re-asserts the claim by querying the session — omp
+// cannot report it, and nothing here tries. Calling it for a Session with
+// no recorded host is a no-op: there is nothing to withdraw a claim about.
+func (r *ManagedHostRegistry) WithdrawGateProof(sessionID SessionID, route string) error {
+	return r.update(func(store *managedHostStore) error {
+		record, ok := store.Records[string(sessionID)]
+		if !ok {
+			return nil
+		}
+		if record.GateWithdrawn {
+			return nil
+		}
+		record.GateWithdrawn = true
+		record.GateWithdrawnReason = route
+		record.GateWithdrawnAt = time.Now()
+		store.Records[string(sessionID)] = record
+		return nil
+	})
+}
+
+// RecordFor returns the recorded host of one Session, if any.
+func (r *ManagedHostRegistry) RecordFor(sessionID SessionID) (ManagedHostRecord, bool, error) {
+	records, err := r.Records()
+	if err != nil {
+		return ManagedHostRecord{}, false, err
+	}
+	for _, record := range records {
+		if record.SessionID == sessionID {
+			return record, true, nil
+		}
+	}
+	return ManagedHostRecord{}, false, nil
+}
+
 // MarkStarted confirms a recorded host's process was actually spawned. A
 // failed spawn leaves the record with Started still false, which is what a
 // failed-spawn record looks like.
@@ -236,6 +307,11 @@ type ManagedHostReconcileResult struct {
 	Outcome   ManagedHostOutcome `json:"outcome"`
 	Record    ManagedHostRecord  `json:"record"`
 	Reason    string             `json:"reason,omitempty"`
+	// Provenance is the launch the reclaimed host reports for its own
+	// process, set only when the host's identity was confirmed and its report
+	// matches the recorded launch with the approval gate on. Any other
+	// outcome carries none; a record is never provenance by itself.
+	Provenance []string `json:"provenance,omitempty"`
 }
 
 // Reconcile confirms, for every durably recorded managed host, whether it is
@@ -258,6 +334,9 @@ func (r *ManagedHostRegistry) Reconcile(state *State) ([]ManagedHostReconcileRes
 			switch {
 			case err == nil:
 				result.Outcome = ManagedHostReclaimed
+				if len(record.LaunchArgv) > 0 {
+					result.Provenance, result.Reason = reclaimedProvenance(record)
+				}
 			case errors.Is(err, ErrAgentHostForeign):
 				result.Outcome, result.Reason = ManagedHostForeign, err.Error()
 			default:
@@ -267,6 +346,19 @@ func (r *ManagedHostRegistry) Reconcile(state *State) ([]ManagedHostReconcileRes
 		results = append(results, result)
 	}
 	return results, nil
+}
+
+// reclaimedProvenance asks a confirmed host which launch it is running and
+// accepts it only when it is the recorded one and keeps the approval gate.
+func reclaimedProvenance(record ManagedHostRecord) ([]string, string) {
+	state, err := QueryAgentHostState(record.SocketPath, record.Token)
+	if err != nil {
+		return nil, fmt.Sprintf("Startargumente des Hosts nicht lesbar: %v", err)
+	}
+	if !hostProvenanceEstablished(record, state) {
+		return nil, "der Host meldet nicht die verzeichneten Startargumente mit Freigabe-Gate"
+	}
+	return state.LaunchArgv, ""
 }
 
 // ReconcileIfOwning reconciles managed hosts only when claimErr is nil — i.e.

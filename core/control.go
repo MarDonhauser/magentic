@@ -88,8 +88,10 @@ func ControlVerbSpecs() []ControlVerbSpec {
 					SetString: func(a *ControlArgs, v string) { a.Project = v }},
 				{Name: "name", Usage: "Name der neuen Session", Kind: ControlFlagString,
 					SetString: func(a *ControlArgs, v string) { a.Name = v }},
-				{Name: "vendor", Usage: "Agent-Art, etwa claude oder codex", Kind: ControlFlagString,
+				{Name: "vendor", Usage: "Agent-Art, etwa claude oder codex; omp startet die Session im omp-Runtime", Kind: ControlFlagString,
 					SetString: func(a *ControlArgs, v string) { a.Vendor = AgentVendor(v) }},
+				{Name: "model", Usage: "Modell für eine omp-Session, etwa ollama/qwen3.5:9b", Kind: ControlFlagString,
+					SetString: func(a *ControlArgs, v string) { a.Model = v }},
 				{Name: "terminal", Usage: "Eine Terminal-Session ohne Coding-Agent starten", Kind: ControlFlagBool,
 					SetBool: func(a *ControlArgs, v bool) {
 						if v {
@@ -401,9 +403,11 @@ type ControlArgs struct {
 	Name      string      `json:"name,omitempty"`
 	Kind      SessionKind `json:"kind,omitempty"`
 	Vendor    AgentVendor `json:"vendor,omitempty"`
-	Prompt    string      `json:"prompt,omitempty"`
-	Text      string      `json:"text,omitempty"`
-	Lines     int         `json:"lines,omitempty"`
+	// Model selects the model of an omp Session; no other agent takes one.
+	Model  string `json:"model,omitempty"`
+	Prompt string `json:"prompt,omitempty"`
+	Text   string `json:"text,omitempty"`
+	Lines  int    `json:"lines,omitempty"`
 	// Until is the wait condition: "done" or "waiting".
 	Until     string        `json:"until,omitempty"`
 	TimeoutMS int           `json:"timeoutMs,omitempty"`
