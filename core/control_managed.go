@@ -32,7 +32,7 @@ func answerManagedPermissionThroughHost(_ context.Context, session Session, requ
 // with the reason stated. A tmux Session answers interrupts and permission
 // prompts in its own pane — Magentic must not pretend otherwise.
 func requireManagedSession(session Session, verb string) *controlError {
-	if session.SessionRuntime() == RuntimeManaged {
+	if RuntimeHasAgentHost(session.SessionRuntime()) {
 		return nil
 	}
 	if session.IsTerm() {

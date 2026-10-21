@@ -1141,6 +1141,113 @@ func TestLifecycleManagedWorktreeIsOwnedByProvisioning(t *testing.T) {
 	}
 }
 
+// TestLifecycleProvisionOmpRecordsIntentAndRefusesTheRuntimeSeamWithoutTmux
+// covers task 1.3: the omp runtime is accepted only behind the explicit
+// opt-in, defaults its vendor to omp, records the durable intent before the
+// runtime Seam is ever touched (ADR 0003), and — because the omp process
+// ownership seam does not exist yet (task 2.x) — refuses at the Seam with a
+// stated reason rather than ever starting the fake tmux runtime underneath
+// it.
+func TestLifecycleProvisionOmpRecordsIntentAndRefusesTheRuntimeSeamWithoutTmux(t *testing.T) {
+	lifecycle, runtime, registry, _ := lifecycleHarness(t)
+	project := registerLifecycleProject(t, registry)
+	omp := &fakeLifecycleRuntime{startErr: errors.New("omp-Session nicht gestartet: omp fehlt")}
+	previous := defaultOmpLifecycleRuntime
+	defaultOmpLifecycleRuntime = omp
+	t.Cleanup(func() { defaultOmpLifecycleRuntime = previous })
+
+	result, err := lifecycle.Provision(context.Background(), SessionProvision{
+		ProjectID: project.ID, Name: "orbit", Directory: project.Path,
+		Kind: SessionKindCodingAgent, Runtime: RuntimeOmp,
+	})
+	if err == nil {
+		t.Fatal("expected the omp runtime to be refused at the Seam")
+	}
+	if result.Record.Session.Runtime != RuntimeOmp {
+		t.Fatalf("durable intent lost the requested runtime: %+v", result.Record.Session)
+	}
+	if result.Record.Session.Vendor != AgentVendorOmp {
+		t.Fatalf("omp runtime did not default vendor to omp: %+v", result.Record.Session)
+	}
+	if result.Record.Phase != LifecycleFailed || result.Record.LastError == "" {
+		t.Fatalf("the recorded failure was not retained: %+v", result.Record)
+	}
+	if !strings.Contains(result.Record.LastError, "omp fehlt") {
+		t.Fatalf("refusal reason does not name the omp runtime: %q", result.Record.LastError)
+	}
+
+	// The intent must have been durable (retained in the ledger) even though
+	// Provision ultimately failed — a crash right after this point must not
+	// lose it.
+	snapshot, err := lifecycle.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recorded LifecycleRecord
+	found := false
+	for _, record := range snapshot.Records {
+		if record.SessionID == result.Record.SessionID {
+			recorded = record
+			found = true
+		}
+	}
+	if !found || recorded.Session.Runtime != RuntimeOmp {
+		t.Fatalf("ledger did not retain the omp intent: %+v", recorded)
+	}
+
+	// A recoverable failure: the Session was never registered as running,
+	// mirroring TestLifecycleRetainsFailureAndReconcilesForward's failure
+	// case.
+	registrySnapshot, err := registry.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(registrySnapshot.State().Agents) != 0 {
+		t.Fatalf("failed omp Session must not appear as a registered Session: %+v", registrySnapshot.State().Agents)
+	}
+
+	// The tmux runtime underneath the Seam is never addressed for an omp
+	// Session, not even to probe for a name; the omp runtime is.
+	if runtime.startCalls != 0 || len(runtime.existsCalls) != 0 {
+		t.Fatalf("omp Session reached tmux: %d starts, exists %v", runtime.startCalls, runtime.existsCalls)
+	}
+	if omp.startCalls != 1 {
+		t.Fatalf("omp runtime started %d times, want once", omp.startCalls)
+	}
+}
+
+func TestLifecycleProvisionRejectsOmpForTerminalSessions(t *testing.T) {
+	lifecycle, runtime, registry, _ := lifecycleHarness(t)
+	project := registerLifecycleProject(t, registry)
+
+	_, err := lifecycle.Provision(context.Background(), SessionProvision{
+		ProjectID: project.ID, Name: "shell", Directory: project.Path,
+		Kind: SessionKindTerminal, Runtime: RuntimeOmp,
+	})
+	if err == nil {
+		t.Fatal("expected a Terminal Session to reject the omp runtime like it rejects managed")
+	}
+	if runtime.startCalls != 0 || len(runtime.existsCalls) != 0 {
+		t.Fatalf("rejected Terminal Session still touched the runtime Seam: start=%d exists=%v", runtime.startCalls, runtime.existsCalls)
+	}
+}
+
+func TestLifecycleProvisionRejectsOmpRuntimeWithAnotherVendor(t *testing.T) {
+	lifecycle, _, registry, _ := lifecycleHarness(t)
+	project := registerLifecycleProject(t, registry)
+
+	_, err := lifecycle.Provision(context.Background(), SessionProvision{
+		ProjectID: project.ID, Name: "atlas", Directory: project.Path,
+		Kind: SessionKindCodingAgent, Runtime: RuntimeOmp, Vendor: AgentVendorClaude,
+	})
+	if err == nil {
+		t.Fatal("expected the omp runtime to reject a non-omp vendor with a stated reason")
+	}
+	if !strings.Contains(err.Error(), "omp") {
+		t.Fatalf("rejection did not state the omp reason: %v", err)
+	}
+}
+
 // resumeHarness registers one coding Session with a real working directory
 // inside a real temp Project, so resume pre-validation passes. For Claude the
 // recorded conversation is also laid into a temp HOME, so RunExists answers

@@ -243,6 +243,10 @@ func (s *ControlService) sessionStart(ctx context.Context, request ControlReques
 			return controlFailure(request.ID, ControlUnavailable, fmt.Sprintf(
 				"%s ist nicht installiert (%s liegt nicht im PATH).", vendor, provider.Binary()))
 		}
+		if strings.TrimSpace(request.Args.Model) != "" && vendor != AgentVendorOmp {
+			return controlFailure(request.ID, ControlRefused,
+				"Ein Modell lässt sich nur für eine omp-Session wählen.")
+		}
 	default:
 		return controlFailure(request.ID, ControlRefused, fmt.Sprintf(
 			"Unbekannte Session-Art %q — möglich sind %q und %q.", kind, SessionKindCodingAgent, SessionKindTerminal))
@@ -259,6 +263,7 @@ func (s *ControlService) sessionStart(ctx context.Context, request ControlReques
 		ProjectID: project.ID, Name: name, Directory: scope.Directory,
 		Worktree: scope.Create || scope.Reference != "", CreateWorktree: scope.Create,
 		Kind: kind, InitialPrompt: request.Args.Prompt, Vendor: vendor,
+		Runtime: controlRuntimeForVendor(vendor), Model: strings.TrimSpace(request.Args.Model),
 	})
 	if err != nil {
 		return controlFailure(request.ID, ControlFailed, fmt.Sprintf("Session konnte nicht gestartet werden: %v", err))
@@ -273,6 +278,15 @@ func (s *ControlService) sessionStart(ctx context.Context, request ControlReques
 		response.Worktree, response.WorktreeRef = result.Session.Dir, scope.Reference
 	}
 	return ControlResponse{ID: request.ID, Outcome: ControlOK, Result: response}
+}
+
+// controlRuntimeForVendor opts a Session into the omp runtime when omp is the
+// chosen agent; every other agent keeps the default runtime.
+func controlRuntimeForVendor(vendor AgentVendor) AgentRuntime {
+	if vendor == AgentVendorOmp {
+		return RuntimeOmp
+	}
+	return ""
 }
 
 func controlSupportedVendors() string {

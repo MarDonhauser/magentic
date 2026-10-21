@@ -194,3 +194,73 @@ func TestObserveSessionsReadsManagedWithoutTmux(t *testing.T) {
 		t.Fatalf("ohne Host darf nichts als tot lesen: %+v", observed)
 	}
 }
+
+// 3.1/3.5/3.6: an omp Session is observed through its host only, and its
+// status carries the omp protocol as its source. An open approval request
+// outranks the running turn.
+func TestObserveOmpSessionThroughItsHostOnly(t *testing.T) {
+	session := Session{ID: "session-o", Name: "omp", RuntimeName: "mgt-omp", Dir: "/tmp/alpha",
+		Vendor: AgentVendorOmp, Runtime: RuntimeOmp, SessionKind: SessionKindCodingAgent}
+	running := AgentHostState{SessionID: session.ID, Alive: true, ProtocolTurnRunning: true,
+		Turn: ManagedTurn{SessionID: session.ID, Running: true, StartedAt: time.Now()}, TurnKnown: true}
+	noTmux := func(_ context.Context, _ []Session) ObservationSnapshot {
+		t.Fatal("für eine omp-Session darf kein tmux-Befehl laufen")
+		return ObservationSnapshot{}
+	}
+	observe := func(state AgentHostState) SessionObservation {
+		snapshot := ObserveWithManaged(context.Background(), []Session{session}, noTmux,
+			func(context.Context, Session) (AgentHostState, error) { return state, nil })
+		return snapshot.Sessions[0]
+	}
+
+	observed := observe(running)
+	if observed.Status != StatusRunning || observed.StatusSource != StatusSourceOmpProtocol {
+		t.Fatalf("observed = %v/%q, want running from the omp protocol", observed.Status.Label(), observed.StatusSource)
+	}
+	asking := running
+	asking.OpenPermissions = []PermissionRequest{{ID: "p", SessionID: session.ID, Asked: "Allow tool: bash", Open: true, RaisedAt: time.Now()}}
+	if observed := observe(asking); observed.Status != StatusAwaitingDecision || observed.StatusSource != StatusSourceOmpProtocol {
+		t.Fatalf("observed = %v/%q, want awaiting a decision from the omp protocol", observed.Status.Label(), observed.StatusSource)
+	}
+	if observed := observe(running); observed.Status != StatusRunning {
+		t.Fatalf("after the answer the Session must read as running again, got %v", observed.Status.Label())
+	}
+}
+
+// 3.7: an omp Session whose host cannot be reached is unobservable, not dead.
+func TestObserveOmpSessionUnreachableHostIsUnobservable(t *testing.T) {
+	session := Session{ID: "session-o", Name: "omp", Vendor: AgentVendorOmp, Runtime: RuntimeOmp,
+		SessionKind: SessionKindCodingAgent}
+	snapshot := ObserveWithManaged(context.Background(), []Session{session},
+		func(_ context.Context, _ []Session) ObservationSnapshot {
+			t.Fatal("für eine omp-Session darf kein tmux-Befehl laufen")
+			return ObservationSnapshot{}
+		},
+		func(context.Context, Session) (AgentHostState, error) {
+			return AgentHostState{}, ErrManagedHostUnreachable
+		})
+	observed := snapshot.Sessions[0]
+	if observed.Availability != ObservationUnavailable || observed.Status != StatusUnknown || observed.Status == StatusExited {
+		t.Fatalf("observed = %+v, want unobservable with unknown status", observed)
+	}
+}
+
+// 3.2: between a turn_end and the next turn_start within a running agent
+// run, the Session reads as idle rather than working — the agent run has
+// not ended (no agent_end yet), but nothing is currently running either.
+func TestObserveOmpSessionBetweenTurnsReadsAsIdle(t *testing.T) {
+	session := Session{ID: "session-o", Name: "omp", Vendor: AgentVendorOmp, Runtime: RuntimeOmp,
+		SessionKind: SessionKindCodingAgent}
+	betweenTurns := AgentHostState{SessionID: session.ID, Alive: true, ProtocolTurnRunning: false,
+		Turn: ManagedTurn{SessionID: session.ID, Running: true, StartedAt: time.Now()}, TurnKnown: true}
+	snapshot := ObserveWithManaged(context.Background(), []Session{session},
+		func(_ context.Context, _ []Session) ObservationSnapshot {
+			t.Fatal("für eine omp-Session darf kein tmux-Befehl laufen")
+			return ObservationSnapshot{}
+		},
+		func(context.Context, Session) (AgentHostState, error) { return betweenTurns, nil })
+	observed := snapshot.Sessions[0]
+	if observed.Status != StatusIdle {
+		t.Fatalf("Status = %v, want idle between turn_end and the next turn_start", observed.Status.Label())
+	}
+}

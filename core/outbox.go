@@ -84,6 +84,10 @@ func DispatchOutboxWithObserver(ctx context.Context, st *State, snapshot Observa
 		if !found {
 			continue
 		}
+		if RuntimeHasAgentHost(session.SessionRuntime()) {
+			dispatchHostOutboxHead(ctx, session, target)
+			continue
+		}
 		dispatchOutboxHead(ctx, session, promptTargetObservationFromSession(target), observe)
 	}
 }
@@ -237,6 +241,10 @@ func kickOutboxForSession(ctx context.Context, sessionID SessionID, observe obse
 		return
 	}
 	session := st.SessionByID(sessionID)
+	if session != nil && RuntimeHasAgentHost(session.SessionRuntime()) {
+		kickHostOutbox(ctx, *session)
+		return
+	}
 	if session == nil || len(session.Outbox) == 0 || !validRuntimeIdentity(session.TmuxName()) {
 		return
 	}

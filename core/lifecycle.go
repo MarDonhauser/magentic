@@ -107,6 +107,7 @@ type SessionProvision struct {
 	SpecificationRef SpecificationRef
 	InitialPrompt    string
 	Vendor           AgentVendor
+	Model            string
 	Runtime          AgentRuntime
 }
 
@@ -168,25 +169,35 @@ func (r exactLifecycleRuntime) validate(session Session) error {
 	return nil
 }
 
+// forSession picks the runtime that owns session's process: the omp runtime
+// for an omp Session, the tmux delegate for every other. An omp Session never
+// reaches tmux through this Seam, not even to probe for a name.
+func (r exactLifecycleRuntime) forSession(session Session) lifecycleRuntime {
+	if session.SessionRuntime() == RuntimeOmp {
+		return defaultOmpLifecycleRuntime
+	}
+	return r.delegate
+}
+
 func (r exactLifecycleRuntime) Exists(ctx context.Context, session Session) (bool, error) {
 	if err := r.validate(session); err != nil {
 		return false, err
 	}
-	return r.delegate.Exists(ctx, session)
+	return r.forSession(session).Exists(ctx, session)
 }
 
 func (r exactLifecycleRuntime) Start(ctx context.Context, session Session, mode string) error {
 	if err := r.validate(session); err != nil {
 		return err
 	}
-	return r.delegate.Start(ctx, session, mode)
+	return r.forSession(session).Start(ctx, session, mode)
 }
 
 func (r exactLifecycleRuntime) Stop(ctx context.Context, session Session) error {
 	if err := r.validate(session); err != nil {
 		return err
 	}
-	return r.delegate.Stop(ctx, session)
+	return r.forSession(session).Stop(ctx, session)
 }
 
 func (r exactLifecycleRuntime) Rename(ctx context.Context, session Session, targetRuntime string) error {
@@ -196,14 +207,14 @@ func (r exactLifecycleRuntime) Rename(ctx context.Context, session Session, targ
 	if !validRuntimeIdentity(targetRuntime) {
 		return fmt.Errorf("Session %q has no exact target RuntimeName", session.Name)
 	}
-	return r.delegate.Rename(ctx, session, targetRuntime)
+	return r.forSession(session).Rename(ctx, session, targetRuntime)
 }
 
 func (r exactLifecycleRuntime) DeliverInitial(ctx context.Context, session Session, prompt string) (bool, error) {
 	if err := r.validate(session); err != nil {
 		return false, err
 	}
-	return r.delegate.DeliverInitial(ctx, session, prompt)
+	return r.forSession(session).DeliverInitial(ctx, session, prompt)
 }
 
 type lifecycleRepositories interface {
@@ -299,7 +310,7 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 	if runtime == "" {
 		runtime = RuntimeTmux
 	}
-	if runtime == RuntimeManaged && kind == SessionKindTerminal {
+	if (runtime == RuntimeManaged || runtime == RuntimeOmp) && kind == SessionKindTerminal {
 		return SessionLifecycleResult{}, errors.New("eine Terminal-Session kann nur den tmux-Runtime nutzen")
 	}
 	now := l.now()
@@ -308,7 +319,7 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 		Project: project.Name, Dir: filepath.Clean(request.Directory),
 		Worktree: request.Worktree || request.CreateWorktree, SessionKind: kind,
 		Presentation: presentation, Purpose: purpose, SpecificationRef: request.SpecificationRef,
-		RuntimeName: SessionName(name), Runtime: runtime, CreatedAt: now,
+		RuntimeName: SessionName(name), Runtime: runtime, Model: request.Model, CreatedAt: now,
 	}
 	if request.CreateWorktree {
 		session.Dir, _ = managedWorktreeTarget(project, name)
@@ -324,7 +335,14 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 	} else {
 		vendor := request.Vendor
 		if vendor == "" {
-			vendor = AgentVendorClaude
+			if runtime == RuntimeOmp {
+				vendor = AgentVendorOmp
+			} else {
+				vendor = AgentVendorClaude
+			}
+		}
+		if runtime == RuntimeOmp && vendor != AgentVendorOmp {
+			return SessionLifecycleResult{}, fmt.Errorf("der omp-Runtime unterstützt nur den Agent-Vendor %q, nicht %q", AgentVendorOmp, vendor)
 		}
 		provider, known := providerForVendor(vendor)
 		if !known {
@@ -334,7 +352,15 @@ func (l *SessionLifecycle) Provision(ctx context.Context, request SessionProvisi
 			return SessionLifecycleResult{}, fmt.Errorf("Agent-Vendor %q kann nicht headless betrieben werden und unterstützt den managed Runtime nicht", vendor)
 		}
 		session.Vendor = vendor
-		if runID := provider.NewRunID(); runID != "" {
+		runID := provider.NewRunID()
+		if runtime == RuntimeOmp {
+			// omp supplies no run identity up front (see ompProvider.NewRunID);
+			// the Session's own ID doubles as the run reference, which is what
+			// makes its Conversation locatable before any process exists and
+			// is what the agent host persists its durable record keyed by.
+			runID = string(session.ID)
+		}
+		if runID != "" {
 			if vendor == AgentVendorClaude {
 				// SessionID is the legacy Claude-only run field and stays in
 				// step with the canonical AgentRunRef.

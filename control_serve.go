@@ -81,8 +81,29 @@ func cliServe() {
 	// Without an interface, this process runs the observation pass the events
 	// and the pending waits are derived from.
 	go serveControlObservations(ctx, service)
+	// A host-owned Session's status transition reaches subscribers as soon
+	// as its host reports it, not only on the next periodic pass above.
+	push := core.NewHostPushSupervisor(service.Observed)
+	go serveHostPushReconciliation(ctx, push)
+	defer push.Stop()
 	<-ctx.Done()
 	fmt.Println("Die Steuer-API wurde beendet.")
+}
+
+// serveHostPushReconciliation keeps the push supervisor's set of running
+// loops matched to whichever Sessions currently exist, since the main
+// observation pass is the only place that already loads State on a cadence.
+func serveHostPushReconciliation(ctx context.Context, push *core.HostPushSupervisor) {
+	for {
+		if state, err := core.LoadState(); err == nil {
+			push.Reconcile(state.Agents)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(observationInterval):
+		}
+	}
 }
 
 // reconcileManagedHosts confirms every durably recorded managed Session's

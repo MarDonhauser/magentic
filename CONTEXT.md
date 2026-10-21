@@ -110,7 +110,7 @@ The closed set an Item's activity is drawn from, with an explicitly unknown kind
 _Avoid_: Tool name, block type, record type
 
 **Conversation**:
-The ordered sequence of Items belonging to one coding-agent run, derived from the vendor's record and never durable state of Magentic's own.
+The ordered sequence of Items belonging to one coding-agent run, derived from the vendor's own record where one exists to read, and otherwise Magentic's own durable record of what the vendor reported over a live protocol it keeps no readable record of.
 _Avoid_: Transcript file, WorkHistory query, terminal scrollback
 
 **ConversationRef**:

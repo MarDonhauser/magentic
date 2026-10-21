@@ -1,0 +1,56 @@
+[
+  {
+    "id": "tool#call_task_1",
+    "role": "agent",
+    "kind": "delegated-task",
+    "title": "Recherche zu X",
+    "detail": "Recherche abgeschlossen.",
+    "label": "Delegiert",
+    "collapsible": true
+  },
+  {
+    "id": "subagent#sub_1",
+    "role": "agent",
+    "kind": "delegated-task",
+    "title": "Recherche zu X",
+    "detail": "Suche nach X",
+    "delegated": true,
+    "parentTaskId": "tool#call_task_1",
+    "label": "Delegiert",
+    "collapsible": true
+  },
+  {
+    "id": "subagent#sub_1#asst#resp_sub_1#0",
+    "occurredAt": "2026-09-22T19:08:20Z",
+    "role": "agent",
+    "kind": "agent-message",
+    "title": "X wurde gefunden.",
+    "delegated": true,
+    "parentTaskId": "tool#call_task_1",
+    "model": "claude-opus-4",
+    "modelProvider": "anthropic",
+    "label": "Antwort",
+    "collapsible": false
+  },
+  {
+    "id": "subagent#sub_2",
+    "role": "agent",
+    "kind": "delegated-task",
+    "title": "Ohne bekannten Elternteil",
+    "delegated": true,
+    "label": "Delegiert",
+    "collapsible": true
+  },
+  {
+    "id": "subagent#sub_2#asst#resp_sub_2#0",
+    "occurredAt": "2026-09-22T19:10:00Z",
+    "role": "agent",
+    "kind": "agent-message",
+    "title": "Ohne Kontext gearbeitet.",
+    "delegated": true,
+    "model": "claude-opus-4",
+    "modelProvider": "anthropic",
+    "label": "Antwort",
+    "collapsible": false
+  }
+]

@@ -47,6 +47,9 @@ const (
 	StatusSourcePresence StatusSource = "presence"
 	StatusSourceSnapshot StatusSource = "snapshot"
 	StatusSourceHook     StatusSource = "hook"
+	// StatusSourceOmpProtocol is a status omp reported over its rpc-ui
+	// protocol: a turn boundary, an agent end or an open approval request.
+	StatusSourceOmpProtocol StatusSource = "omp-protocol"
 )
 
 type OccupancyState string

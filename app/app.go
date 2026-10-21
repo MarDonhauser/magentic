@@ -55,8 +55,10 @@ type App struct {
 	surveyRunning      bool
 	// resurvey runs a Survey refresh off the caller's path. Tests make it
 	// synchronous.
-	resurvey  func(func())
-	startTerm func(*exec.Cmd, *pty.Winsize) (*os.File, error)
+	resurvey     func(func())
+	startTerm    func(*exec.Cmd, *pty.Winsize) (*os.File, error)
+	hostPushOnce sync.Once
+	hostPush     *core.HostPushSupervisor
 }
 
 type ptyTerm struct {
@@ -80,6 +82,13 @@ func (a *App) attentionPlanner() *core.AttentionPlanner {
 		a.attention = core.NewAttentionPlanner(core.AttentionPlannerConfig{})
 	})
 	return a.attention
+}
+
+func (a *App) hostPushSupervisor() *core.HostPushSupervisor {
+	a.hostPushOnce.Do(func() {
+		a.hostPush = core.NewHostPushSupervisor(a.mergeObservation)
+	})
+	return a.hostPush
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -145,6 +154,9 @@ func escapeTermPath(p string) string {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	if a.hostPush != nil {
+		a.hostPush.Stop()
+	}
 	stopControlAPI()
 	destroyNotchWindow()
 	installNotchOwner(nil)

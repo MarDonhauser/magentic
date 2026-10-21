@@ -52,6 +52,39 @@ func (a *App) storeObservation(snapshot core.ObservationSnapshot, sessions []cor
 	publishControlObservation(sessions, snapshot)
 }
 
+// mergeObservation folds one host-pushed, single-Session reading into the
+// held observation snapshot, superseding that Session's entry in place and
+// leaving every other Session's reading untouched. It is the
+// HostPushSupervisor's publish callback: a transition reported by an agent
+// host reaches both the cached snapshot the app's own UI reads and the
+// control API's event fan-out, without waiting for watchLoop's own cycle.
+func (a *App) mergeObservation(sessions []core.Session, pushed core.ObservationSnapshot) {
+	if len(pushed.Sessions) != 1 {
+		return
+	}
+	reading := pushed.Sessions[0]
+	a.observationMu.Lock()
+	merged := cloneObservation(a.observation)
+	replaced := false
+	for i, existing := range merged.Sessions {
+		if existing.SessionID == reading.SessionID {
+			merged.Sessions[i] = reading
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		merged.Sessions = append(merged.Sessions, reading)
+	}
+	if pushed.ObservedAt.After(merged.ObservedAt) {
+		merged.ObservedAt = pushed.ObservedAt
+	}
+	a.observation = merged
+	a.observationAt = time.Now()
+	a.observationMu.Unlock()
+	publishControlObservation(sessions, pushed)
+}
+
 func (a *App) observationFor(sessions []core.Session, fresh bool) core.ObservationSnapshot {
 	if !fresh {
 		a.observationMu.Lock()
@@ -174,6 +207,7 @@ func (a *App) watchLoop() {
 				st = current
 			}
 		}
+		a.hostPushSupervisor().Reconcile(st.Agents)
 		snapshot := core.ObserveSessions(context.Background(), st.Agents)
 		if _, err := core.RecordObservationStatuses(context.Background(), core.OpenRegistry(core.StatePath()), snapshot); err != nil && time.Since(lastErrLog) > time.Minute {
 			core.Logf("watchLoop: Status-Facts konnten nicht geschrieben werden: %v", err)
