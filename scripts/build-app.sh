@@ -44,11 +44,14 @@ fi
 echo "→ wails build…"
 (cd app && "$WAILS_BIN" build "$@")
 
-if ! codesign -dv --verbose=2 "$APP" 2>&1 | grep -qx "Authority=$IDENTITY"; then
+# Erst einsammeln: grep -q direkt an codesign gepipet bricht ab, codesign stirbt
+# an SIGPIPE und pipefail meldet eine korrekt signierte App als unsigniert.
+SIGNATURE="$(codesign -dv --verbose=2 "$APP" 2>&1 || true)"
+if ! grep -qx "Authority=$IDENTITY" <<<"$SIGNATURE"; then
   echo "✗ $APP ist nicht mit \"$IDENTITY\" signiert — Post-Build-Hook in app/wails.json prüfen."
   exit 1
 fi
-codesign -dv --verbose=2 "$APP" 2>&1 | grep -E '^(Authority|Identifier)=' || true
+grep -E '^(Authority|Identifier)=' <<<"$SIGNATURE" || true
 
 # Lief die App, muss sie neu starten — sonst arbeitet man weiter mit der alten
 # Version und wundert sich, dass die Änderung fehlt.

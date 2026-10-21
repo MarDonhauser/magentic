@@ -27,7 +27,7 @@ import { canShowTerminal, defaultSessionSurface, resolveSessionView } from './co
 import { canSendComposer, composeMessage } from './composer-attachments.js';
 import { usagePages, clampUsagePage } from './usage-state.js';
 import { buildSidebar, flattenSidebar, canPlace, planMove } from './sidebar-layout.js';
-import { EventsOn, EventsOff, BrowserOpenURL, ClipboardSetText } from '../wailsjs/runtime/runtime';
+import { EventsOn, EventsOff, BrowserOpenURL, ClipboardSetText, WindowToggleMaximise } from '../wailsjs/runtime/runtime';
 import {
   developerIcon,
   mountDeveloperIcons,
@@ -46,6 +46,7 @@ import { renderStats } from './stats.js';
 import { mountDock, toggleDock, isDockOpen, closeDockTab, dockTabs, refitDock, openDockTabSplit } from './dock.js';
 import { mountBreaks, updateBreaks, openBreak, openBreakSettings, isBreakOpen } from './breaks.js';
 import { initThemeToggle, onThemeChange, terminalTheme, terminalContrastFloor } from './theme.js';
+import { installDragRegionZoom } from './window-zoom.js';
 import { TERMINAL_OPTIONS, setUpTerminal } from './terminal-setup.js';
 import { clearTextureAtlases } from './texture-atlas.js';
 import { createHydraHandoff } from './hydra-handoff.js';
@@ -139,6 +140,7 @@ const $ = id => document.getElementById(id);
 const sessionsEl = $('sessions'), usageBoxEl = $('usage-box'), zgBoxEl = $('zg-box');
 const overviewEl = $('overview'), termsEl = $('terms'), deployBadgeEl = $('deploy-badge');
 initThemeToggle($('theme-toggle'));
+installDragRegionZoom(window, getComputedStyle, WindowToggleMaximise);
 
 let view = 'overview';
 let activeTerm = null;
