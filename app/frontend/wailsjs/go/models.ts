@@ -614,6 +614,7 @@ export namespace core {
 	export class OvAgent {
 	    id: string;
 	    name: string;
+	    title?: string;
 	    tool?: string;
 	    vendor?: string;
 	    runtime: string;
@@ -622,6 +623,9 @@ export namespace core {
 	    label: string;
 	    detail: string;
 	    age: string;
+	    // Go type: time
+	    resultAt: any;
+	    resultAge?: string;
 	    worktree: boolean;
 	    term: boolean;
 	    phase?: string;
@@ -654,6 +658,7 @@ export namespace core {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
 	        this.name = source["name"];
+	        this.title = source["title"];
 	        this.tool = source["tool"];
 	        this.vendor = source["vendor"];
 	        this.runtime = source["runtime"];
@@ -662,6 +667,8 @@ export namespace core {
 	        this.label = source["label"];
 	        this.detail = source["detail"];
 	        this.age = source["age"];
+	        this.resultAt = this.convertValues(source["resultAt"], null);
+	        this.resultAge = source["resultAge"];
 	        this.worktree = source["worktree"];
 	        this.term = source["term"];
 	        this.phase = source["phase"];
@@ -793,6 +800,7 @@ export namespace core {
 	export class OvLater {
 	    id: string;
 	    name: string;
+	    title?: string;
 	    project: string;
 	    age: string;
 	    term: boolean;
@@ -806,6 +814,7 @@ export namespace core {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
 	        this.name = source["name"];
+	        this.title = source["title"];
 	        this.project = source["project"];
 	        this.age = source["age"];
 	        this.term = source["term"];

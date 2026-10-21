@@ -52,7 +52,11 @@ type App struct {
 	surveyErr          error
 	surveyAt           time.Time
 	surveyFP           string
-	startTerm          func(*exec.Cmd, *pty.Winsize) (*os.File, error)
+	surveyRunning      bool
+	// resurvey runs a Survey refresh off the caller's path. Tests make it
+	// synchronous.
+	resurvey  func(func())
+	startTerm func(*exec.Cmd, *pty.Winsize) (*os.File, error)
 }
 
 type ptyTerm struct {
@@ -106,6 +110,7 @@ func (a *App) startup(ctx context.Context) {
 	go a.watchLoop()
 	go a.hookReportLoop()
 	go a.conversationLoop()
+	go a.sessionDigestLoop()
 }
 
 func (a *App) onFileDrop(x, y int, paths []string) {
@@ -164,19 +169,51 @@ func (a *App) Overview(fresh bool) (core.Overview, error) {
 // overviewSurveyTTL bounds how often the 3s Overview poll takes a fresh Git
 // Survey. A Survey spawns one process per Project plus one per Worktree, so
 // reusing a recent one for the polls in between is what keeps the app quiet.
-// An explicit refresh (fresh=true) always surveys anew.
 const overviewSurveyTTL = 10 * time.Second
 
+// cachedSurvey answers from the last Survey of the same Project set and
+// refreshes it in the background once it is older than the TTL or a caller
+// asks for fresh facts. A Survey over dozens of Worktrees takes many seconds;
+// creating or closing a Session must not wait for it. Only a Project set
+// never surveyed before is surveyed on the caller's path.
 func (a *App) cachedSurvey(projects []core.Project, fresh bool) (core.RepositoriesSurvey, error) {
 	fingerprint := surveyFingerprint(projects)
-	if !fresh {
-		a.surveyMu.Lock()
-		cached, cachedErr, cachedAt, cachedFP := a.surveyResult, a.surveyErr, a.surveyAt, a.surveyFP
-		a.surveyMu.Unlock()
-		if time.Since(cachedAt) <= overviewSurveyTTL && cachedFP == fingerprint {
-			return cached, cachedErr
-		}
+	a.surveyMu.Lock()
+	cached, cachedErr, cachedAt, cachedFP := a.surveyResult, a.surveyErr, a.surveyAt, a.surveyFP
+	a.surveyMu.Unlock()
+	if cachedFP != fingerprint || cachedAt.IsZero() {
+		return a.survey(projects, fingerprint)
 	}
+	if fresh || time.Since(cachedAt) > overviewSurveyTTL {
+		a.resurveyInBackground(projects, fingerprint)
+	}
+	return cached, cachedErr
+}
+
+func (a *App) resurveyInBackground(projects []core.Project, fingerprint string) {
+	a.surveyMu.Lock()
+	if a.surveyRunning {
+		a.surveyMu.Unlock()
+		return
+	}
+	a.surveyRunning = true
+	a.surveyMu.Unlock()
+	run := a.resurvey
+	if run == nil {
+		run = func(f func()) { go f() }
+	}
+	projects = append([]core.Project(nil), projects...)
+	run(func() {
+		defer func() {
+			a.surveyMu.Lock()
+			a.surveyRunning = false
+			a.surveyMu.Unlock()
+		}()
+		a.survey(projects, fingerprint)
+	})
+}
+
+func (a *App) survey(projects []core.Project, fingerprint string) (core.RepositoriesSurvey, error) {
 	survey, err := core.NewRepositories().Survey(context.Background(), append([]core.Project(nil), projects...))
 	a.surveyMu.Lock()
 	a.surveyResult, a.surveyErr, a.surveyAt, a.surveyFP = survey, err, time.Now(), fingerprint
@@ -363,6 +400,15 @@ func (a *App) SetSessionService(sessionID string, service bool) error {
 		return err
 	}
 	_, err = core.OpenRegistry(core.StatePath()).Change(a.ctx, core.SetSessionService(session.ID, session.Name, service))
+	return err
+}
+
+func (a *App) SetSessionTitle(sessionID, title string) error {
+	_, session, err := loadSessionByID(sessionID)
+	if err != nil {
+		return err
+	}
+	_, err = core.OpenRegistry(core.StatePath()).Change(a.ctx, core.SetSessionTitle(session.ID, session.Name, title))
 	return err
 }
 

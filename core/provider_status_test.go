@@ -64,10 +64,11 @@ func TestCodexReachesFirstClassFidelity(t *testing.T) {
 	if len(kind.working) == 0 || len(kind.blocked) == 0 || len(kind.idle) == 0 || len(kind.composer) == 0 {
 		t.Fatal("Codex-Manifest deckt nicht alle Zustände ab")
 	}
-	// done wird aus dem ruhenden Bildschirm plus dem letzten Blick abgeleitet.
+	// done wird aus dem ruhenden Bildschirm, dem letzten Ergebnis und dem
+	// letzten Blick abgeleitet.
 	seen := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	resolved := resolveSessionStatus(statusInput{
-		session:       Session{ID: "session-1", Name: "one", SeenAt: seen},
+		session:       Session{ID: "session-1", Name: "one", SeenAt: seen, ResultAt: seen.Add(time.Minute)},
 		present:       true,
 		paneCommand:   "codex",
 		content:       paneFixture(t, "codex-idle.txt"),

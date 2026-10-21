@@ -133,7 +133,7 @@ func observeManagedSession(ctx context.Context, session Session, provider Manage
 	observed.Activity = activity
 	observed.ActivityKnown = known
 	observed.Attention = observationAttention(status)
-	observed.Unread = observationUnread(status, session.SeenAt, activity, known)
+	observed.Unread = observationUnread(status, session, activity, known)
 	return observed
 }
 

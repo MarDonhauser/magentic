@@ -326,6 +326,10 @@ export function SetSessionService(arg1, arg2) {
   return window['go']['main']['App']['SetSessionService'](arg1, arg2);
 }
 
+export function SetSessionTitle(arg1, arg2) {
+  return window['go']['main']['App']['SetSessionTitle'](arg1, arg2);
+}
+
 export function ShowNotchEvent(arg1) {
   return window['go']['main']['App']['ShowNotchEvent'](arg1);
 }

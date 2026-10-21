@@ -39,13 +39,13 @@ func TestStatusDoneIsAppendedAfterStatusTerm(t *testing.T) {
 	}
 }
 
-// done gegen idle: derselbe ruhende Bildschirm, einmal seit der letzten
-// Aktivität gesehen und einmal nicht.
+// done gegen idle: derselbe ruhende Bildschirm, einmal seit dem letzten
+// Ergebnis gesehen und einmal nicht.
 func TestDoneIsDerivedFromRestingScreenAndLastLook(t *testing.T) {
 	seen := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	resting := "❯ \n  🌿 main"
 	unseen := resolveSessionStatus(statusInput{
-		session: Session{ID: "s", SeenAt: seen}, present: true, paneCommand: "2.1.241",
+		session: Session{ID: "s", SeenAt: seen, ResultAt: seen.Add(time.Minute)}, present: true, paneCommand: "2.1.241",
 		content: resting, contentKnown: true,
 		activity: seen.Add(time.Minute), activityKnown: true, now: seen.Add(2 * time.Minute),
 	})
@@ -53,12 +53,57 @@ func TestDoneIsDerivedFromRestingScreenAndLastLook(t *testing.T) {
 		t.Fatalf("ungesehene Runde = %v, want fertig", unseen.Status.Label())
 	}
 	looked := resolveSessionStatus(statusInput{
-		session: Session{ID: "s", SeenAt: seen.Add(2 * time.Minute)}, present: true, paneCommand: "2.1.241",
+		session: Session{ID: "s", SeenAt: seen.Add(2 * time.Minute), ResultAt: seen.Add(time.Minute)}, present: true, paneCommand: "2.1.241",
 		content: resting, contentKnown: true,
 		activity: seen.Add(time.Minute), activityKnown: true, now: seen.Add(3 * time.Minute),
 	})
 	if looked.Status != StatusIdle {
 		t.Fatalf("gesehene Runde = %v, want idle", looked.Status.Label())
+	}
+}
+
+// Claude Code zeichnet seinen Bildschirm bei jeder Größenänderung und jedem
+// Statuszeilen-Update neu. Das bewegt die Aktivität des Panes, ist aber kein
+// neues Ergebnis: eine gelesene Session bleibt gelesen.
+func TestRedrawAfterLastLookIsNoNewResult(t *testing.T) {
+	seen := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	session := Session{ID: "s", SeenAt: seen, ResultAt: seen.Add(-time.Hour), LastStatus: StatusIdle}
+	redrawn := resolveSessionStatus(statusInput{
+		session: session, present: true, paneCommand: "2.1.241",
+		content: "❯ \n  🌿 main", contentKnown: true,
+		activity: seen.Add(time.Minute), activityKnown: true, now: seen.Add(2 * time.Minute),
+	})
+	if redrawn.Status != StatusIdle {
+		t.Fatalf("neu gezeichnete, gelesene Session = %v, want idle", redrawn.Status.Label())
+	}
+	if observationUnread(redrawn.Status, session, seen.Add(time.Minute), true) {
+		t.Fatal("neu gezeichnete, gelesene Session zählt als ungelesen")
+	}
+}
+
+// Die Ergebniszeit rückt nur vor, wenn ein Turn endet: arbeitend zu ruhend
+// oder ein gemeldetes Fertig. Ein ruhender Status, der nur erneut
+// beobachtet wird, lässt sie stehen.
+func TestResultAtFollowsTheEndOfATurn(t *testing.T) {
+	cases := []struct {
+		name     string
+		previous AgentStatus
+		next     AgentStatus
+		want     bool
+	}{
+		{"arbeitet, dann ruht", StatusRunning, StatusIdle, true},
+		{"Agents, dann fertig", StatusAgents, StatusDone, true},
+		{"ruht, dann gemeldetes Fertig", StatusIdle, StatusDone, true},
+		{"fertig bleibt fertig", StatusDone, StatusDone, false},
+		{"ruht, dann ruht", StatusIdle, StatusIdle, false},
+		{"wartet, dann ruht", StatusBlocked, StatusIdle, false},
+		{"arbeitet, dann wartet", StatusRunning, StatusBlocked, false},
+		{"Terminal, dann ruht", StatusTerm, StatusIdle, false},
+	}
+	for _, c := range cases {
+		if got := turnEnded(c.previous, c.next); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
 	}
 }
 
@@ -114,7 +159,7 @@ func TestUnknownIsExplicitAndFailClosed(t *testing.T) {
 	if got := observationAttention(StatusUnknown); got != AttentionUnknown {
 		t.Fatalf("Aufmerksamkeit = %q, want %q", got, AttentionUnknown)
 	}
-	if observationUnread(StatusUnknown, time.Time{}, time.Now(), true) {
+	if observationUnread(StatusUnknown, Session{ResultAt: time.Now()}, time.Now(), true) {
 		t.Fatal("ein unbekannter Status wurde als ungelesen gezählt")
 	}
 	observed := SessionObservation{

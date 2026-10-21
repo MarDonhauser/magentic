@@ -105,6 +105,13 @@ Lesbar ist derzeit Claude Code. Für die anderen Agenten sagt die Fläche
 ausdrücklich, dass ihre Verläufe noch nicht gelesen werden können — eine leere
 Fläche wäre von einem Lauf ohne Aktivität nicht zu unterscheiden.
 
+Wer lieber direkt mit dem CLI arbeitet, stellt unter **Einstellungen →
+Session-Ansicht** auf **Harness-CLI** um: Coding-Sessions öffnen dann im
+Terminal von Claude Code & Co., getippt wird in dessen eigene Eingabezeile,
+Nachrichtenfeld und Blende sind aus und das Terminal nutzt die volle Höhe. Die
+Agentenansicht bleibt über die Leiste zum Lesen erreichbar. Verwaltete
+Sessions ohne Terminal behalten in beiden Ansichten das Nachrichtenfeld.
+
 ### Sidebar
 
 Jede Session bekommt einen aus ihrem Namen erzeugten **Roboter-Avatar** — immer

@@ -87,6 +87,7 @@ var RemoteActionPolicy = map[string]PolicyEntry{
 	"MigrateDockSessions":     {ActionPermitted, "Session-Anlage in registriertem Project"},
 	"MarkSeen":                {ActionPermitted, "Gesehen-Markierung"},
 	"SetSessionService":       {ActionPermitted, "Service-Markierung"},
+	"SetSessionTitle":         {ActionPermitted, "Session-Titel"},
 	"StartBoardItem":          {ActionPermitted, "Specification-Start, host-aufgelöst"},
 	"Cleanup":                 {ActionPermitted, "Cleanup-Session, host-aufgelöst"},
 	"Merge":                   {ActionPermitted, "Merge-Session, host-aufgelöst"},

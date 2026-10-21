@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  applyReading, applyUpdate, canShowTerminal, defaultSessionSurface, emptyConversationState,
+  applyReading, applyUpdate, canShowTerminal, defaultSessionSurface, emptyConversationState, resolveSessionView,
   fnv1a, renderModel, rowSignature, scrollDecision,
 } from './conversation-state.js';
 
@@ -89,6 +89,22 @@ test('Ein Aufruf ohne Detail bleibt eine Zeile ohne ausklappbaren Rumpf', () => 
 test('Coding-Sessions öffnen in der Agentenansicht, reine Shells im Terminal', () => {
   assert.equal(defaultSessionSurface({ term: false }), 'conversation');
   assert.equal(defaultSessionSurface({ term: true }), 'terminal');
+});
+
+test('Die Harness-CLI-Ansicht öffnet Coding-Sessions im Terminal, verwaltete Sessions bleiben in der Agentenansicht', () => {
+  assert.equal(defaultSessionSurface({ term: false }, 'cli'), 'terminal');
+  assert.equal(defaultSessionSurface({ term: false, runtime: 'tmux', runtimeActions: ['attach'] }, 'cli'), 'terminal');
+  assert.equal(defaultSessionSurface({ term: false, runtime: 'managed', runtimeActions: ['interrupt'] }, 'cli'), 'conversation');
+  assert.equal(defaultSessionSurface({ term: false }, 'magentic'), 'conversation');
+  assert.equal(defaultSessionSurface({ term: true }, 'magentic'), 'terminal');
+});
+
+test('Die Session-Ansicht übernimmt den alten Eingabemodus, solange nichts Neues gespeichert ist', () => {
+  assert.equal(resolveSessionView('cli', null), 'cli');
+  assert.equal(resolveSessionView('magentic', 'terminal'), 'magentic');
+  assert.equal(resolveSessionView(null, 'terminal'), 'cli');
+  assert.equal(resolveSessionView(null, 'composer'), 'magentic');
+  assert.equal(resolveSessionView('unbekannt', null), 'magentic');
 });
 
 test('Nur eine Runtime mit Attach-Aktion bietet das eingebettete Terminal an', () => {

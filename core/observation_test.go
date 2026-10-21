@@ -438,7 +438,7 @@ func TestObservationAttentionAndUnreadPolicy(t *testing.T) {
 	cases := []struct {
 		name      string
 		status    AgentStatus
-		activity  time.Time
+		result    time.Time
 		attention AttentionState
 		unread    bool
 	}{
@@ -457,7 +457,8 @@ func TestObservationAttentionAndUnreadPolicy(t *testing.T) {
 			if got := observationAttention(tc.status); got != tc.attention {
 				t.Fatalf("attention = %q, want %q", got, tc.attention)
 			}
-			if got := observationUnread(tc.status, seen, tc.activity, true); got != tc.unread {
+			session := Session{SeenAt: seen, ResultAt: tc.result, LastStatus: tc.status}
+			if got := observationUnread(tc.status, session, tc.result, true); got != tc.unread {
 				t.Fatalf("unread = %v, want %v", got, tc.unread)
 			}
 		})

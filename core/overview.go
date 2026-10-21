@@ -10,6 +10,7 @@ import (
 type OvAgent struct {
 	ID             SessionID `json:"id"`
 	Name           string    `json:"name"`
+	Title          string    `json:"title,omitempty"`
 	Tool           string    `json:"tool,omitempty"`
 	Vendor         string    `json:"vendor,omitempty"`
 	Runtime        string    `json:"runtime"`
@@ -18,20 +19,24 @@ type OvAgent struct {
 	Label          string    `json:"label"`
 	Detail         string    `json:"detail"`
 	Age            string    `json:"age"`
-	Worktree       bool      `json:"worktree"`
-	Term           bool      `json:"term"`
-	Phase          string    `json:"phase,omitempty"`
-	PhaseLabel     string    `json:"phaseLabel,omitempty"`
-	Deployed       bool      `json:"deployed"`
-	Known          bool      `json:"known"`
-	OwnDirty       int       `json:"ownDirty"`
-	OwnCommits     int       `json:"ownCommits"`
-	Branch         string    `json:"branch,omitempty"`
-	Unread         bool      `json:"unread"`
-	Dock           bool      `json:"dock"`
-	Service        bool      `json:"service"`
-	HandoffSource  bool      `json:"handoffSource"`
-	HandoffTarget  bool      `json:"handoffTarget"`
+	// ResultAt is when the agent last finished a turn; ResultAge renders it
+	// relative to now. Both are empty while no finished turn is known.
+	ResultAt      time.Time `json:"resultAt,omitzero"`
+	ResultAge     string    `json:"resultAge,omitempty"`
+	Worktree      bool      `json:"worktree"`
+	Term          bool      `json:"term"`
+	Phase         string    `json:"phase,omitempty"`
+	PhaseLabel    string    `json:"phaseLabel,omitempty"`
+	Deployed      bool      `json:"deployed"`
+	Known         bool      `json:"known"`
+	OwnDirty      int       `json:"ownDirty"`
+	OwnCommits    int       `json:"ownCommits"`
+	Branch        string    `json:"branch,omitempty"`
+	Unread        bool      `json:"unread"`
+	Dock          bool      `json:"dock"`
+	Service       bool      `json:"service"`
+	HandoffSource bool      `json:"handoffSource"`
+	HandoffTarget bool      `json:"handoffTarget"`
 
 	Queued     []OvQueuedMessage `json:"queued,omitempty"`
 	Automation *OvAutomation     `json:"automation,omitempty"`
@@ -178,6 +183,7 @@ type OvUsagePage struct {
 type OvLater struct {
 	ID      SessionID `json:"id"`
 	Name    string    `json:"name"`
+	Title   string    `json:"title,omitempty"`
 	Project string    `json:"project"`
 	Age     string    `json:"age"`
 	Term    bool      `json:"term"`
@@ -303,7 +309,7 @@ func buildOverviewFromSurvey(s *State, snapshot ObservationSnapshot, survey Repo
 		}
 		later[a.ID] = true
 		observed := observationForSession(a, observations)
-		ov.Later = append(ov.Later, OvLater{ID: a.ID, Name: a.Name, Project: a.Project, Age: FormatAge(a.LaterAt), Term: a.IsTerm(), Tool: observed.Tool})
+		ov.Later = append(ov.Later, OvLater{ID: a.ID, Name: a.Name, Title: a.Title, Project: a.Project, Age: FormatAge(a.LaterAt), Term: a.IsTerm(), Tool: observed.Tool})
 	}
 	// Dock-Terminals bleiben aus den Zählern: sie sind Werkzeug, keine Sitzung,
 	// und tauchen deshalb auch in der Sitzungsliste nicht auf.
@@ -675,6 +681,7 @@ func toOvAgent(a Agent, observed SessionObservation, branch string, res SessionR
 	agent := OvAgent{
 		ID:             a.ID,
 		Name:           a.Name,
+		Title:          a.Title,
 		Tool:           tool,
 		Vendor:         string(a.SessionVendor()),
 		Runtime:        string(a.SessionRuntime()),
@@ -700,6 +707,10 @@ func toOvAgent(a Agent, observed SessionObservation, branch string, res SessionR
 		HandoffSource:  handoffSource,
 		HandoffTarget:  handoffTarget,
 		Queued:         queuedMessagesOverview(a.Outbox),
+	}
+	if !a.ResultAt.IsZero() {
+		agent.ResultAt = a.ResultAt
+		agent.ResultAge = FormatAgeWord(a.ResultAt)
 	}
 	if observed.Presence == SessionPresenceAbsent && !res.Unknown {
 		if res.Resumable {
@@ -789,10 +800,6 @@ func queuedMessagePreview(text string) string {
 		preview = strings.TrimRight(string(runes[:queuedMessagePreviewLimit]), " ") + "…"
 	}
 	return preview
-}
-
-func unread(st AgentStatus, seenAt, lastActive time.Time) bool {
-	return observationUnread(st, seenAt, lastActive, true)
 }
 
 var integrationBranches = map[string]bool{"dev": true, "main": true, "master": true, "develop": true}

@@ -89,6 +89,7 @@ var HostAPIMethods = []string{
 	"SetMainBranch",
 	"SetNotificationsEnabled",
 	"SetSessionService",
+	"SetSessionTitle",
 	"ShowNotchEvent",
 	"SnoozeBreak",
 	"StartBoardItem",

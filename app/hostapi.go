@@ -96,6 +96,7 @@ type HostAPI interface {
 	SetMainBranch(projectID, main string) error
 	SetNotificationsEnabled(on bool) error
 	SetSessionService(sessionID string, service bool) error
+	SetSessionTitle(sessionID, title string) error
 	ShowNotchEvent(event NotchEvent) error
 	SnoozeBreak() error
 	StartBoardItem(projectID, token string) (string, error)

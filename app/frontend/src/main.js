@@ -8,7 +8,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import {
   Overview, Inbox,
   NewSession, NewSessionWithVendor, AgentVendors, SwitchSessionVendor, NewTermSession, NewTermSessionFor, DoneAgent, Cleanup, Merge, Deploy, RemoveWorktree, SetMainBranch,
-  OpenTerm, WriteTerm, ResizeTerm, CloseTerm, KillSession, LaterSession, ReopenSession, SendSkill, HandoffSession, SetSessionService,
+  OpenTerm, WriteTerm, ResizeTerm, CloseTerm, KillSession, LaterSession, ReopenSession, SendSkill, HandoffSession, SetSessionService, SetSessionTitle,
   SendMessage, DiscardQueuedMessage, RetryQueuedMessage,
   SessionAutomation, SaveSessionAutomation, DeleteSessionAutomation,
   DeployStatus, AzLogin, ArgoLogin, AzAccounts, AzSetSubscription,
@@ -27,7 +27,7 @@ import { canShowTerminal, defaultSessionSurface, resolveSessionView } from './co
 import { canSendComposer, composeMessage } from './composer-attachments.js';
 import { usagePages, clampUsagePage } from './usage-state.js';
 import { buildSidebar, flattenSidebar, canPlace, planMove } from './sidebar-layout.js';
-import { EventsOn, EventsOff, BrowserOpenURL, ClipboardSetText, WindowToggleMaximise } from '../wailsjs/runtime/runtime';
+import { EventsOn, BrowserOpenURL, ClipboardSetText, WindowToggleMaximise } from '../wailsjs/runtime/runtime';
 import {
   developerIcon,
   mountDeveloperIcons,
@@ -51,6 +51,7 @@ import { TERMINAL_OPTIONS, setUpTerminal } from './terminal-setup.js';
 import { clearTextureAtlases } from './texture-atlas.js';
 import { createHydraHandoff } from './hydra-handoff.js';
 import { createHydraOrder, placeInOrder } from './hydra-order.js';
+import { createHydraHidden } from './hydra-hidden.js';
 import { HYDRA_MAX_TILES, hydraColumns } from './hydra-layout.js';
 import { createVendorSwitchCoordinator } from './vendor-switch.js';
 import { queuedBadge, queuedMessages, queuedHeadline } from './queued-state.js';
@@ -162,6 +163,24 @@ function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+function sessionTitle(a, fallback = '') {
+  return a?.title || a?.name || fallback;
+}
+
+function resultTime(value) {
+  const date = new Date(value);
+  if (!value || Number.isNaN(date.getTime())) return '';
+  const today = new Date().toDateString() === date.toDateString();
+  return new Intl.DateTimeFormat('de-DE', today
+    ? { hour: '2-digit', minute: '2-digit' }
+    : { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(date);
+}
+
+function resultAgeHtml(a, cls) {
+  if (!a?.resultAge) return `<span class="${cls}"></span>`;
+  return `<span class="${cls}" title="Letztes Ergebnis: ${esc(resultTime(a.resultAt))}">${esc(a.resultAge)}</span>`;
+}
+
 function errorText(err) {
   return String(err ?? 'Unbekannter Fehler')
     .replace(/^Error:\s*/i, '')
@@ -195,6 +214,8 @@ const ICONS = {
   server: '<rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><path d="M6 6.5h.01"/><path d="M6 17.5h.01"/>',
   chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   split: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 3v18"/>',
+  eye: '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
+  eyeoff: '<path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/>',
 };
 
 function icon(name) {
@@ -274,6 +295,39 @@ function termConnectionKey(sessionID, name) {
   return sessionID ? `session:${sessionID}` : `dock:${name}`;
 }
 
+// dropTerm meldet nur die eigenen Listener ab: Dock und Hauptansicht hören
+// bei derselben Session auf dieselben Ereignisse, ein EventsOff träfe beide.
+function dropTerm(t, { close = true } = {}) {
+  t.off();
+  if (close) CloseTerm(t.connectionKey);
+  try { t.term.dispose(); } catch { /* bereits beendet */ }
+  t.wrap.remove();
+  if (terms.get(t.name) === t) terms.delete(t.name);
+}
+
+// Eine abgerissene Anbindung wird beim nächsten Öffnen neu aufgebaut, statt
+// ein totes Terminal zu zeigen, das wie eine beendete Session aussieht.
+function markDetached(connectionKey) {
+  for (const entry of terms.values()) {
+    if (entry.connectionKey === connectionKey) entry.connected = false;
+  }
+}
+
+function needsReattach(t) {
+  return t.connected === false && !(t.retryAt > Date.now());
+}
+
+async function attachTerm(t, sessionID, name) {
+  try {
+    await OpenTerm(sessionID, name, t.term.cols, t.term.rows);
+    t.connected = true;
+  } catch (err) {
+    t.connected = false;
+    t.retryAt = Date.now() + 15000;
+    t.term.write('\x1b[31m' + err + '\x1b[0m\r\n');
+  }
+}
+
 onThemeChange(theme => {
   const nextTheme = terminalTheme(theme);
   const nextFloor = terminalContrastFloor(theme);
@@ -348,8 +402,11 @@ function makeTerm(sessionID, name) {
       }
     }
   }, true);
-  EventsOn('term:data:' + connectionKey, b64 => term.write(fromB64(b64)));
-  EventsOn('term:closed:' + connectionKey, () => term.write('\r\n\x1b[31m— Verbindung beendet —\x1b[0m\r\n'));
+  const offData = EventsOn('term:data:' + connectionKey, b64 => term.write(fromB64(b64)));
+  const offClosed = EventsOn('term:closed:' + connectionKey, () => {
+    t.connected = false;
+    term.write('\r\n\x1b[31m— Verbindung beendet —\x1b[0m\r\n');
+  });
 
   const sb = document.createElement('button');
   sb.className = 'scroll-bottom';
@@ -369,7 +426,11 @@ function makeTerm(sessionID, name) {
   cover.style.height = '0px';
   wrap.appendChild(cover);
 
-  const t = { term, fit, wrap, name, sessionID, connectionKey, cover, promptPattern: '', userFocused: false };
+  const t = {
+    term, fit, wrap, name, sessionID, connectionKey, cover, promptPattern: '', userFocused: false,
+    connected: null,
+    off: () => { offData(); offClosed(); },
+  };
   terms.set(name, t);
   // Die Anwendung fokussiert das Terminal beim Öffnen selbst. Aufgedeckt wird
   // deshalb nicht bei Fokus, sondern erst, wenn wirklich jemand hineingeklickt
@@ -821,13 +882,8 @@ async function answerManagedSession(requestID, decision) {
 async function ensureSessionTerminal(sessionID, name) {
   if (!sessionID || !name) return null;
   let t = terms.get(name);
-  if (t && t.sessionID !== sessionID) {
-    EventsOff('term:data:' + t.connectionKey);
-    EventsOff('term:closed:' + t.connectionKey);
-    CloseTerm(t.connectionKey);
-    try { t.term.dispose(); } catch { /* bereits beendet */ }
-    t.wrap.remove();
-    terms.delete(name);
+  if (t && (t.sessionID !== sessionID || needsReattach(t))) {
+    dropTerm(t);
     t = null;
   }
   const fresh = !t;
@@ -840,8 +896,7 @@ async function ensureSessionTerminal(sessionID, name) {
   for (const [termName, entry] of terms) entry.wrap.classList.toggle('active', termName === name);
   t.fit.fit();
   if (fresh) {
-    try { await OpenTerm(sessionID, name, t.term.cols, t.term.rows); }
-    catch (err) { t.term.write('\x1b[31m' + err + '\x1b[0m\r\n'); }
+    await attachTerm(t, sessionID, name);
     try { t.promptPattern = await PromptLinePattern(String(sessionID)); }
     catch { t.promptPattern = ''; }
   } else {
@@ -916,6 +971,7 @@ EventsOn('conversation:items', event => {
 
 function updateTermBar() {
   if (view !== 'term' || !activeTerm || !activeSessionID) return;
+  if (termBarEl.querySelector('.title-rename')) return;
   const sessionID = activeSessionID;
   const sessionName = activeTerm;
   const a = agentInfo(sessionName, sessionID);
@@ -945,7 +1001,7 @@ function updateTermBar() {
     `<button class="btn tiny" id="tb-back" title="Übersicht (⌘0)">‹ Übersicht</button>` +
     `<span class="tb-avatar">${agentPortrait(activeTerm, 24, a)}</span>` +
     `<span class="dot" style="background:${v.color}"></span>` +
-    `<span class="tb-name">${esc(activeTerm)}</span>` +
+    `<span class="tb-name" title="${esc(activeTerm)}">${esc(sessionTitle(a, activeTerm))}</span>` +
     vendorSwitchHtml(a) +
     (a?.branch ? `<span class="tb-branch${a.worktree ? ' wt' : ''}" title="Branch ${esc(a.branch)}${a.worktree ? ' · eigener Worktree' : ''}">${icon('gitbranch')}${esc(a.branch)}</span>` : '') +
     checkoutChipsHtml(a) +
@@ -1177,11 +1233,13 @@ function openSessionActionsMenu(anchor, sessionID, sessionName, a, gone) {
   }
   items.push({ icon: 'link', label: 'Links', hint: 'aus dieser Session', run: () => { openLinksMenu(anchor); return false; } });
   items.push({ sep: true });
+  items.push({ icon: 'pencil', label: 'Umbenennen', hint: a?.title ? `heißt technisch ${sessionName}` : 'eigenen Titel vergeben',
+    run: () => { const el = termBarEl.querySelector('.tb-name'); if (el) startTitleRename(el, sessionID, sessionTitle(a, sessionName)); } });
   items.push({ icon: 'server', label: a?.service ? 'Service-Markierung entfernen' : 'Als Service markieren',
     hint: a?.service ? 'wieder im Hydra-Modus zeigen' : 'nur ein Dienst läuft hier — im Hydra-Modus ausblenden',
     run: () => setServiceFlag(sessionID, sessionName, !a?.service) });
   items.push({ icon: 'clock', label: 'Für später schließen', kbd: '⌘⇧W', run: () => parkSession(sessionID, sessionName) });
-  items.push({ icon: 'x', label: 'Session beenden', danger: true, confirm: 'wirklich beenden?', run: () => killSession(sessionID, sessionName) });
+  items.push({ icon: 'x', label: 'Session beenden', danger: true, run: () => killSession(sessionID, sessionName) });
   showSubMenu(anchor, `<div class="mi-head">${sessionToolMark(a)}${esc(sessionName)}</div>`, items);
 }
 
@@ -1845,6 +1903,12 @@ for (const id of ['graph-view', 'board-view']) {
 
 const hydraGridEl = $('hydra-grid');
 const hydraOrder = createHydraOrder();
+const hydraHidden = createHydraHidden();
+// Nach einem Umbau des Rasters liegt unter dem Zeiger eine andere Kachel. Ein
+// Klick in diesem Moment galt der alten und darf keine Session beenden.
+const HYDRA_KILL_GRACE_MS = 800;
+let hydraTilesKey = '';
+let hydraReshapedAt = 0;
 
 const handoffDialogEl = $('handoff-dialog');
 const handoffDialogFormEl = $('handoff-dialog-form');
@@ -1947,14 +2011,7 @@ function detachSessionTerminal(request) {
   const wasTerm = view === 'term' && activeSessionID === request.sessionId;
   const wasHydra = view === 'hydra' && hydraProject && terms.get(request.sessionName)?.wrap.parentElement === hydraGridEl;
   const terminal = terms.get(request.sessionName);
-  if (terminal && terminal.sessionID === request.sessionId) {
-    EventsOff('term:data:' + terminal.connectionKey);
-    EventsOff('term:closed:' + terminal.connectionKey);
-    CloseTerm(terminal.connectionKey);
-    try { terminal.term.dispose(); } catch { /* Verbindung war bereits beendet */ }
-    terminal.wrap.remove();
-    terms.delete(request.sessionName);
-  }
+  if (terminal && terminal.sessionID === request.sessionId) dropTerm(terminal);
   return { wasTerm, wasHydra };
 }
 
@@ -2014,7 +2071,7 @@ const hydraHandoff = createHydraHandoff({
   formatError: errorText,
 });
 
-function hydraAgents() {
+function hydraCandidates() {
   const p = (ov?.projects || []).find(x => x.name === hydraProject);
   if (!p) return [];
   const out = [];
@@ -2023,7 +2080,47 @@ function hydraAgents() {
       if (a.status !== 'dead' && !a.dock && !a.service) out.push(a);
     }
   }
-  return hydraOrder.order(hydraProject, out).slice(0, HYDRA_MAX_TILES);
+  return out;
+}
+
+function hydraAgents() {
+  const shown = hydraCandidates().filter(a => !hydraHidden.has(a.id));
+  return hydraOrder.order(hydraProject, shown).slice(0, HYDRA_MAX_TILES);
+}
+
+function hideFromHydra(t) {
+  hydraHidden.hide(t.sessionID);
+  if (activeSessionID === t.sessionID) {
+    markSeen(t.sessionID);
+    activeTerm = null;
+    activeSessionID = null;
+    SetActiveTerm('');
+  }
+  updateHydraBar();
+  syncHydra();
+}
+
+function showInHydra(sessionID) {
+  hydraHidden.show(sessionID);
+  updateHydraBar();
+  syncHydra();
+}
+
+function openHydraHiddenMenu(anchor) {
+  const hidden = hydraCandidates().filter(a => hydraHidden.has(a.id));
+  const items = hidden.map(a => ({
+    icon: 'eye', label: sessionTitle(a), hint: `${a.name} · wieder im Raster zeigen`,
+    run: () => showInHydra(a.id),
+  }));
+  if (hidden.length > 1) {
+    items.push({ sep: true });
+    items.push({ icon: 'eye', label: 'Alle wieder zeigen', run: () => {
+      for (const a of hidden) hydraHidden.show(a.id);
+      updateHydraBar();
+      syncHydra();
+    } });
+  }
+  showSubMenu(anchor, `<div class="mi-head">${icon('eyeoff')} Ausgeblendet</div>`, items);
 }
 
 function setHydraChrome(on) {
@@ -2056,15 +2153,18 @@ function enterHydra(project) {
 function updateHydraBar() {
   if (view !== 'hydra') return;
   const agents = hydraAgents();
+  const hiddenCount = hydraCandidates().filter(a => hydraHidden.has(a.id)).length;
   termBarEl.innerHTML =
     `<button class="btn tiny" id="tb-back" title="Übersicht (⌘0)">‹ Übersicht</button>` +
     `<span class="dot" style="background:var(--accent)"></span>` +
     `<span class="tb-name">${developerIcon('claude')} Hydra · ${esc(hydraProject)}</span>` +
     `<span class="tb-st">${agents.length} ${agents.length === 1 ? 'Session' : 'Sessions'} parallel</span>` +
     `<span class="tb-actions">` +
+    (hiddenCount ? `<button class="btn tiny submenu-anchor" id="tb-hidden" title="Ausgeblendete Sessions wieder ins Raster holen">${icon('eyeoff')} ${hiddenCount} ausgeblendet</button>` : '') +
     `<button class="btn tiny" id="tb-add" title="Neue Session in ${esc(hydraProject)} — erscheint direkt im Raster">${developerIcon(resolvedDefaultVendor() || 'claude')} Session</button>` +
     `<button class="btn tiny" id="tb-term" title="Reines Terminal in ${esc(hydraProject)} — Shell statt Claude">${developerIcon('bash')} Terminal</button></span>`;
   $('tb-back').onclick = showOverview;
+  if (hiddenCount) $('tb-hidden').onclick = e => openHydraHiddenMenu(e.currentTarget);
   $('tb-add').onclick = async () => {
     try {
       const project = projectInfo(hydraProject);
@@ -2097,26 +2197,28 @@ function ensureHydraHead(t) {
   head.className = 'hydra-head';
   head.innerHTML =
     `<span class="hh-avatar"></span>` +
-    `<span class="dot"></span><span class="hh-name">${esc(t.name)}</span>` +
+    `<span class="dot"></span><span class="hh-name" title="${esc(t.name)}">${esc(t.name)}</span>` +
     `<span class="hh-status"></span>` +
     `<button type="button" class="hh-magnet" aria-label="Kontext aus Session ${esc(t.name)} weitergeben" aria-pressed="false">${icon('magnet')}</button>` +
+    `<button type="button" class="hh-hide" aria-label="Session ${esc(t.name)} im Hydra-Raster ausblenden" title="Aus dem Raster ausblenden — läuft weiter">${icon('eyeoff')}</button>` +
     `<button type="button" class="hh-max" aria-label="Session ${esc(t.name)} groß öffnen" title="Session groß öffnen">⤢</button>` +
     `<button type="button" class="hh-kill" aria-label="Session ${esc(t.name)} beenden" title="Session beenden">✕</button>`;
+  head.querySelector('.hh-hide').onclick = () => hideFromHydra(t);
   head.querySelector('.hh-max').onclick = () => openSession(t.sessionID, t.name);
   head.querySelector('.hh-kill').onclick = e => {
-    const b = e.currentTarget;
-    if (b.dataset.confirm) { killSession(t.sessionID, t.name); return; }
-    b.dataset.confirm = '1';
-    b.textContent = '✕ wirklich?';
-    setTimeout(() => {
-      if (b.isConnected) { delete b.dataset.confirm; b.textContent = '✕'; }
-    }, 3000);
+    if (performance.now() - hydraReshapedAt < HYDRA_KILL_GRACE_MS) return;
+    e.currentTarget.disabled = true;
+    killSession(t.sessionID, t.name);
   };
-  head.onclick = e => { if (!e.target.closest('.hh-magnet, .hh-max, .hh-kill')) t.term.focus(); };
+  head.onclick = e => { if (!e.target.closest('.hh-magnet, .hh-hide, .hh-max, .hh-kill')) t.term.focus(); };
   t.wrap.appendChild(head);
   t.head = head;
   t.wrap.addEventListener('focusin', () => {
     if (view !== 'hydra') return;
+    if (activeSessionID !== t.sessionID) {
+      markSeen(activeSessionID);
+      markSeen(t.sessionID);
+    }
     activeTerm = t.name;
     activeSessionID = t.sessionID;
     SetActiveTerm(t.sessionID);
@@ -2131,6 +2233,9 @@ function ensureHydraHead(t) {
 }
 
 function updateHydraHead(t, agent) {
+  const nameEl = t.head.querySelector('.hh-name');
+  const title = sessionTitle(agent, t.name);
+  if (nameEl.textContent !== title) nameEl.textContent = title;
   const portraitKey = `${agent?.id || ''}:${sessionToolKey(agent)}`;
   if (t.hydraPortraitKey !== portraitKey) {
     t.head.querySelector('.hh-avatar').innerHTML = agentPortrait(t.name, 18, agent);
@@ -2158,13 +2263,8 @@ async function syncHydra() {
   const fresh = [];
   for (const a of agents) {
     let t = terms.get(a.name);
-    if (t && t.sessionID !== a.id) {
-      EventsOff('term:data:' + t.connectionKey);
-      EventsOff('term:closed:' + t.connectionKey);
-      CloseTerm(t.connectionKey);
-      try { t.term.dispose(); } catch { /* bereits beendet */ }
-      t.wrap.remove();
-      terms.delete(a.name);
+    if (t && (t.sessionID !== a.id || needsReattach(t))) {
+      dropTerm(t);
       t = null;
     }
     if (!t) { t = makeTerm(a.id, a.name); fresh.push(a.name); }
@@ -2177,7 +2277,13 @@ async function syncHydra() {
     updateHydraHead(t, a);
     const v = agentVisual(a, hydraProject);
     t.head.querySelector('.dot').style.background = v.color;
-    t.head.querySelector('.hh-status').innerHTML = `${visHtml(v)} · ${esc(a.age)}`;
+    t.head.querySelector('.hh-status').innerHTML = visHtml(v) +
+      (a.resultAge ? ` · <span title="Letztes Ergebnis: ${esc(resultTime(a.resultAt))}">${esc(a.resultAge)}</span>` : '');
+  }
+  const tilesKey = agents.map(a => a.id).join('|');
+  if (tilesKey !== hydraTilesKey) {
+    hydraTilesKey = tilesKey;
+    hydraReshapedAt = performance.now();
   }
   placeInOrder(hydraGridEl, agents.map(a => terms.get(a.name).wrap));
   layoutHydraGrid(agents.length);
@@ -2187,8 +2293,7 @@ async function syncHydra() {
     if (!t) continue;
     t.fit.fit();
     if (fresh.includes(a.name)) {
-      try { await OpenTerm(a.id, a.name, t.term.cols, t.term.rows); }
-      catch (err) { t.term.write('\x1b[31m' + err + '\x1b[0m\r\n'); }
+      await attachTerm(t, a.id, a.name);
     } else {
       ResizeTerm(t.connectionKey, t.term.cols, t.term.rows);
     }
@@ -2345,7 +2450,7 @@ function attentionBar() {
     return;
   }
   const label = waiting.length === 1
-    ? `${esc(waiting[0].name)} wartet auf dich`
+    ? `${esc(sessionTitle(waiting[0]))} wartet auf dich`
     : `${waiting.length} Sessions warten auf dich`;
   bar.className = 'wait';
   bar.innerHTML = `<span class="at-wait">${icon('lock')} ${label}</span>`;
@@ -2403,6 +2508,40 @@ function startDividerRename(el, dividerID, current) {
     }
     await refresh(true);
   };
+  input.onblur = () => finish(true);
+  input.onkeydown = e => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  };
+}
+
+// startTitleRename tauscht den angezeigten Titel gegen ein Eingabefeld. Ein
+// leeres Feld gibt die Session wieder für den automatischen Titel frei.
+function startTitleRename(label, sessionID, current) {
+  const input = document.createElement('input');
+  input.className = 'divider-rename title-rename';
+  input.value = current;
+  input.placeholder = 'Titel — leer lässt ihn neu erzeugen';
+  label.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = async commit => {
+    if (done) return;
+    done = true;
+    const title = input.value.trim();
+    if (commit && title !== current) {
+      try {
+        await SetSessionTitle(String(sessionID), title);
+      } catch (err) {
+        toast('Fehler: ' + errorText(err), true);
+      }
+    }
+    if (input.isConnected) input.replaceWith(label);
+    await refresh(true);
+  };
+  input.onclick = e => e.stopPropagation();
   input.onblur = () => finish(true);
   input.onkeydown = e => {
     e.stopPropagation();
@@ -2485,13 +2624,13 @@ function sessionRow(row) {
     `<span class="savatar${dead ? ' dim' : ''}">${agentPortrait(a.name, 26, a)}</span>` +
     `<span class="sbody">` +
       `<span class="srow">` +
-        `<span class="sname">${esc(a.name)}</span>` +
+        `<span class="sname" title="${esc(a.name)}">${esc(sessionTitle(a))}</span>` +
         branchChip(a) + serviceChip(a) +
       `</span>` +
       `<span class="srow sub">` +
         `<span class="dot" style="background:${v.color}"></span>` +
         `<span class="sstatus">${visHtml(v)}</span>` + detached +
-        `<span class="sage">${esc(a.age)}</span>${key}` +
+        resultAgeHtml(a, 'sage') + key +
       `</span>` +
     `</span>` +
     (needsInputStatus(a.status) ? `<span class="sflag" title="wartet auf deine Eingabe">!</span>` :
@@ -2508,6 +2647,7 @@ function sessionRow(row) {
 }
 
 function renderSidebar() {
+  if (sessionsEl.querySelector('.title-rename')) return;
   sessionsEl.innerHTML = '';
   sidebarSessions = [];
   sidebarTree = buildSidebar(ov);
@@ -2542,10 +2682,10 @@ function renderSidebar() {
     for (const l of ov.later) {
       const div = document.createElement('div');
       div.className = 'session later';
-      div.title = `„${l.name}" wieder öffnen` + (l.project ? ` · ${l.project}` : '');
+      div.title = `„${sessionTitle(l)}" wieder öffnen` + (l.project ? ` · ${l.project}` : '');
       div.innerHTML =
         `<span class="savatar dim">${agentPortrait(l.name, 20, l)}</span>` +
-        `<span class="sname">${esc(l.name)}</span>` +
+        `<span class="sname">${esc(sessionTitle(l))}</span>` +
         (l.project ? `<span class="sstatus">${esc(l.project)}</span>` : '') +
         `<span class="sage">${esc(l.age)}</span>`;
       div.dataset.sessionId = String(l.id || '');
@@ -2721,10 +2861,10 @@ function agentPill(a, project) {
   return `<span class="pill${needsInputStatus(a.status) ? ' waiting' : ''}${a.unread ? ' unread' : ''}">` +
     `<span class="pill-avatar">${agentPortrait(a.name, 18, a)}</span>` +
     `<span class="dot" style="background:${v.color}"></span>` +
-    `<span class="name">${esc(a.name)}</span>` +
+    `<span class="name" title="${esc(a.name)}">${esc(sessionTitle(a))}</span>` +
     (a.service ? `<span class="pill-service" title="Service-Session — im Hydra-Modus ausgeblendet">${icon('server')}Service</span>` : '') +
     `<span class="st">${visHtml(v)}</span>` +
-    `<span class="age">${esc(a.age)}</span>` +
+    resultAgeHtml(a, 'age') +
     (compose || open || done ? `<span class="pill-actions">${compose}${open}${done}</span>` : '') +
     `</span>`;
 }
@@ -2804,7 +2944,7 @@ function attentionOverview() {
     const status = agentVisual(a, a.project);
     return `<button type="button" class="attention-session" data-act="open" data-session-id="${esc(a.id)}" data-agent="${esc(a.name)}">` +
       `<span class="attention-session-avatar">${agentPortrait(a.name, 24, a)}</span>` +
-      `<span class="attention-session-copy"><strong>${esc(a.name)}</strong><span>${esc(context)}</span></span>` +
+      `<span class="attention-session-copy"><strong>${esc(sessionTitle(a))}</strong><span>${esc(context)}</span></span>` +
       `<span class="attention-session-status">${visHtml(status)}</span>` +
       `<span class="attention-session-open">Öffnen</span></button>`;
   }).join('');
@@ -3676,7 +3816,7 @@ function placeMenu(x, y, width) {
 
 function showMenu(x, y, sessionID, name, status) {
   const session = agentInfo(name, sessionID) || (ov?.later || []).find(item => item.id === sessionID);
-  menuFor = { id: sessionID, name, service: !!session?.service };
+  menuFor = { id: sessionID, name, service: !!session?.service, later: status === 'later', title: sessionTitle(session, name) };
   if (status === 'later') {
     menuEl.innerHTML =
       `<div class="mi-head">${sessionToolMark(session)}${esc(name)}</div>` +
@@ -3696,6 +3836,7 @@ function showMenu(x, y, sessionID, name, status) {
       `<div class="mi" data-mi="open">${developerIcon('bash')} Terminal öffnen</div>` + done +
       `<div class="mi" data-mi="splitopen">${icon('split')} Im Split öffnen</div>` +
       switchable +
+      `<div class="mi" data-mi="rename">${icon('pencil')} Umbenennen</div>` +
       `<div class="mi" data-mi="service">${icon('server')} ${session?.service ? 'Service-Markierung entfernen' : 'Als Service markieren'}</div>` +
       `<div class="mi" data-mi="later">${icon('clock')} Für später schließen</div>` +
       `<div class="mi danger" data-mi="kill">${icon('x')} Session beenden</div>`;
@@ -3724,42 +3865,56 @@ async function openTermInContext() {
   else openSessionByName(name);
 }
 
+// forgetSession nimmt eine beendete Session sofort aus der gehaltenen
+// Übersicht, damit Sidebar und Raster nicht auf den nächsten Abruf warten.
+function forgetSession(sessionID) {
+  if (!ov) return;
+  for (const p of ov.projects || []) {
+    for (const wt of p.worktrees || []) {
+      if (wt.agents) wt.agents = wt.agents.filter(a => a.id !== sessionID);
+    }
+  }
+  if (ov.later) ov.later = ov.later.filter(l => l.id !== sessionID);
+}
+
 async function afterSessionGone(sessionID, name) {
+  forgetSession(sessionID);
   const dockTab = dockTabs().find(tab => tab.id === sessionID || (!tab.id && tab.name === name));
   if (dockTab) closeDockTab(dockTab);
   const t = terms.get(name);
-  if (t && (!t.sessionID || t.sessionID === sessionID)) {
-    EventsOff('term:data:' + t.connectionKey);
-    EventsOff('term:closed:' + t.connectionKey);
-    try { t.term.dispose(); } catch { /* schon weg */ }
-    t.wrap.remove();
-    terms.delete(name);
-  }
+  if (t && (!t.sessionID || t.sessionID === sessionID)) dropTerm(t, { close: false });
   if (view === 'hydra') {
     if (activeSessionID === sessionID) {
       activeTerm = null;
       activeSessionID = null;
       SetActiveTerm('');
     }
-    await refresh(true);
+    updateHydraBar();
     syncHydra();
+  } else if (activeSessionID === sessionID) {
+    showOverview();
+  }
+  renderSidebar();
+  await refresh(true);
+}
+
+async function endSession(action, okMsg, sessionID, name) {
+  try {
+    await action;
+  } catch (err) {
+    toast('Aktion fehlgeschlagen: ' + errorText(err), true);
     return;
   }
-  if (activeSessionID === sessionID) showOverview();
-}
-
-async function killSession(sessionID, name) {
-  try {
-    await act(KillSession(sessionID, name), `Session „${name}" beendet`);
-  } catch { return; }
+  toast(okMsg);
   await afterSessionGone(sessionID, name);
 }
 
-async function parkSession(sessionID, name) {
-  try {
-    await act(LaterSession(sessionID), `Session „${name}" für später geparkt`);
-  } catch { return; }
-  await afterSessionGone(sessionID, name);
+function killSession(sessionID, name) {
+  return endSession(KillSession(sessionID, name), `Session „${name}" beendet`, sessionID, name);
+}
+
+function parkSession(sessionID, name) {
+  return endSession(LaterSession(sessionID), `Session „${name}" für später geparkt`, sessionID, name);
 }
 
 async function reopenLater(sessionID, name) {
@@ -3772,7 +3927,7 @@ async function reopenLater(sessionID, name) {
 menuEl.addEventListener('click', async e => {
   const mi = e.target.closest('.mi');
   if (!mi || !menuFor) return;
-  const { id, name, project, worktree, divider, service } = menuFor;
+  const { id, name, project, worktree, divider, service, later, title } = menuFor;
   if (mi.dataset.mi === 'newdivider') {
     hideMenu();
     try {
@@ -3833,9 +3988,15 @@ menuEl.addEventListener('click', async e => {
       hideMenu();
       try { await act(DoneAgent(id), `/done an „${name}" gesendet — Plan in der Session bestätigen`); } catch { }
       break;
+    case 'rename': {
+      hideMenu();
+      const label = sessionsEl.querySelector(`.session[data-session-id="${CSS.escape(String(id))}"] .sname`);
+      if (label) startTitleRename(label, id, title);
+      break;
+    }
     case 'kill':
-      if (mi.dataset.confirm) { hideMenu(); killSession(id, name); }
-      else { mi.dataset.confirm = '1'; mi.innerHTML = icon('x') + ' wirklich beenden?'; }
+      if (!later || mi.dataset.confirm) { hideMenu(); killSession(id, name); }
+      else { mi.dataset.confirm = '1'; mi.innerHTML = icon('x') + ' wirklich entfernen?'; }
       break;
   }
 });
@@ -4057,6 +4218,8 @@ function dockContextProject() {
   return (ov?.projects || []).find(project => project.path)?.id || '';
 }
 
+const dockOwned = new Set();
+
 mountDock({
   // Old string tabs cross the name Adapter once; all newly persisted tabs and
   // every terminal transport operation use the stable SessionID.
@@ -4065,26 +4228,24 @@ mountDock({
   write: (tab, b64) => WriteTerm(termConnectionKey(tab.id, tab.name), b64),
   resize: (tab, cols, rows) => ResizeTerm(termConnectionKey(tab.id, tab.name), cols, rows),
   close: tab => {
+    const key = termConnectionKey(tab.id, tab.name);
+    CloseTerm(key);
+    markDetached(key);
     // Dock-Terminals stehen in keiner Liste — bliebe die tmux-Session offen,
-    // liefe sie unsichtbar weiter und wäre nur noch über tmux erreichbar.
-    CloseTerm(termConnectionKey(tab.id, tab.name));
-    KillSession(tab.id, tab.name).catch(() => {});
+    // liefe sie unsichtbar weiter und wäre nur noch über tmux erreichbar. Eine
+    // Session, die nur im Split angezeigt wurde, läuft dagegen weiter.
+    const session = agentInfo(tab.name, tab.id);
+    if (session ? session.dock : dockOwned.has(tab.id)) KillSession(tab.id, tab.name).catch(() => {});
   },
-  onData: (tab, cb) => {
-    const ev = 'term:data:' + termConnectionKey(tab.id, tab.name);
-    EventsOn(ev, cb);
-    return () => EventsOff(ev);
-  },
-  onClosed: (tab, cb) => {
-    const ev = 'term:closed:' + termConnectionKey(tab.id, tab.name);
-    EventsOn(ev, cb);
-    return () => EventsOff(ev);
-  },
+  onData: (tab, cb) => EventsOn('term:data:' + termConnectionKey(tab.id, tab.name), cb),
+  onClosed: (tab, cb) => EventsOn('term:closed:' + termConnectionKey(tab.id, tab.name), cb),
   newTerminal: async () => {
     const proj = dockContextProject();
     if (!proj) { toast('Kein Projekt registriert', true); return null; }
     try {
-      return await act(NewDockSession(proj), ref => `Terminal „${ref.name}" im Dock geöffnet`);
+      const ref = await act(NewDockSession(proj), created => `Terminal „${created.name}" im Dock geöffnet`);
+      if (ref?.id) dockOwned.add(ref.id);
+      return ref;
     } catch { return null; }
   },
   status: tab => {

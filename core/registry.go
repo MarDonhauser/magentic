@@ -74,6 +74,8 @@ const (
 	registryDeleteReviewComment
 	registryMarkReviewSent
 	registryDiscardSentReview
+	registrySetTitle
+	registryRecordResult
 )
 
 // sidebarChange carries the payload of the session-list arrangement changes.
@@ -112,6 +114,7 @@ type RegistryChange struct {
 	status       AgentStatus
 	vendor       AgentVendor
 	service      bool
+	title        string
 	at           time.Time
 	// reviewComment carries the payload of the Review changes: the full
 	// comment for an add, the new text for an edit, and the comment or sent
@@ -239,6 +242,18 @@ func ResetQueuedMessageAttempt(sessionID SessionID, name, messageID string) Regi
 // that show working Sessions side by side leave it out.
 func SetSessionService(sessionID SessionID, name string, service bool) RegistryChange {
 	return RegistryChange{kind: registrySetService, sessionID: sessionID, sessionName: name, service: service}
+}
+
+// SetSessionTitle stores the topic a Session is shown by. An empty title
+// falls back to the Session's name.
+func SetSessionTitle(sessionID SessionID, name, title string) RegistryChange {
+	return RegistryChange{kind: registrySetTitle, sessionID: sessionID, sessionName: name, title: strings.TrimSpace(title)}
+}
+
+// RecordSessionResult stores when a Session's agent last finished a turn, as
+// read from its own record. A later result already recorded is kept.
+func RecordSessionResult(sessionID SessionID, name string, at time.Time) RegistryChange {
+	return RegistryChange{kind: registryRecordResult, sessionID: sessionID, sessionName: name, at: at}
 }
 
 func SetSessionAutomation(sessionID SessionID, name string, automation SessionAutomation) RegistryChange {
@@ -431,7 +446,7 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 		id := state.Agents[idx].ID
 		state.Agents = append(state.Agents[:idx], state.Agents[idx+1:]...)
 		return true, "", id, nil
-	case registryMarkSeen, registryMarkLater, registryReopenSession, registryMarkDeploy, registryRenameSession, registryRecordAgentRun, registrySetVendor, registrySetService, registryRecordStatus, registryResumeSession:
+	case registryMarkSeen, registryMarkLater, registryReopenSession, registryMarkDeploy, registryRenameSession, registryRecordAgentRun, registrySetVendor, registrySetService, registrySetTitle, registryRecordResult, registryRecordStatus, registryResumeSession:
 		idx := sessionIndex(state, change.sessionID, change.sessionName)
 		if idx < 0 {
 			return false, "", "", fmt.Errorf("Session %q nicht gefunden", change.sessionName)
@@ -493,6 +508,16 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 				return false, "", session.ID, nil
 			}
 			session.Service = change.service
+		case registrySetTitle:
+			if session.Title == change.title {
+				return false, "", session.ID, nil
+			}
+			session.Title = change.title
+		case registryRecordResult:
+			if change.at.IsZero() || !change.at.After(session.ResultAt) {
+				return false, "", session.ID, nil
+			}
+			session.ResultAt = change.at
 		case registryRecordStatus:
 			if change.status == StatusUnknown {
 				return false, "", session.ID, nil
@@ -506,6 +531,9 @@ func applyRegistryChange(state *State, change RegistryChange) (bool, ProjectID, 
 			// the two-second poll does not rewrite state.json on every pass.
 			if session.LastStatus == change.status && at.Sub(session.LastStatusAt) < time.Minute {
 				return false, "", session.ID, nil
+			}
+			if turnEnded(session.LastStatus, change.status) && at.After(session.ResultAt) {
+				session.ResultAt = at
 			}
 			session.LastStatus = change.status
 			session.LastStatusAt = at

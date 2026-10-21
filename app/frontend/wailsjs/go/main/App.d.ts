@@ -165,6 +165,8 @@ export function SetNotificationsEnabled(arg1:boolean):Promise<void>;
 
 export function SetSessionService(arg1:string,arg2:boolean):Promise<void>;
 
+export function SetSessionTitle(arg1:string,arg2:string):Promise<void>;
+
 export function ShowNotchEvent(arg1:main.NotchEvent):Promise<void>;
 
 export function SnoozeBreak():Promise<void>;

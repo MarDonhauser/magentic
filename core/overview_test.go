@@ -54,12 +54,12 @@ func TestUnread(t *testing.T) {
 	cases := []struct {
 		name   string
 		status AgentStatus
-		active time.Time
+		result time.Time
 		want   bool
 	}{
-		{"idle mit Aktivität nach dem Blick", StatusIdle, after, true},
-		{"idle ohne neue Aktivität", StatusIdle, before, false},
-		{"wartet und war aktiv", StatusBlocked, after, true},
+		{"idle mit Ergebnis nach dem Blick", StatusIdle, after, true},
+		{"idle ohne neues Ergebnis", StatusIdle, before, false},
+		{"wartet mit Ergebnis nach dem Blick", StatusBlocked, after, true},
 		{"beendet nach dem Blick", StatusExited, after, true},
 		{"läuft gerade", StatusRunning, after, false},
 		{"Background-Agents laufen", StatusAgents, after, false},
@@ -67,15 +67,25 @@ func TestUnread(t *testing.T) {
 		{"tot", StatusDead, after, false},
 	}
 	for _, c := range cases {
-		if got := unread(c.status, seen, c.active); got != c.want {
+		session := Session{SeenAt: seen, ResultAt: c.result, LastStatus: c.status}
+		if got := observationUnread(c.status, session, c.result, true); got != c.want {
 			t.Errorf("%s: %v, erwartet %v", c.name, got, c.want)
 		}
 	}
 }
 
 func TestUnreadNieGesehen(t *testing.T) {
-	if !unread(StatusIdle, time.Time{}, time.Now()) {
-		t.Fatal("nie gesehene Session mit Aktivität muss ungelesen sein")
+	if !observationUnread(StatusIdle, Session{ResultAt: time.Now(), LastStatus: StatusIdle}, time.Time{}, false) {
+		t.Fatal("nie gesehene Session mit Ergebnis muss ungelesen sein")
+	}
+}
+
+// Der Pass, in dem ein Turn endet, kennt die Ergebniszeit noch nicht: die
+// Registry schreibt sie erst danach. Der zuletzt arbeitende Status trägt sie.
+func TestUnreadAmEndeDesTurns(t *testing.T) {
+	session := Session{SeenAt: time.Now(), LastStatus: StatusRunning}
+	if !observationUnread(StatusIdle, session, time.Time{}, false) {
+		t.Fatal("ein gerade beendeter Turn muss ungelesen sein")
 	}
 }
 

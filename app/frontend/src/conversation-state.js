@@ -86,8 +86,22 @@ export function canShowTerminal(session) {
   return session?.runtime !== 'managed';
 }
 
-export function defaultSessionSurface(session) {
-  return session?.term ? 'terminal' : 'conversation';
+export const SESSION_VIEWS = ['magentic', 'cli'];
+
+// resolveSessionView reads the stored choice and, when there is none, the
+// setting it replaced: the old input mode only knew composer or terminal.
+export function resolveSessionView(stored, legacyInputMode) {
+  if (SESSION_VIEWS.includes(stored)) return stored;
+  return legacyInputMode === 'terminal' ? 'cli' : 'magentic';
+}
+
+// defaultSessionSurface decides what a freshly opened session shows. A plain
+// shell is always a terminal; a coding session follows the chosen view as
+// long as its runtime actually offers a terminal.
+export function defaultSessionSurface(session, view = 'magentic') {
+  if (session?.term) return 'terminal';
+  if (view === 'cli' && canShowTerminal(session)) return 'terminal';
+  return 'conversation';
 }
 
 const NOTICES = {

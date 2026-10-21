@@ -209,11 +209,18 @@ type Session struct {
 	// string label (see AgentStatus.PersistedLabel), never as the iota
 	// ordinal, so inserting a status constant later cannot rewrite history.
 	// The zero value reads as never observed, never as a status.
-	LastStatus   AgentStatus        `json:"-"`
-	LastStatusAt time.Time          `json:"last_status_at,omitzero"`
-	Service      bool               `json:"service,omitempty"`
-	Outbox       []QueuedMessage    `json:"outbox,omitempty"`
-	Automation   *SessionAutomation `json:"automation,omitempty"`
+	LastStatus   AgentStatus `json:"-"`
+	LastStatusAt time.Time   `json:"last_status_at,omitzero"`
+	// ResultAt is when the agent last finished a turn, the moment its latest
+	// result appeared. Terminal redraws move the runtime's activity clock but
+	// never this one, so it is what "done" and "unread" are measured against.
+	ResultAt time.Time `json:"result_at,omitzero"`
+	// Title is the human-readable topic shown in place of Name. Name stays the
+	// address runtimes, hooks and agents know the Session by.
+	Title      string             `json:"title,omitempty"`
+	Service    bool               `json:"service,omitempty"`
+	Outbox     []QueuedMessage    `json:"outbox,omitempty"`
+	Automation *SessionAutomation `json:"automation,omitempty"`
 	// Review is the Session's one open Review. A nil Review reads as an empty
 	// open Review, which keeps every state.json written before Reviews existed
 	// valid without a migration step. SentReviews carries the retained sent

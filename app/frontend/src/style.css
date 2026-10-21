@@ -559,6 +559,8 @@ body.reordering .pname, body.reordering .divider-name { pointer-events: none; }
   outline: none;
 }
 
+.title-rename { flex: 0 1 240px; font-weight: var(--fw-semibold); }
+
 /* Eine Session ausserhalb ihres Projekts nennt selbst, wozu sie gehoert. */
 .sproject {
   flex: none;
@@ -2080,9 +2082,14 @@ body.tl-open #timeline { display: flex; }
 }
 #hydra-grid .hydra-head { display: flex; }
 .hydra-head .hh-avatar { display: flex; flex: none; }
-.hydra-head .hh-name { font-weight: var(--fw-semibold); color: var(--ink); }
+.hydra-head .hh-name {
+  min-width: 0; flex: 0 1 auto;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-weight: var(--fw-semibold); color: var(--ink);
+}
 .hydra-head .hh-status { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .hydra-head .hh-magnet,
+.hydra-head .hh-hide,
 .hydra-head .hh-max,
 .hydra-head .hh-kill {
   position: relative;
@@ -2101,17 +2108,18 @@ body.tl-open #timeline { display: flex; }
               background-color var(--duration-fast) var(--ease-out),
               box-shadow var(--duration-fast) var(--ease-out);
 }
-.hydra-head .hh-magnet .ico { width: 14px; height: 14px; }
+.hydra-head .hh-magnet .ico,
+.hydra-head .hh-hide .ico { width: 14px; height: 14px; }
 .hydra-head .hh-magnet { touch-action: none; }
 .hydra-head .hh-max { font-size: var(--fs-body); }
 .hydra-head .hh-kill { font-size: var(--fs-label); white-space: nowrap; }
 .hydra-head .hh-magnet:hover:not(:disabled):not([aria-disabled="true"]),
+.hydra-head .hh-hide:hover,
 .hydra-head .hh-max:hover {
   background: var(--raise-2);
   color: var(--accent);
 }
-.hydra-head .hh-kill:hover,
-.hydra-head .hh-kill[data-confirm] {
+.hydra-head .hh-kill:hover {
   background: color-mix(in srgb, var(--critical) 10%, transparent);
   color: var(--critical);
 }
@@ -2289,6 +2297,7 @@ body.session-magnet-dragging * { cursor: grabbing !important; user-select: none 
 @media (prefers-reduced-motion: reduce) {
   #hydra-grid .term-wrap,
   .hydra-head .hh-magnet,
+  .hydra-head .hh-hide,
   .hydra-head .hh-max,
   .hydra-head .hh-kill { transition: none; }
   #hydra-handoff-panel[aria-busy="true"] .ico { animation: none; }

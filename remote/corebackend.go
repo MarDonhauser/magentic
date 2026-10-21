@@ -251,6 +251,15 @@ func (b *CoreBackend) HandleCall(ctx context.Context, method string, params json
 		return b.mutate(identity, method, func() (any, error) {
 			return nil, b.markSession(ctx, method, args.SessionID, args.Service)
 		})
+	case "SetSessionTitle":
+		var args struct {
+			SessionID string `json:"sessionID"`
+			Title     string `json:"title"`
+		}
+		decodeParams(params, &args)
+		return b.mutate(identity, method, func() (any, error) {
+			return nil, b.setSessionTitle(ctx, args.SessionID, args.Title)
+		})
 	case "SetMainBranch":
 		var args struct {
 			ProjectID string `json:"projectID"`
@@ -766,6 +775,15 @@ func (b *CoreBackend) markSession(ctx context.Context, method, sessionID string,
 	}
 	_, err = core.OpenRegistry(core.StatePath()).Change(ctx,
 		core.SetSessionService(session.ID, session.Name, service))
+	return err
+}
+
+func (b *CoreBackend) setSessionTitle(ctx context.Context, sessionID, title string) error {
+	_, session, err := b.loadSession(sessionID)
+	if err != nil {
+		return err
+	}
+	_, err = core.OpenRegistry(core.StatePath()).Change(ctx, core.SetSessionTitle(session.ID, session.Name, title))
 	return err
 }
 

@@ -424,9 +424,7 @@ func observeWithRunner(ctx context.Context, sessions []Session, runner observati
 			observed.StatusSource = resolved.Source
 			observed.Detail = resolved.Detail
 			observed.Attention = observationAttention(observed.Status)
-			observed.Unread = observationUnread(
-				observed.Status, session.SeenAt, observed.Activity, observed.ActivityKnown,
-			)
+			observed.Unread = observationUnread(observed.Status, session, observed.Activity, observed.ActivityKnown)
 			snapshot.Problems = append(snapshot.Problems, ObservationProblem{
 				SessionID: session.ID, RuntimeName: runtimeNames[result.index],
 				Operation: "capture-pane", Message: observationErrorMessage(result.err), TimedOut: result.timedOut,
@@ -446,9 +444,7 @@ func observeWithRunner(ctx context.Context, sessions []Session, runner observati
 		observed.StatusSource = resolved.Source
 		observed.Detail = resolved.Detail
 		observed.Attention = observationAttention(observed.Status)
-		observed.Unread = observationUnread(
-			observed.Status, session.SeenAt, observed.Activity, observed.ActivityKnown,
-		)
+		observed.Unread = observationUnread(observed.Status, session, observed.Activity, observed.ActivityKnown)
 	}
 
 	for _, observed := range snapshot.Sessions {
@@ -677,10 +673,9 @@ func resolveSessionStatus(in statusInput) statusOutcome {
 	}
 	status := evaluated.Status
 	// Most kinds have no distinguishable finished screen. A resting screen the
-	// developer has not looked at since the agent last moved is what "done"
-	// means for them; the signal is the one Unread already uses.
-	if status == StatusIdle && len(kind.done) == 0 &&
-		in.activityKnown && in.activity.After(in.session.SeenAt) {
+	// developer has not looked at since the agent last finished a turn is what
+	// "done" means for them; the signal is the one Unread already uses.
+	if status == StatusIdle && len(kind.done) == 0 && resultUnseen(in.session) {
 		status = StatusDone
 	}
 	return statusOutcome{Status: status, Source: StatusSourceSnapshot, Detail: evaluated.Detail}
@@ -716,9 +711,7 @@ func ApplyHookReports(snapshot ObservationSnapshot, sessions []Session, now time
 		observed.StatusSource = StatusSourceHook
 		observed.Detail = record.detail
 		observed.Attention = observationAttention(record.status)
-		observed.Unread = observationUnread(
-			record.status, session.SeenAt, observed.Activity, observed.ActivityKnown,
-		)
+		observed.Unread = observationUnread(record.status, session, observed.Activity, observed.ActivityKnown)
 		changed = true
 	}
 	return refined, changed
@@ -757,16 +750,46 @@ func observationAttention(status AgentStatus) AttentionState {
 	}
 }
 
-func observationUnread(status AgentStatus, seenAt, activity time.Time, activityKnown bool) bool {
-	if !activityKnown {
-		return false
-	}
+// observationUnread measures a resting Session against the agent's last
+// finished turn, not the pane's activity: Claude Code redraws its screen on
+// resizes and status line refreshes, which would otherwise mark long-read
+// Sessions unread again. An open question is new from the moment it appeared.
+func observationUnread(status AgentStatus, session Session, activity time.Time, activityKnown bool) bool {
 	switch status {
-	case StatusDone, StatusIdle, StatusBlocked, StatusAwaitingDecision, StatusExited:
-		return activity.After(seenAt)
+	case StatusBlocked, StatusAwaitingDecision:
+		return activityKnown && activity.After(session.SeenAt)
+	case StatusDone, StatusIdle, StatusExited:
+		return resultUnseen(session)
 	default:
 		return false
 	}
+}
+
+// turnEnded reports whether moving from previous to next means the agent just
+// finished a turn. A hook-reported "done" counts even when no pass saw the
+// short turn working.
+func turnEnded(previous, next AgentStatus) bool {
+	switch next {
+	case StatusDone:
+		return previous != StatusDone
+	case StatusIdle:
+		return turnWorking(previous)
+	}
+	return false
+}
+
+func turnWorking(status AgentStatus) bool {
+	return status == StatusRunning || status == StatusAgents || status == StatusShell
+}
+
+// resultUnseen reports a result the developer has not looked at yet. A
+// Session last recorded as working finishes its turn in this very pass,
+// before the Registry has stored the result's time.
+func resultUnseen(session Session) bool {
+	if turnWorking(session.LastStatus) {
+		return true
+	}
+	return session.ResultAt.After(session.SeenAt)
 }
 
 func normalizeObservedContent(content string) string {
