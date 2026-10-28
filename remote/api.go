@@ -24,6 +24,8 @@ var HostAPIMethods = []string{
 	"BreakOver",
 	"Breaks",
 	"BuildInfo",
+	"CheckForUpdates",
+	"Updates",
 	"Cleanup",
 	"ClearNotch",
 	"CloseTerm",

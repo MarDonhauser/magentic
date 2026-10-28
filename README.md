@@ -67,6 +67,13 @@ einen Agent attacht, Scrollrad navigiert.
 
 ## Desktop-App
 
+Unter **Einstellungen → App-Updates → Nach Updates suchen** (oder im macOS-Menü
+**magentic**) lassen sich veröffentlichte Versionen direkt laden und nach
+Bestätigung installieren. Release-Builds verwenden Sparkle mit signiertem Feed
+und signierten Update-Archiven. Entwicklungsbuilds erklären, wenn App-Updates
+noch nicht eingerichtet sind. Einrichtung und Veröffentlichung:
+[Updates in der Desktop-App](docs/in-app-updates.md).
+
 Die App (Wails, Go + xterm.js) zeigt links Sessions **nach Projekt gruppiert**,
 unten die Claude-Limits (5h/7d). Die Übersicht enthält Projekt-Karten mit
 Worktree-Zeilen (ahead/behind, Git-Status, Warnungen), Agent-Pills und alle

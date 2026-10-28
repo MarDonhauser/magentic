@@ -1,0 +1,101 @@
+name: Desktop release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version (MAJOR.MINOR.PATCH); builds artifacts without publishing"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-14
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: app/go.mod
+          cache-dependency-path: |
+            go.sum
+            app/go.sum
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/frontend/package-lock.json
+      - name: Tests und Frontend
+        run: |
+          go test ./...
+          python3 -m unittest discover -s scripts -p 'test_*.py'
+          ./scripts/test-native-updates.sh
+          cd app/frontend
+          npm ci
+          npm test
+          npm run build
+          cd ..
+          go test ./...
+      - name: Wails installieren
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+      - name: Signierte Update-Artefakte bauen
+        env:
+          MAGENTIC_UPDATE_PUBLIC_KEY: ${{ vars.MAGENTIC_UPDATE_PUBLIC_KEY }}
+          UPDATE_PRIVATE_KEY: ${{ secrets.MAGENTIC_UPDATE_PRIVATE_KEY }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          test -n "$MAGENTIC_UPDATE_PUBLIC_KEY" || { echo 'Repository-Variable MAGENTIC_UPDATE_PUBLIC_KEY fehlt.' >&2; exit 1; }
+          test -n "$UPDATE_PRIVATE_KEY" || { echo 'Repository-Secret MAGENTIC_UPDATE_PRIVATE_KEY fehlt.' >&2; exit 1; }
+          KEY_FILE="$(mktemp)"
+          trap 'rm -f "$KEY_FILE"' EXIT
+          chmod 600 "$KEY_FILE"
+          printf '%s' "$UPDATE_PRIVATE_KEY" > "$KEY_FILE"
+          unset UPDATE_PRIVATE_KEY
+          export MAGENTIC_UPDATE_PRIVATE_KEY_FILE="$KEY_FILE"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            RELEASE_VERSION="${GITHUB_REF_NAME#v}"
+          else
+            RELEASE_VERSION="$REQUESTED_VERSION"
+          fi
+          ./scripts/build-release.sh "$RELEASE_VERSION" "$RUNNER_TEMP/magentic-release"
+          ./scripts/test-native-updates.sh
+      - uses: actions/upload-artifact@v6
+        with:
+          name: magentic-desktop-release
+          path: ${{ runner.temp }}/magentic-release/*
+          if-no-files-found: error
+      - name: Release veröffentlichen
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The stable feed always points to GitHub's latest release. Refuse
+          # older versions so publishing a maintenance tag cannot downgrade it.
+          export PUBLISHED_TAGS="$(gh release list --exclude-drafts --exclude-pre-releases --limit 100 --json tagName)"
+          python3 - <<'PY'
+          import json, os, re
+          def version(tag):
+              return tuple(map(int, tag[1:].split('.'))) if re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', tag) else None
+          target = version(os.environ['GITHUB_REF_NAME'])
+          published = [version(r['tagName']) for r in json.loads(os.environ['PUBLISHED_TAGS'])]
+          if target is None or any(v is not None and v >= target for v in published):
+              raise SystemExit('Die Release-Version muss neuer als alle veröffentlichten stabilen Versionen sein.')
+          PY
+          # Upload all files to a draft before making the feed discoverable.
+          # Existing releases are immutable: a rerun must not replace an archive
+          # that installed apps have already authenticated from the feed.
+          gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP"/magentic-release/* \
+            --draft --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest

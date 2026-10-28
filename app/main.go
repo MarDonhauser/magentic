@@ -63,6 +63,7 @@ func main() {
 		BackgroundColour:  &options.RGBA{R: 32, G: 36, B: 43, A: 1},
 		HideWindowOnClose: true,
 		OnStartup:         app.startup,
+		OnDomReady:        func(context.Context) { installUpdaterMenu() },
 		OnShutdown:        app.shutdown,
 		DragAndDrop: &options.DragAndDrop{
 			EnableFileDrop:     true,

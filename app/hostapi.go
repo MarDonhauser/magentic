@@ -31,6 +31,7 @@ type HostAPI interface {
 	BreakOver()
 	Breaks() (core.BreakAdvice, error)
 	BuildInfo() string
+	CheckForUpdates() error
 	Cleanup(projectID, reference string) (string, error)
 	ClearNotch(id string) error
 	CloseTerm(connectionKey string)
@@ -107,6 +108,7 @@ type HostAPI interface {
 	Timeline() (TimelineResult, error)
 	WatchConversation(sessionID string)
 	WorktreeDiff(projectID, reference string) (string, error)
+	Updates() UpdateStatus
 	WriteTerm(connectionKey, dataB64 string)
 	Zeitgeist() core.ZgInfo
 	ZeitgeistPause() error

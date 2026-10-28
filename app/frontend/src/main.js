@@ -21,6 +21,7 @@ import {
   Breaks, BreakHeartbeat, TakeBreak, EndBreak, SnoozeBreak, BreakConfig, SetBreakConfig, BreakOver,
   NotificationsEnabled, SetNotificationsEnabled,
   CompleteFiles, CompleteCommands, PromptLinePattern,
+  Updates, CheckForUpdates,
 } from '../wailsjs/go/main/App';
 import { createConversationView } from './conversation.js';
 import { canShowTerminal, defaultSessionSurface, resolveSessionView } from './conversation-state.js';
@@ -47,6 +48,7 @@ import { mountDock, toggleDock, isDockOpen, closeDockTab, dockTabs, refitDock, o
 import { mountBreaks, updateBreaks, openBreak, openBreakSettings, isBreakOpen } from './breaks.js';
 import { initThemeToggle, onThemeChange, terminalTheme, terminalContrastFloor } from './theme.js';
 import { installDragRegionZoom } from './window-zoom.js';
+import { mountUpdates } from './updates.js';
 import { TERMINAL_OPTIONS, setUpTerminal } from './terminal-setup.js';
 import { clearTextureAtlases } from './texture-atlas.js';
 import { createHydraHandoff } from './hydra-handoff.js';
@@ -1545,6 +1547,7 @@ async function renderSettings() {
   const currentVendor = resolvedDefaultVendor();
   $('settings-view').innerHTML =
     `<div class="view-head"><h2>Einstellungen</h2></div>` +
+    `<div id="app-updates-slot"></div>` +
     `<div class="card"><div class="card-head"><h2>Neue Session über „+“</h2></div>` +
     `<label class="settings-option"><input type="radio" name="set-default-vendor" value=""${currentVendor === '' ? ' checked' : ''}>` +
     `<span><strong>Immer fragen</strong><br>Der Plus-Knopf öffnet das Menü mit allen Harnesses.</span></label>` +
@@ -1576,6 +1579,7 @@ async function renderSettings() {
     `<span><strong>Benachrichtigungen an</strong><br>Desktop-Meldungen (z. B. „bereit zum Review"), Dock-Hüpfen und In-den-Vordergrund-Holen. ` +
     `Ausgeschaltet bleibt nur die Zahl am Dock-Icon.</span></label>` +
     `</div>`;
+  mountUpdates($('app-updates-slot'), { Updates, CheckForUpdates });
   for (const radio of document.querySelectorAll('input[name="set-default-vendor"]')) {
     radio.onchange = () => setDefaultVendor(radio.value);
   }

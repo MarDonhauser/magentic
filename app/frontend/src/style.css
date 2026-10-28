@@ -2669,6 +2669,10 @@ body.session-magnet-dragging * { cursor: grabbing !important; user-select: none 
 .settings-option.settings-size { align-items: center; justify-content: space-between; max-width: 320px; }
 .settings-option.disabled { opacity: 0.5; cursor: default; }
 .settings-hint { color: var(--ink-2); font-size: 12px; padding: 6px 4px 0; margin: 0; }
+.update-version { margin: 0 0 var(--space-sm); font-weight: var(--fw-semibold); }
+.update-message { margin: 0 0 var(--space-md); max-width: 65ch; color: var(--ink-2); line-height: var(--lh-text); overflow-wrap: anywhere; }
+.update-message.update-error { color: var(--critical); }
+.update-check { min-height: 36px; max-width: 100%; white-space: normal; }
 .settings-option select {
   background: var(--raise);
   color: var(--ink);

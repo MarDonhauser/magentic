@@ -35,6 +35,9 @@ type PolicyEntry struct {
 // Entfernung, Project-Registrierung per Pfad, Session-Kill und alles, was
 // einen Client-Pfad trägt, ist beschränkt.
 var RemoteActionPolicy = map[string]PolicyEntry{
+	// Updates belong to the local desktop, never to an attached remote host.
+	"Updates":         {ActionRestricted, "Lokale App-Updates"},
+	"CheckForUpdates": {ActionRestricted, "Lokale App-Updates"},
 	// Beobachten: erlaubt.
 	"Overview":            {ActionPermitted, "Beobachtung"},
 	"Inbox":               {ActionPermitted, "Beobachtung"},

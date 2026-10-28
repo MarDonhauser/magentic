@@ -2309,6 +2309,26 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class UpdateStatus {
+	    version: string;
+	    enabled: boolean;
+	    canCheck: boolean;
+	    sessionInProgress: boolean;
+	    reason: string;
+
+	    static createFrom(source: any = {}) {
+	        return new UpdateStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.version = source["version"];
+	        this.enabled = source["enabled"];
+	        this.canCheck = source["canCheck"];
+	        this.sessionInProgress = source["sessionInProgress"];
+	        this.reason = source["reason"];
+	    }
+	}
 
 }
 

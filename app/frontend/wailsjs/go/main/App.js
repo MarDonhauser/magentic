@@ -66,6 +66,10 @@ export function BuildInfo() {
   return window['go']['main']['App']['BuildInfo']();
 }
 
+export function CheckForUpdates() {
+  return window['go']['main']['App']['CheckForUpdates']();
+}
+
 export function Cleanup(arg1, arg2) {
   return window['go']['main']['App']['Cleanup'](arg1, arg2);
 }
@@ -360,6 +364,10 @@ export function TakeBreak() {
 
 export function Timeline() {
   return window['go']['main']['App']['Timeline']();
+}
+
+export function Updates() {
+  return window['go']['main']['App']['Updates']();
 }
 
 export function WatchConversation(arg1) {

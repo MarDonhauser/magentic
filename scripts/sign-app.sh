@@ -13,6 +13,17 @@ if [[ "$TARGET" == *.app/* ]]; then
   TARGET="${TARGET%%.app/*}.app"
 fi
 
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -n "${MAGENTIC_UPDATE_PUBLIC_KEY:-}" ]; then
+  "$ROOT_DIR/scripts/prepare-sparkle.sh"
+fi
+python3 "$ROOT_DIR/scripts/configure-updates.py" "$TARGET"
+
+if [ "$IDENTITY" = "-" ]; then
+  codesign --force --deep --sign - --identifier com.wails.magentic "$TARGET"
+  exit 0
+fi
+
 CERT_SHA1="$(security find-certificate -c "$IDENTITY" -Z 2>/dev/null | awk -F': ' '/SHA-1 hash/{print $2}')"
 if [ -z "$CERT_SHA1" ]; then
   echo "✗ Zertifikat \"$IDENTITY\" nicht im Keychain — einmalig ./scripts/setup-signing.sh ausführen." >&2

@@ -35,6 +35,8 @@ export function Breaks():Promise<core.BreakAdvice>;
 
 export function BuildInfo():Promise<string>;
 
+export function CheckForUpdates():Promise<void>;
+
 export function Cleanup(arg1:string,arg2:string):Promise<string>;
 
 export function ClearNotch(arg1:string):Promise<void>;
@@ -182,6 +184,8 @@ export function SwitchSessionVendor(arg1:string,arg2:string,arg3:boolean):Promis
 export function TakeBreak():Promise<void>;
 
 export function Timeline():Promise<main.TimelineResult>;
+
+export function Updates():Promise<main.UpdateStatus>;
 
 export function WatchConversation(arg1:string):Promise<void>;
 

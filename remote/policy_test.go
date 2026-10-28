@@ -45,6 +45,7 @@ func TestPolicyDefaultSplit(t *testing.T) {
 	}
 	restricted := []string{
 		"RemoveWorktree", "RemoveProject", "AddProject", "KillSession",
+		"Updates", "CheckForUpdates",
 	}
 	for _, name := range restricted {
 		entry, known := Classify(name)

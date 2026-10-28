@@ -3,3 +3,4 @@ app/app
 .DS_Store
 .claude/worktrees/
 .superpowers/
+scripts/__pycache__/
