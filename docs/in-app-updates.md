@@ -37,11 +37,17 @@ kommt aus dem Tag und wird vor dem Signieren in beide Bundle-Versionsfelder
 geschrieben. Erlaubt ist `MAJOR.MINOR.PATCH`; Vorabversionen sind kein Bestandteil
 dieses stabilen Update-Kanals. Releases in aufsteigender Versionsfolge erstellen.
 
-Der Workflow lädt drei Dateien zunächst in einen GitHub-Release-Entwurf:
+Der Workflow signiert die App mit Apple Developer ID, notarisiert sie, heftet
+das Apple-Ticket an und prüft Gatekeeper. Erst danach erstellt er das
+Update-Archiv. Auch die DMG wird signiert, notarisiert und mit einem Ticket
+versehen. Schlägt einer dieser Schritte fehl, wird kein Release veröffentlicht.
+
+Er lädt die Dateien zunächst in einen GitHub-Release-Entwurf:
 
 - `magentic-0.1.0.dmg` für die erste Installation.
 - `magentic-0.1.0.zip` als signiertes Update-Archiv.
 - `appcast.xml` als ebenfalls signierter Update-Feed.
+- `SHA256SUMS` mit den Prüfsummen der drei Dateien.
 
 Erst wenn alle Dateien vorhanden sind, veröffentlicht er das Release. Der feste
 Feed unter `https://github.com/MarDonhauser/magentic/releases/latest/download/appcast.xml`
@@ -57,12 +63,22 @@ Symlinks und Hilfsprozesse werden vor dem Signieren in die App eingebettet.
 Die macOS-Mindestversion wird auf mindestens die des Sparkle-SDK angehoben
 (bei dieser Version macOS 12).
 
-Der Workflow verwendet wie der bisherige DMG-Build eine Ad-hoc-Codesignatur;
-die Update-Authentizität liefern die separaten Sparkle-Signaturen. Damit wird
-die erste Installation nicht automatisch Developer-ID-signiert oder notarisiert.
-Für eine entsprechende öffentliche Distribution ist die Apple-Signierung mit
-Notarisierung zusätzlich einzurichten. Lokale Builds mit `magentic-dev`
-behalten die bestehende Signierlogik und deren Mikrofonberechtigungen.
+Zusätzlich zu den Sparkle-Schlüsseln benötigt GitHub Actions diese
+Repository-Secrets für Apple-Signierung und Notarisierung:
+
+- **MAGENTIC_APPLE_CERTIFICATE_P12**: Base64 des passwortgeschützten
+  Developer-ID-Application-Zertifikats einschließlich privatem Schlüssel.
+- **MAGENTIC_APPLE_CERTIFICATE_PASSWORD**: Passwort dieses PKCS#12-Exports.
+- **MAGENTIC_APPLE_API_PRIVATE_KEY**: privater App-Store-Connect-API-Schlüssel.
+
+Als Repository-Variablen werden **MAGENTIC_SIGN_IDENTITY** (der vollständige
+Developer-ID-Application-Name), **MAGENTIC_APPLE_API_KEY_ID** und
+**MAGENTIC_APPLE_API_ISSUER_ID** hinterlegt. Die Pipeline importiert die
+Signieridentität in einen temporären Schlüsselbund und entfernt diesen sowie
+die temporären Apple-Schlüsseldateien am Ende des Laufs. Die Signierung
+verwendet Hardened Runtime, sichere Zeitstempel und das Mikrofon-Entitlement.
+Sparkle-Hilfsprozesse werden vor dem Framework und der App signiert.
+Lokale Builds mit `magentic-dev` behalten ihre bestehende Signierlogik.
 
 ## Lokaler Release-Build
 
@@ -71,6 +87,12 @@ export MAGENTIC_UPDATE_PUBLIC_KEY='öffentlicher Base64-Schlüssel'
 export MAGENTIC_UPDATE_PRIVATE_KEY_FILE='/sicherer/pfad/magentic-key'
 ./scripts/build-release.sh 0.1.0 /tmp/magentic-release
 ```
+
+Ohne `MAGENTIC_NOTARIZE=true` ist das ein lokaler, nicht notarisierter
+Artefakt-Build. Für eine notarisierte Distribution zusätzlich die
+Developer-ID-Identität als `MAGENTIC_SIGN_IDENTITY` und entweder
+`MAGENTIC_NOTARY_PROFILE` oder die drei Werte `MAGENTIC_APPLE_API_KEY_FILE`,
+`MAGENTIC_APPLE_API_KEY_ID`, `MAGENTIC_APPLE_API_ISSUER_ID` setzen.
 
 Das Skript baut und prüft die Artefakte, veröffentlicht aber nichts und ersetzt
 keine installierte App. Es startet auch keine laufende App neu. Für einen

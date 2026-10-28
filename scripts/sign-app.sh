@@ -19,6 +19,22 @@ if [ -n "${MAGENTIC_UPDATE_PUBLIC_KEY:-}" ]; then
 fi
 python3 "$ROOT_DIR/scripts/configure-updates.py" "$TARGET"
 
+if [[ "$IDENTITY" == "Developer ID Application:"* ]]; then
+  # Sign nested Sparkle code from the inside out. Downloader may carry its
+  # own sandbox entitlements, which must not be applied to the other helpers.
+  SPARKLE="$TARGET/Contents/Frameworks/Sparkle.framework"
+  if [ -d "$SPARKLE" ]; then
+    codesign --force --sign "$IDENTITY" --options runtime --timestamp "$SPARKLE/Versions/B/XPCServices/Installer.xpc"
+    codesign --force --sign "$IDENTITY" --options runtime --timestamp --preserve-metadata=entitlements "$SPARKLE/Versions/B/XPCServices/Downloader.xpc"
+    codesign --force --sign "$IDENTITY" --options runtime --timestamp "$SPARKLE/Versions/B/Autoupdate"
+    codesign --force --sign "$IDENTITY" --options runtime --timestamp "$SPARKLE/Versions/B/Updater.app"
+    codesign --force --sign "$IDENTITY" --options runtime --timestamp "$SPARKLE"
+  fi
+  codesign --force --sign "$IDENTITY" --options runtime --timestamp \
+    --identifier com.wails.magentic --entitlements "$ROOT_DIR/app/build/darwin/entitlements.plist" "$TARGET"
+  exit 0
+fi
+
 if [ "$IDENTITY" = "-" ]; then
   codesign --force --deep --sign - --identifier com.wails.magentic "$TARGET"
   exit 0

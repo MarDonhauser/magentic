@@ -20,6 +20,11 @@ concurrency:
 jobs:
   release:
     runs-on: macos-14
+    env:
+      MAGENTIC_NOTARIZE: "true"
+      MAGENTIC_SIGN_IDENTITY: ${{ vars.MAGENTIC_SIGN_IDENTITY }}
+      MAGENTIC_APPLE_API_KEY_ID: ${{ vars.MAGENTIC_APPLE_API_KEY_ID }}
+      MAGENTIC_APPLE_API_ISSUER_ID: ${{ vars.MAGENTIC_APPLE_API_ISSUER_ID }}
     permissions:
       contents: write
     steps:
@@ -48,6 +53,30 @@ jobs:
           go test ./...
       - name: Wails installieren
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+      - name: Apple-Signierung einrichten
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.MAGENTIC_APPLE_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MAGENTIC_APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.MAGENTIC_APPLE_API_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$CERTIFICATE_BASE64" && test -n "$CERTIFICATE_PASSWORD" && test -n "$APPLE_API_PRIVATE_KEY"
+          test -n "$MAGENTIC_SIGN_IDENTITY" && test -n "$MAGENTIC_APPLE_API_KEY_ID" && test -n "$MAGENTIC_APPLE_API_ISSUER_ID"
+          KEYCHAIN="$RUNNER_TEMP/magentic-signing.keychain-db"
+          CERTIFICATE_FILE="$RUNNER_TEMP/magentic-certificate.p12"
+          API_KEY_FILE="$RUNNER_TEMP/magentic-notary-key.p8"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+          printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_FILE"
+          printf '%s' "$APPLE_API_PRIVATE_KEY" > "$API_KEY_FILE"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERTIFICATE_FILE" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" "$HOME/Library/Keychains/login.keychain-db"
+          echo "MAGENTIC_APPLE_API_KEY_FILE=$API_KEY_FILE" >> "$GITHUB_ENV"
       - name: Signierte Update-Artefakte bauen
         env:
           MAGENTIC_UPDATE_PUBLIC_KEY: ${{ vars.MAGENTIC_UPDATE_PUBLIC_KEY }}
@@ -99,3 +128,15 @@ jobs:
           gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP"/magentic-release/* \
             --draft --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
           gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+      - name: Signierdaten entfernen
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/magentic-signing.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/magentic-signing.keychain-db"
+          fi
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          for name in ('magentic-certificate.p12', 'magentic-notary-key.p8'):
+              (Path(os.environ['RUNNER_TEMP']) / name).unlink(missing_ok=True)
+          PY
