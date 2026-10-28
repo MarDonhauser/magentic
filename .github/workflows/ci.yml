@@ -16,18 +16,18 @@ jobs:
     # Die Tests in app/ übersetzen darwin-cgo (Notch, Badge) und brauchen macOS.
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Go aus go.mod statt der neuesten Version: Wails 2.12 scheitert unter
       # Go 1.27 an der Bindings-Generierung.
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: app/go.mod
           cache-dependency-path: |
             go.sum
             app/go.sum
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -39,15 +39,21 @@ jobs:
       - name: go test (Root)
         run: go test ./...
 
-      - name: go test (app)
-        working-directory: app
-        run: go test ./...
-
       - name: npm test (Frontend)
         working-directory: app/frontend
         run: |
           npm ci
           npm test
+
+      # app/main.go bettet frontend/dist ein; das Verzeichnis ist gitignored
+      # und muss vor dem Übersetzen von app/ existieren.
+      - name: Frontend bauen
+        working-directory: app/frontend
+        run: npm run build
+
+      - name: go test (app)
+        working-directory: app
+        run: go test ./...
 
   release:
     needs: test
@@ -60,16 +66,16 @@ jobs:
       # (scripts/sign-app.sh) signiert dann ad hoc.
       MAGENTIC_SIGN_IDENTITY: "-"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: app/go.mod
           cache-dependency-path: |
             go.sum
             app/go.sum
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -106,7 +112,7 @@ jobs:
           ln -s /Applications "$STAGE/Applications"
           hdiutil create -volname magentic -srcfolder "$STAGE" -ov -format UDZO "$DMG"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ env.DMG }}
           path: ${{ env.DMG }}
