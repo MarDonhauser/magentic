@@ -2,12 +2,23 @@ package core
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func newRecordingLifecycle(t *testing.T) (*SessionLifecycle, *fakeLifecycleRuntime, *Registry, Project) {
 	t.Helper()
+	// These tests inject a recording runtime, so availability must not depend
+	// on coding-agent CLIs installed on the developer's machine or CI runner.
+	bin := t.TempDir()
+	for _, name := range []string{"claude", "codex"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 99\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	lifecycle, runtime, registry, _ := lifecycleHarness(t)
 	project := registerLifecycleProject(t, registry)
 	return lifecycle, runtime, registry, project
