@@ -13,6 +13,12 @@ if [[ "$TARGET" == *.app/* ]]; then
   TARGET="${TARGET%%.app/*}.app"
 fi
 
+# "-" signiert ad hoc — für CI-Builds, auf deren Runner es kein magentic-dev gibt.
+if [ "$IDENTITY" = "-" ]; then
+  codesign --force --deep --sign - --identifier com.wails.magentic "$TARGET"
+  exit 0
+fi
+
 CERT_SHA1="$(security find-certificate -c "$IDENTITY" -Z 2>/dev/null | awk -F': ' '/SHA-1 hash/{print $2}')"
 if [ -z "$CERT_SHA1" ]; then
   echo "✗ Zertifikat \"$IDENTITY\" nicht im Keychain — einmalig ./scripts/setup-signing.sh ausführen." >&2

@@ -232,9 +232,13 @@ type SessionLifecycle struct {
 	// ledger ist der durable Speicher der Transitionen. Er liegt in
 	// lifecycle_ledger.go: eigenes Modul, drei Methoden, eigener Begriff für
 	// Ablösung.
-	ledger     lifecycleLedgerStore
-	observe    func(context.Context, []Session) ObservationSnapshot
-	discover   func(context.Context, *State) RegistryDiscovery
+	ledger   lifecycleLedgerStore
+	observe  func(context.Context, []Session) ObservationSnapshot
+	discover func(context.Context, *State) RegistryDiscovery
+	// installed prüft, ob das Programm eines Vendors vorhanden ist. Tests
+	// ersetzen es, damit ihr Ergebnis nicht davon abhängt, welche Agent-CLIs
+	// auf dem Rechner liegen.
+	installed  func(AgentProvider) bool
 	ledgerPath string
 	now        func() time.Time
 }
@@ -267,6 +271,7 @@ func newSessionLifecycle(registry lifecycleRegistry, runtime lifecycleRuntime, r
 		transitions: newTransitionCoordinator(lockRoot),
 		ledger:      newLifecycleLedgerStore(ledgerPath, time.Now),
 		observe:     Observe, discover: DiscoverNew,
+		installed:  providerBinaryAvailable,
 		ledgerPath: ledgerPath, now: time.Now,
 	}
 }
@@ -514,7 +519,7 @@ func (l *SessionLifecycle) SwitchVendor(ctx context.Context, sessionID SessionID
 	if !known {
 		return Session{}, fmt.Errorf("unbekannter Agent-Vendor %q", vendor)
 	}
-	if !providerBinaryAvailable(provider) {
+	if !l.installed(provider) {
 		return Session{}, fmt.Errorf("%s ist nicht installiert (%s nicht im PATH)", vendor, provider.Binary())
 	}
 	snapshot, err := l.registry.Snapshot(ctx)
