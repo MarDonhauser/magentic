@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Die Tests in app/ übersetzen darwin-cgo (Notch, Badge) und brauchen macOS.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      # Go aus go.mod statt der neuesten Version: Wails 2.12 scheitert unter
+      # Go 1.27 an der Bindings-Generierung.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: app/go.mod
+          cache-dependency-path: |
+            go.sum
+            app/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/frontend/package-lock.json
+
+      - name: go vet (Root)
+        run: go vet ./...
+
+      - name: go test (Root)
+        run: go test ./...
+
+      - name: go test (app)
+        working-directory: app
+        run: go test ./...
+
+      - name: npm test (Frontend)
+        working-directory: app/frontend
+        run: |
+          npm ci
+          npm test
+
+  release:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: macos-14
+    permissions:
+      contents: write
+    env:
+      # Kein magentic-dev-Zertifikat auf dem Runner — der Post-Build-Hook
+      # (scripts/sign-app.sh) signiert dann ad hoc.
+      MAGENTIC_SIGN_IDENTITY: "-"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: app/go.mod
+          cache-dependency-path: |
+            go.sum
+            app/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/frontend/package-lock.json
+
+      - name: Wails installieren
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+
+      - name: Version bestimmen
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="0.0.0-$(git rev-parse --short HEAD)"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "DMG=magentic-$VERSION.dmg" >> "$GITHUB_ENV"
+
+      # Nur auf dem Runner: Info.plist liest die Version aus wails.json.
+      - name: Version in wails.json eintragen
+        working-directory: app
+        run: |
+          jq --arg v "$VERSION" '.info.productVersion = $v' wails.json > wails.json.tmp
+          mv wails.json.tmp wails.json
+
+      - name: App bauen
+        working-directory: app
+        run: wails build -platform darwin/universal -clean
+
+      - name: DMG erzeugen
+        run: |
+          STAGE="$(mktemp -d)"
+          cp -R app/build/bin/magentic.app "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"
+          hdiutil create -volname magentic -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.DMG }}
+          path: ${{ env.DMG }}
+
+      - name: Release veröffentlichen
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$DMG" --title "$GITHUB_REF_NAME" --generate-notes \
+            || gh release upload "$GITHUB_REF_NAME" "$DMG" --clobber

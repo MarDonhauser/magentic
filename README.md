@@ -28,6 +28,25 @@ Zwei Oberflächen, eine gemeinsame Logik (`core/`):
 - tmux
 - claude (Claude Code CLI)
 
+## Installation
+
+Die Desktop-App gibt es fertig gebaut als DMG unter
+[Releases](https://github.com/MarDonhauser/magentic/releases). Sie läuft auf
+Apple Silicon und Intel.
+
+1. `magentic-<version>.dmg` herunterladen und öffnen.
+2. `magentic.app` auf den Ordner „Programme" ziehen.
+3. Beim ersten Start blockiert macOS die App, weil sie nicht notarisiert ist.
+   Rechtsklick auf die App → „Öffnen" → „Öffnen" bestätigen. Alternativ:
+
+   ```sh
+   xattr -dr com.apple.quarantine /Applications/magentic.app
+   ```
+
+Die Release-Builds sind ad hoc signiert. macOS fragt deshalb nach jedem Update
+erneut nach dem Mikrofon für die Spracheingabe. Wer das vermeiden will, baut
+selbst (siehe [Build](#build)).
+
 ## Nutzung
 
 ```sh
@@ -609,6 +628,33 @@ Code-Signing-Zertifikat `magentic-dev` im Login-Schlüsselbund an (macOS fragt
 dabei einmal nach dem Passwort, und beim ersten Signieren ggf. nach „Immer
 erlauben"). Danach läuft `build-app.sh` ohne Rückfragen durch. Anschließend
 einmal das Mikrofon erlauben — das gilt dann für alle künftigen Builds.
+
+**Toolchain:** Gebaut wird mit der Go-Version aus `go.mod` (1.26.4) und
+Wails 2.12.0. Unter Go 1.27 bricht `wails build` bei den Bindings ab
+(`internal error: package "context" without types`). Mit neuerem Go lokal
+installiert hilft `GOTOOLCHAIN=go1.26.4`.
+
+### CI & Releases
+
+`.github/workflows/ci.yml` prüft jeden Push auf `main` und jeden Pull Request:
+`go vet` und `go test` im Root, `go test` in `app/` und `npm test` im Frontend.
+Die Tests brauchen keine installierten Agent-CLIs.
+
+Ein Release entsteht aus einem Tag:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Sind die Tests auf dem Commit grün, baut die Pipeline `magentic.app` als
+Universal-Binary mit der Version aus dem Tag, packt sie in
+`magentic-0.1.0.dmg` und hängt sie mit generierten Release Notes an das
+GitHub-Release. Ein roter Commit erzeugt kein Release.
+
+Ohne Tag lässt sich der Build unter Actions → „CI" → „Run workflow" für jeden
+Branch starten. Die DMG liegt dann als Artefakt am Lauf, ein Release entsteht
+nicht.
 
 ## Remote-Zugriff (Host-Dienst)
 

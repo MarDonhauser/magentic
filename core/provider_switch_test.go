@@ -106,8 +106,7 @@ func TestSwitchVendorRequiresBinary(t *testing.T) {
 	lifecycle, runtime, _, project := newRecordingLifecycle(t)
 	session := provisionSessionFor(t, lifecycle, project, AgentVendorClaude)
 	runtime.reset()
-	// Leerer PATH: Kein Vendor-Binary ist auflösbar, auf jedem Rechner gleich.
-	t.Setenv("PATH", t.TempDir())
+	lifecycle.installed = func(AgentProvider) bool { return false }
 	_, err := lifecycle.SwitchVendor(context.Background(), session.ID, AgentVendorAntigravity)
 	if err == nil || !strings.Contains(err.Error(), "nicht installiert") {
 		t.Fatalf("Wechsel ohne Binary = %v, want Installationsfehler", err)

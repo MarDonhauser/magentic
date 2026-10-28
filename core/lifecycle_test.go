@@ -131,6 +131,9 @@ func lifecycleHarness(t *testing.T) (*SessionLifecycle, *fakeLifecycleRuntime, *
 	runtime := &fakeLifecycleRuntime{present: map[SessionID]bool{}, runtimeNames: map[string]bool{}}
 	ledgerPath := filepath.Join(dir, "lifecycle.json")
 	lifecycle := newSessionLifecycle(registry, runtime, fakeLifecycleRepositories{worktreePath: filepath.Join(dir, "project-agents", "hera")}, ledgerPath, filepath.Dir(ledgerPath))
+	// Jeder Vendor gilt als installiert — sonst hinge das Ergebnis davon ab,
+	// welche Agent-CLIs auf dem Rechner liegen, der die Tests ausführt.
+	lifecycle.installed = func(AgentProvider) bool { return true }
 	return lifecycle, runtime, registry, ledgerPath
 }
 
